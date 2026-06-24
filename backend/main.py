@@ -85,46 +85,42 @@ def _init_db() -> None:
             mtime         REAL NOT NULL DEFAULT 0,
             search_text   TEXT NOT NULL DEFAULT '',
             input_tokens  INTEGER NOT NULL DEFAULT 0,
-            output_tokens INTEGER NOT NULL DEFAULT 0
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            message_count INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
         CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
             id UNINDEXED, title, search_text,
             tokenize='unicode61 remove_diacritics 1'
         );
+        -- add column if upgrading from previous schema without it
+        CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
         """)
 
-_init_db()
+def _migrate_db() -> None:
+    """Add missing columns introduced in newer schema versions."""
+    with _db() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
+        if "message_count" not in cols:
+            c.execute("ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0")
 
-def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int]:
-    """Parse a JSONL session file and return (title, search_text, inp_tok, out_tok)."""
+_init_db()
+_migrate_db()
+
+def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int]:
+    """Parse a JSONL session file — returns (title, search_text, inp_tok, out_tok, msg_count)."""
     title = f.stem
     parts: list[str] = []
-    inp = out = 0
+    inp = out = msg_count = 0
     try:
         lines = f.read_text(encoding="utf-8", errors="replace").strip().splitlines()
-        for line in lines[:5]:
-            try:
-                ev = json.loads(line)
-                if ev.get("type") == "user":
-                    content = ev.get("message", {}).get("content", "")
-                    text = ""
-                    if isinstance(content, list):
-                        for c in content:
-                            if c.get("type") == "text":
-                                text = c["text"]; break
-                    elif isinstance(content, str):
-                        text = content
-                    if text:
-                        title = text[:80]
-                        parts.append(text[:300])
-                        break
-            except Exception:
-                pass
+        got_title = False
         for line in lines:
             try:
                 ev = json.loads(line)
-                if ev.get("type") in ("user", "assistant"):
+                t = ev.get("type", "")
+                if t in ("user", "assistant"):
+                    msg_count += 1
                     content = ev.get("message", {}).get("content", "")
                     text = ""
                     if isinstance(content, list):
@@ -134,8 +130,11 @@ def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int]:
                     elif isinstance(content, str):
                         text = content
                     if text:
+                        if not got_title and t == "user":
+                            title = text[:80]
+                            got_title = True
                         parts.append(text[:200])
-                if ev.get("type") == "result":
+                elif t == "result":
                     u = ev.get("usage", {})
                     inp += u.get("input_tokens", 0)
                     out += u.get("output_tokens", 0)
@@ -143,7 +142,7 @@ def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int]:
                 pass
     except Exception:
         pass
-    return title, " ".join(parts)[:2000], inp, out
+    return title, " ".join(parts)[:2000], inp, out, msg_count
 
 def _sync_index() -> None:
     """Incrementally sync JSONL files into SQLite; remove orphaned rows."""
@@ -159,16 +158,17 @@ def _sync_index() -> None:
                 mtime = f.stat().st_mtime
                 if indexed.get(sid) == mtime:
                     continue
-                title, search_text, inp, out = _parse_jsonl_session(f)
+                title, search_text, inp, out, msg_count = _parse_jsonl_session(f)
                 c.execute("""
-                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens)
-                    VALUES(?,?,?,?,?,?)
+                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens, message_count)
+                    VALUES(?,?,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET
                         title=excluded.title, mtime=excluded.mtime,
                         search_text=excluded.search_text,
                         input_tokens=excluded.input_tokens,
-                        output_tokens=excluded.output_tokens
-                """, (sid, title, mtime, search_text, inp, out))
+                        output_tokens=excluded.output_tokens,
+                        message_count=excluded.message_count
+                """, (sid, title, mtime, search_text, inp, out, msg_count))
                 # keep FTS in sync
                 c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
                 c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
@@ -750,18 +750,17 @@ async def handle_stats(request: web.Request) -> web.Response:
     try:
         with _db() as c:
             row = c.execute(
-                "SELECT COUNT(*) as cnt, SUM(input_tokens+output_tokens) as tok FROM sessions"
+                "SELECT COUNT(*) as cnt, SUM(input_tokens+output_tokens) as tok, SUM(message_count) as msgs FROM sessions"
             ).fetchone()
             sessions_count = row["cnt"] or 0
             total_tokens   = row["tok"] or 0
-            for r in c.execute("SELECT mtime FROM sessions"):
+            messages_count = row["msgs"] or 0
+            for r in c.execute("SELECT mtime, message_count FROM sessions"):
                 d = datetime.fromtimestamp(r["mtime"]).date().isoformat()
-                daily_map[d] = daily_map.get(d, 0) + 1
+                daily_map[d] = daily_map.get(d, 0) + (r["message_count"] or 1)
                 active_days_set.add(d)
     except Exception as e:
         print(f"[stats] DB error: {e}")
-
-    messages_count = sessions_count  # rough proxy without full JSONL scan
 
     # streak calculation
     streak_current = 0

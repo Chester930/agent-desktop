@@ -54,12 +54,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   memory    = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
 
+  rightPanelFilter = signal('');
+
   sortedAgents = computed(() => {
-    const list = [...this.agents()];
+    const q = this.rightPanelFilter().toLowerCase();
+    let list = [...this.agents()];
+    if (q) list = list.filter(a => a.name.toLowerCase().includes(q) || a.description?.toLowerCase().includes(q));
     const selected = this.selectedAgent();
-    if (!selected) {
-      return list.sort((a, b) => a.name.localeCompare(b.name));
-    }
+    if (!selected) return list.sort((a, b) => a.name.localeCompare(b.name));
     const cleanSelected = selected.replace(/^@/, '');
     return list.sort((a, b) => {
       if (a.id === cleanSelected) return -1;
@@ -69,11 +71,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   });
 
   sortedSkills = computed(() => {
-    const list = [...this.skills()];
+    const q = this.rightPanelFilter().toLowerCase();
+    let list = [...this.skills()];
+    if (q) list = list.filter(s => s.name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q));
     const agentId = this.selectedAgent();
-    if (!agentId) {
-      return list;
-    }
+    if (!agentId) return list;
     const linkedIds = this.getLinkedSkills(agentId);
     return list.sort((a, b) => {
       const aLinked = linkedIds.includes(a.id);
@@ -85,7 +87,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   });
 
   sortedMcpServers = computed(() => {
-    const list = [...this.mcpServers()];
+    const q = this.rightPanelFilter().toLowerCase();
+    let list = [...this.mcpServers()];
+    if (q) list = list.filter(m => m.name.toLowerCase().includes(q) || m.description?.toLowerCase().includes(q));
     const agentId = this.selectedAgent();
     if (!agentId) {
       return list;
@@ -826,13 +830,20 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // Built-in slash commands
   readonly BUILTIN_CMDS = [
-    { id: '__new',     name: 'new',     description: '開始新對話' },
-    { id: '__clear',   name: 'clear',   description: '清除目前訊息' },
-    { id: '__retry',   name: 'retry',   description: '重試上一則訊息' },
-    { id: '__compact', name: 'compact', description: '壓縮對話以節省 token' },
-    { id: '__usage',   name: 'usage',   description: '顯示 token 用量' },
-    { id: '__debug',   name: 'debug',   description: '切換 debug 模式' },
-    { id: '__status',  name: 'status',  description: '顯示 Claude 狀態' },
+    { id: '__new',       name: 'new',       description: '開始新對話' },
+    { id: '__clear',     name: 'clear',     description: '清除目前訊息' },
+    { id: '__retry',     name: 'retry',     description: '重試上一則訊息' },
+    { id: '__compact',   name: 'compact',   description: '壓縮對話以節省 token' },
+    { id: '__usage',     name: 'usage',     description: '顯示 token 用量' },
+    { id: '__debug',     name: 'debug',     description: '切換 debug 模式' },
+    { id: '__status',    name: 'status',    description: '顯示 Claude 狀態' },
+    { id: '__review',    name: 'review',    description: '程式碼審查（Code Review）' },
+    { id: '__plan',      name: 'plan',      description: '規劃實作步驟' },
+    { id: '__tdd',       name: 'tdd',       description: '測試驅動開發流程' },
+    { id: '__explain',   name: 'explain',   description: '解釋目前的程式碼或問題' },
+    { id: '__git',       name: 'git',       description: '顯示 Git 狀態與最近提交' },
+    { id: '__search',    name: 'search',    description: '搜尋對話歷史' },
+    { id: '__shortcuts', name: 'shortcuts', description: '顯示所有鍵盤快捷鍵' },
   ];
 
   // Keyboard shortcuts
@@ -1555,6 +1566,34 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.claude.getStatus().subscribe(s =>
           this.messages.update(m => [...m, { role: 'system', text: `⚡ Claude：${s.claude_bin}` }])
         ); break;
+      case '__review':
+        this.inputText = '幫我 Code Review 目前的程式碼，關注：可讀性、安全性、效能問題，並提供具體改善建議。';
+        this.inputRef?.nativeElement?.focus(); break;
+      case '__plan':
+        this.inputText = '請幫我規劃以下功能的實作步驟，並考量架構影響、風險點與測試策略：\n';
+        this.inputRef?.nativeElement?.focus(); break;
+      case '__tdd':
+        this.inputText = '請以 TDD 方式協助我實作以下功能。先寫測試，再實作，確保測試覆蓋率 ≥80%：\n';
+        this.inputRef?.nativeElement?.focus(); break;
+      case '__explain':
+        this.inputText = '請詳細解釋以下程式碼的功能、設計思路與可能的問題：\n';
+        this.inputRef?.nativeElement?.focus(); break;
+      case '__git':
+        this.inputText = '請執行 git status 和 git log --oneline -10，摘要目前的分支狀態與最近的提交。';
+        this.inputRef?.nativeElement?.focus(); break;
+      case '__search':
+        document.querySelector<HTMLInputElement>('.session-search-input')?.focus(); break;
+      case '__shortcuts':
+        this.messages.update(m => [...m, { role: 'system', text:
+          '⌨️ 快捷鍵：\n' +
+          'Ctrl+N — 新對話分頁\n' +
+          'Ctrl+B — 切換側欄\n' +
+          'Ctrl+K — 指令面板\n' +
+          'Ctrl+Enter — 傳送訊息（enterToSend=false 時）\n' +
+          'Esc — 關閉彈窗 / 取消\n' +
+          '/ — 輸入框中觸發技能選單\n' +
+          'Alt+← / → — 切換對話分頁'
+        }]); break;
     }
   }
 

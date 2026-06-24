@@ -547,6 +547,17 @@
           <button [class.active]="activeTab()==='schedules'" (click)="activeTab.set('schedules')">Schedule</button>
           <button [class.active]="activeTab()==='soul'"      (click)="activeTab.set('soul')">Soul</button>
         </div>
+        @if (['agents','skills','mcp'].includes(activeTab())) {
+          <div class="right-panel-search">
+            <input class="right-panel-search-input"
+              [ngModel]="rightPanelFilter()"
+              (ngModelChange)="rightPanelFilter.set($event)"
+              [placeholder]="activeTab() === 'agents' ? '搜尋 agent…' : activeTab() === 'skills' ? '搜尋 skill…' : '搜尋 MCP…'">
+            @if (rightPanelFilter()) {
+              <button class="right-panel-search-clear" (click)="rightPanelFilter.set('')">✕</button>
+            }
+          </div>
+        }
 
         <div class="tab-content">
 
