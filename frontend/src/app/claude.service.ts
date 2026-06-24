@@ -183,8 +183,14 @@ export class ClaudeService {
     return this.http.get<{ projectDir: string; slug?: string }>(`${this.api}/config`);
   }
 
-  setConfig(cfg: { projectDir: string }): Observable<{ ok: boolean; slug: string }> {
+  setConfig(cfg: { projectDir?: string; apiKeyCmd?: string }): Observable<{ ok: boolean; slug: string }> {
     return this.http.put<{ ok: boolean; slug: string }>(`${this.api}/config`, cfg);
+  }
+
+  generateSkill(sessionId: string): Observable<{ ok: boolean; slug: string; path: string; content: string }> {
+    return this.http.post<{ ok: boolean; slug: string; path: string; content: string }>(
+      `${this.api}/skills/generate`, { session_id: sessionId }
+    );
   }
 
   async pickDirectory(): Promise<string | null> {

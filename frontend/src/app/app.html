@@ -71,6 +71,11 @@
               }
             </small>
           </label>
+          <label>API Key 命令（Vault）
+            <input [(ngModel)]="settingsForm.apiKeyCmd"
+              placeholder="留空 = 使用 claude login。例：op read op://vault/item/credential">
+            <small>若填入指令，後端會執行它並把輸出作為 ANTHROPIC_API_KEY。支援 1Password CLI、pass、任意 shell 指令。</small>
+          </label>
           <label>工作目錄
             <input [(ngModel)]="settingsForm.workDir" placeholder="C:\Users\mycena">
             <small>Claude 執行時的起始目錄</small>
@@ -207,6 +212,8 @@
                     <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
                   </button>
                 }
+                <button class="session-skill-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
+                  title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
                 <button class="session-del-btn" (click)="deleteSession(s, $event)" title="刪除">✕</button>
               </div>
             }
@@ -423,6 +430,13 @@
             📁 {{ workDirLabel() }}
           </button>
         </div>
+
+        <!-- Skill 產生結果通知 -->
+        @if (skillGenResult()) {
+          <div class="skill-gen-toast" (click)="skillGenResult.set(null)">
+            {{ skillGenResult() }}
+          </div>
+        }
 
         <!-- 頂部模型不可用警告橫幅 -->
         @if (bannerMessage()) {

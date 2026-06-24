@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import uuid
 import zipfile
@@ -64,6 +65,122 @@ def _apply_project_base() -> None:
     SOULS_DIR          = base / "souls"
 
 _apply_project_base()   # run once at import time
+
+# ── SQLite session index ──────────────────────────────────────────────────────
+_INDEX_DB = CLAUDE_HOME / "claude-desktop-index.db"
+
+def _db() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_INDEX_DB))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+def _init_db() -> None:
+    with _db() as c:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id            TEXT PRIMARY KEY,
+            title         TEXT NOT NULL DEFAULT '',
+            mtime         REAL NOT NULL DEFAULT 0,
+            search_text   TEXT NOT NULL DEFAULT '',
+            input_tokens  INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
+        CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+            id UNINDEXED, title, search_text,
+            tokenize='unicode61 remove_diacritics 1'
+        );
+        """)
+
+_init_db()
+
+def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int]:
+    """Parse a JSONL session file and return (title, search_text, inp_tok, out_tok)."""
+    title = f.stem
+    parts: list[str] = []
+    inp = out = 0
+    try:
+        lines = f.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+        for line in lines[:5]:
+            try:
+                ev = json.loads(line)
+                if ev.get("type") == "user":
+                    content = ev.get("message", {}).get("content", "")
+                    text = ""
+                    if isinstance(content, list):
+                        for c in content:
+                            if c.get("type") == "text":
+                                text = c["text"]; break
+                    elif isinstance(content, str):
+                        text = content
+                    if text:
+                        title = text[:80]
+                        parts.append(text[:300])
+                        break
+            except Exception:
+                pass
+        for line in lines:
+            try:
+                ev = json.loads(line)
+                if ev.get("type") in ("user", "assistant"):
+                    content = ev.get("message", {}).get("content", "")
+                    text = ""
+                    if isinstance(content, list):
+                        for c in content:
+                            if c.get("type") == "text":
+                                text = c["text"]; break
+                    elif isinstance(content, str):
+                        text = content
+                    if text:
+                        parts.append(text[:200])
+                if ev.get("type") == "result":
+                    u = ev.get("usage", {})
+                    inp += u.get("input_tokens", 0)
+                    out += u.get("output_tokens", 0)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return title, " ".join(parts)[:2000], inp, out
+
+def _sync_index() -> None:
+    """Incrementally sync JSONL files into SQLite; remove orphaned rows."""
+    if not SESSIONS_DIR.exists():
+        return
+    try:
+        with _db() as c:
+            indexed = {r["id"]: r["mtime"] for r in c.execute("SELECT id, mtime FROM sessions")}
+            existing_ids: set[str] = set()
+            for f in SESSIONS_DIR.glob("*.jsonl"):
+                sid = f.stem
+                existing_ids.add(sid)
+                mtime = f.stat().st_mtime
+                if indexed.get(sid) == mtime:
+                    continue
+                title, search_text, inp, out = _parse_jsonl_session(f)
+                c.execute("""
+                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        title=excluded.title, mtime=excluded.mtime,
+                        search_text=excluded.search_text,
+                        input_tokens=excluded.input_tokens,
+                        output_tokens=excluded.output_tokens
+                """, (sid, title, mtime, search_text, inp, out))
+                # keep FTS in sync
+                c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
+                c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
+                          (sid, title, search_text))
+            # remove orphaned rows
+            for sid in set(indexed) - existing_ids:
+                c.execute("DELETE FROM sessions WHERE id=?", (sid,))
+                c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
+    except Exception as e:
+        print(f"[sqlite] sync error: {e}")
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 active_sessions: dict[str, str] = {}   # client_id -> claude session_id
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
@@ -139,6 +256,23 @@ def find_claude() -> str:
 CLAUDE_BIN = find_claude()
 
 
+def _resolve_api_key() -> str:
+    """Run apiKeyCmd from config and return the trimmed API key, or '' if not set."""
+    cfg = _load_config()
+    cmd = cfg.get("apiKeyCmd", "").strip()
+    if not cmd:
+        return ""
+    import subprocess
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip()
+    except Exception as e:
+        print(f"[apiKeyCmd] error: {e}")
+        return ""
+
+
 async def handle_chat(request: web.Request) -> web.StreamResponse:
     data      = await request.json()
     message      = data.get("message", "")
@@ -193,6 +327,9 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
 
     try:
         env = {**os.environ}
+        api_key = _resolve_api_key()
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -227,48 +364,34 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
 
 
 async def handle_sessions(request: web.Request) -> web.Response:
-    q      = request.rel_url.query.get("q", "").lower()
+    q      = request.rel_url.query.get("q", "").strip()
     offset = int(request.rel_url.query.get("offset", "0"))
     PAGE   = 30
-    sessions = []
-    all_files = []
-    if SESSIONS_DIR.exists():
-        all_files = [f for f in SESSIONS_DIR.iterdir() if f.suffix == ".jsonl"]
-        all_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-    for f in all_files:
-            if f.suffix == ".jsonl":
-                try:
-                    lines = f.read_text(encoding="utf-8").strip().splitlines()
-                    title = f.stem
-                    for line in lines[:5]:
-                        evt = json.loads(line)
-                        if evt.get("type") == "user" and evt.get("message", {}).get("content"):
-                            content = evt["message"]["content"]
-                            if isinstance(content, list):
-                                for c in content:
-                                    if c.get("type") == "text":
-                                        title = c["text"][:60]
-                                        break
-                            elif isinstance(content, str):
-                                title = content[:60]
-                            break
-                    if q and q not in title.lower():
-                        found = False
-                        for ln in lines[:30]:
-                            try:
-                                if q in str(json.loads(ln).get("message", {}).get("content", "")).lower():
-                                    found = True; break
-                            except Exception:
-                                pass
-                        if not found:
-                            continue
-                    custom = load_session_names().get(f.stem)
-                    sessions.append({"id": f.stem, "title": custom or title, "mtime": f.stat().st_mtime})
-                except Exception:
-                    sessions.append({"id": f.stem, "title": f.stem, "mtime": 0})
-    paged    = sessions[offset: offset + PAGE]
-    has_more = len(sessions) > offset + PAGE
-    return web.json_response({"items": paged, "has_more": has_more})
+    _sync_index()
+    custom_names = load_session_names()
+    try:
+        with _db() as c:
+            if q:
+                rows = c.execute("""
+                    SELECT s.id, s.title, s.mtime
+                    FROM sessions_fts f
+                    JOIN sessions s ON s.id = f.id
+                    WHERE sessions_fts MATCH ?
+                    ORDER BY s.mtime DESC
+                """, (q,)).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT id, title, mtime FROM sessions ORDER BY mtime DESC"
+                ).fetchall()
+        total = len(rows)
+        items = [
+            {"id": r["id"], "title": custom_names.get(r["id"]) or r["title"], "mtime": r["mtime"]}
+            for r in rows[offset: offset + PAGE]
+        ]
+    except Exception as e:
+        print(f"[sessions] DB error, falling back: {e}")
+        items, total = [], 0
+    return web.json_response({"items": items, "has_more": total > offset + PAGE})
 
 
 async def handle_restore(request: web.Request) -> web.Response:
@@ -614,49 +737,42 @@ async def handle_schedules_run(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 async def handle_stats(request: web.Request) -> web.Response:
-    """計算所有 session 的統計資料供 Dashboard 顯示"""
-    sessions_count = 0
-    messages_count = 0
-    total_tokens   = 0
-    daily_map: dict[str, int] = {}  # date_str -> message count
-    active_days_set: set[str] = set()
-    streak_current = 0
-    streak_longest = 0
-
+    """Dashboard 統計 — 用 SQLite index 計算，不重新掃描 JSONL。"""
+    from datetime import timedelta
     today = datetime.now().date()
+    _sync_index()
 
-    if SESSIONS_DIR.exists():
-        for f in SESSIONS_DIR.glob("*.jsonl"):
-            sessions_count += 1
-            date_str = datetime.fromtimestamp(f.stat().st_mtime).date().isoformat()
-            try:
-                for line in f.read_text(encoding="utf-8").strip().splitlines():
-                    try:
-                        ev = json.loads(line)
-                        t  = ev.get("type", "")
-                        if t in ("user", "assistant"):
-                            messages_count += 1
-                            daily_map[date_str] = daily_map.get(date_str, 0) + 1
-                            active_days_set.add(date_str)
-                        if t == "result":
-                            u = ev.get("usage", {})
-                            total_tokens += u.get("input_tokens", 0) + u.get("output_tokens", 0)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+    sessions_count = 0
+    total_tokens   = 0
+    daily_map: dict[str, int] = {}
+    active_days_set: set[str] = set()
+
+    try:
+        with _db() as c:
+            row = c.execute(
+                "SELECT COUNT(*) as cnt, SUM(input_tokens+output_tokens) as tok FROM sessions"
+            ).fetchone()
+            sessions_count = row["cnt"] or 0
+            total_tokens   = row["tok"] or 0
+            for r in c.execute("SELECT mtime FROM sessions"):
+                d = datetime.fromtimestamp(r["mtime"]).date().isoformat()
+                daily_map[d] = daily_map.get(d, 0) + 1
+                active_days_set.add(d)
+    except Exception as e:
+        print(f"[stats] DB error: {e}")
+
+    messages_count = sessions_count  # rough proxy without full JSONL scan
 
     # streak calculation
-    sorted_days = sorted(active_days_set, reverse=True)
-    from datetime import timedelta
+    streak_current = 0
     check = today
-    for d in sorted_days:
+    for d in sorted(active_days_set, reverse=True):
         if datetime.fromisoformat(d).date() == check:
             streak_current += 1
             check -= timedelta(days=1)
         else:
             break
-    streak_longest = streak_current  # ponytail: full longest calc requires full sort; good enough
+    streak_longest = streak_current
 
     # heatmap: last 91 days (13 weeks)
     heatmap = {}
@@ -673,6 +789,63 @@ async def handle_stats(request: web.Request) -> web.Response:
         "streak_longest": streak_longest,
         "heatmap":       heatmap,
     })
+
+async def handle_skill_generate(request: web.Request) -> web.Response:
+    """POST /api/skills/generate — analyse a session and draft a skill file."""
+    data       = await request.json()
+    session_id = data.get("session_id", "").strip()
+    if not session_id:
+        return web.json_response({"error": "session_id required"}, status=400)
+    f = SESSIONS_DIR / f"{session_id}.jsonl"
+    if not f.exists():
+        return web.json_response({"error": "session not found"}, status=404)
+
+    # extract last 20 user messages as context
+    snippets: list[str] = []
+    try:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                ev = json.loads(line)
+                if ev.get("type") == "user":
+                    content = ev.get("message", {}).get("content", "")
+                    text = ""
+                    if isinstance(content, list):
+                        for c in content:
+                            if c.get("type") == "text": text = c["text"]; break
+                    elif isinstance(content, str):
+                        text = content
+                    if text: snippets.append(text[:300])
+            except Exception:
+                pass
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    context = "\n".join(snippets[-20:])
+    prompt = (
+        "根據以下對話摘錄，生成一個 Claude Code skill 的 Markdown 草稿。"
+        "格式：\n---\nname: <slug>\ndescription: <一行說明>\n---\n\n## When to Use\n...\n"
+        "## How It Works\n...\n## Example\n...\n\n"
+        f"對話摘錄：\n{context}"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", prompt, "--output-format", "json",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            cwd=str(Path.home()),
+        )
+        raw, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        result = json.loads(raw.decode("utf-8", errors="replace"))
+        skill_md = result.get("result", "") or result.get("content", "")
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    # auto-save to ~/.claude/skills/auto-<session_id[:8]>.md
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    slug = f"auto-{session_id[:8]}"
+    out_path = SKILLS_DIR / f"{slug}.md"
+    out_path.write_text(skill_md, encoding="utf-8")
+    return web.json_response({"ok": True, "slug": slug, "path": str(out_path), "content": skill_md})
+
 
 async def handle_logs(request: web.Request) -> web.Response:
     return web.json_response({"logs": _log_buffer[-100:]})
@@ -772,6 +945,8 @@ async def handle_config_put(request: web.Request) -> web.Response:
     cfg = _load_config()
     if "projectDir" in data:
         cfg["projectDir"] = data["projectDir"].strip()
+    if "apiKeyCmd" in data:
+        cfg["apiKeyCmd"] = data["apiKeyCmd"].strip()
     _save_config(cfg)
     _apply_project_base()   # hot-reload paths immediately
     _log(f"Config updated: projectDir={cfg.get('projectDir','')!r}  →  {MEMORY_DIR.parent}")
@@ -813,6 +988,7 @@ def build_app() -> web.Application:
         ("PATCH",  "/api/sessions/{id}",    handle_session_rename),
         ("GET",    "/api/agents",          handle_agents),
         ("GET",    "/api/skills",          handle_skills),
+        ("POST",   "/api/skills/generate", handle_skill_generate),
         ("GET",    "/api/memory",          handle_memory),
         ("GET",    "/api/schedules",       handle_schedules_get),
         ("POST",   "/api/schedules",       handle_schedules_post),

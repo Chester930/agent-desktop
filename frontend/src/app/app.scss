@@ -2238,3 +2238,60 @@ body {
     flex: 1;
   }
 }
+
+// ── Session skill-generate button ────────────────────────
+.session-skill-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: $text-dim;
+  font-size: 11px;
+  padding: 0 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  &:hover { color: $accent; }
+  &:disabled { opacity: 0.3; cursor: default; }
+}
+.session-item-wrap:hover .session-skill-btn { opacity: 1; }
+
+// ── Skill-generate toast notification ────────────────────
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.skill-gen-toast {
+  background: $surface2;
+  border: 1px solid $border;
+  border-radius: 8px;
+  color: $text;
+  font-size: 12px;
+  padding: 8px 14px;
+  margin: 6px 16px;
+  cursor: pointer;
+  animation: toast-in 0.2s ease;
+  &:hover { opacity: 0.8; }
+}
+
+// ── Modal & sidebar open/close animations ────────────────
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.modal-backdrop { animation: overlay-in 0.15s ease; }
+.modal          { animation: modal-in 0.18s cubic-bezier(0.34,1.56,0.64,1); }
+
+// ── Detail modal animation ────────────────────────────────
+.detail-modal-backdrop { animation: overlay-in 0.15s ease; }
+.detail-modal          { animation: modal-in 0.18s cubic-bezier(0.34,1.56,0.64,1); }
+
+// ── Slash menu slide-up ───────────────────────────────────
+@keyframes slash-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.slash-menu { animation: slash-up 0.12s ease; }

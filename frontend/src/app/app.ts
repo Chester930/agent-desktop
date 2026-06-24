@@ -1084,9 +1084,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   shouldScroll = false;
 
   settingsForm!: AppSettings;
-  backendLogs  = signal<string[]>([]);
-  statusInfo   = signal('確認中…');
-  projectSlug  = signal('');
+  backendLogs      = signal<string[]>([]);
+  statusInfo       = signal('確認中…');
+  projectSlug      = signal('');
+  skillGenBusy     = signal(false);
+  skillGenResult   = signal<string | null>(null);
 
   memoryKeys       = computed(() => Object.keys(this.memory()));
   memoryTotalChars = computed(() =>
@@ -1141,10 +1143,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getStatus().subscribe(s => {
       this.statusInfo.set(s.claude_bin ?? '未知');
     });
-    this.claude.getConfig().subscribe(c => {
+    this.claude.getConfig().subscribe((c: any) => {
       this.projectSlug.set(c.slug ?? '');
       if (!this.settingsForm.projectDir && c.projectDir) {
         this.settingsForm.projectDir = c.projectDir;
+      }
+      if (!this.settingsForm.apiKeyCmd && c.apiKeyCmd) {
+        this.settingsForm.apiKeyCmd = c.apiKeyCmd;
       }
     });
   }
@@ -1155,7 +1160,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   saveSettings() {
     this.settings.save(this.settingsForm);
-    this.claude.setConfig({ projectDir: this.settingsForm.projectDir }).subscribe();
+    this.claude.setConfig({
+      projectDir: this.settingsForm.projectDir,
+      apiKeyCmd:  this.settingsForm.apiKeyCmd,
+    }).subscribe();
     this.settingsOpen.set(false);
   }
 
@@ -1548,6 +1556,23 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           this.messages.update(m => [...m, { role: 'system', text: `⚡ Claude：${s.claude_bin}` }])
         ); break;
     }
+  }
+
+  generateSkillFromSession(sessionId: string) {
+    if (this.skillGenBusy()) return;
+    this.skillGenBusy.set(true);
+    this.skillGenResult.set(null);
+    this.claude.generateSkill(sessionId).subscribe({
+      next: r => {
+        this.skillGenBusy.set(false);
+        this.skillGenResult.set(`✅ Skill 已儲存：${r.path}`);
+        this.claude.getSkills().subscribe(s => this.skills.set(s));
+      },
+      error: e => {
+        this.skillGenBusy.set(false);
+        this.skillGenResult.set(`❌ ${e?.error?.error || String(e)}`);
+      }
+    });
   }
 
   onKeyDown(e: KeyboardEvent) {

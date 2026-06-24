@@ -15,6 +15,7 @@ export interface AppSettings {
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto';
   projectDir: string;
+  apiKeyCmd: string;
 }
 
 const DEFAULTS: AppSettings = {
@@ -35,6 +36,7 @@ const DEFAULTS: AppSettings = {
   effort: 'medium',
   permissionMode: 'acceptEdits',
   projectDir: '',
+  apiKeyCmd: '',
 };
 
 const KEY = 'claude_desktop_settings';
