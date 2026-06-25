@@ -68,12 +68,13 @@ def _find_session_file(sid: str) -> Path | None:
             return f
     return None
 
-# Project-specific paths — updated by _apply_project_base()
-MEMORY_DIR: Path
-SCHEDULES_FILE: Path
-SESSION_NAMES_FILE: Path
-SOUL_FILE: Path
-SOULS_DIR: Path
+# ── 全域路徑：靈魂/記憶/排程 與專案目錄無關 ─────────────────────────────────
+# 與 Claude Code CLI 的 ~/.claude/ 共用同一份 memory/
+MEMORY_DIR         = CLAUDE_HOME / "memory"
+SCHEDULES_FILE     = CLAUDE_HOME / "schedules.json"
+SESSION_NAMES_FILE = CLAUDE_HOME / "session_names.json"
+SOUL_FILE          = CLAUDE_HOME / "soul.md"
+SOULS_DIR          = CLAUDE_HOME / "souls"
 
 def _encode_slug(dir_path: str) -> str:
     """Convert a filesystem path to the Claude Code project slug format."""
@@ -89,24 +90,6 @@ def _load_config() -> dict:
 
 def _save_config(cfg: dict) -> None:
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def _apply_project_base() -> None:
-    global MEMORY_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR
-    cfg = _load_config()
-    project_dir = cfg.get("projectDir", "").strip()
-    if project_dir:
-        slug = _encode_slug(project_dir)
-    else:
-        # Derive slug from home directory — matches what Claude Code generates on any OS
-        slug = _encode_slug(str(Path.home()))
-    base = CLAUDE_HOME / "projects" / slug
-    MEMORY_DIR         = base / "memory"
-    SCHEDULES_FILE     = base / "schedules.json"
-    SESSION_NAMES_FILE = base / "session_names.json"
-    SOUL_FILE          = base / "soul.md"
-    SOULS_DIR          = base / "souls"
-
-_apply_project_base()   # run once at import time
 
 # ── SQLite session index ──────────────────────────────────────────────────────
 _INDEX_DB = CLAUDE_HOME / "claude-desktop-index.db"
@@ -1496,9 +1479,8 @@ async def handle_config_put(request: web.Request) -> web.Response:
     AGENTS_DIR   = CLAUDE_HOME / "agents"
     SKILLS_DIR   = CLAUDE_HOME / "skills"
     SESSIONS_DIR = CLAUDE_HOME / "sessions"
-    _apply_project_base()
     _log(f"Config updated: claudeHome={CLAUDE_HOME}  projectDir={cfg.get('projectDir','')!r}")
-    return web.json_response({"ok": True, "slug": MEMORY_DIR.parent.name})
+    return web.json_response({"ok": True, "slug": cfg.get("projectDir", "")})
 
 
 def build_app() -> web.Application:
