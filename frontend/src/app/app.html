@@ -539,22 +539,36 @@
                 <span class="umenu-icon">⚙</span><span>設定</span>
                 <span class="umenu-kbd">Ctrl+,</span>
               </button>
+              <button class="umenu-item" (click)="usageOpen.set(true); userMenuOpen.set(false)">
+                <span class="umenu-icon">📊</span>
+                <span>用量監控</span>
+                @if (outOfQuota()) { <span class="umenu-badge-warn">!</span> }
+              </button>
+              <!-- TODO: 語言切換 — 待完成 i18n 功能後啟用
               <button class="umenu-item" (click)="toggleLang(); userMenuOpen.set(false)">
                 <span class="umenu-icon">🌐</span><span>語言 / Language</span>
                 <span class="umenu-arrow">›</span>
               </button>
-              <button class="umenu-item" (click)="openHelp()">
-                <span class="umenu-icon">❓</span><span>說明文件</span>
+              -->
+
+              <!-- TODO: 主題切換（明亮 / 暗影模式）— 待實作
+              <button class="umenu-item" (click)="toggleTheme(); userMenuOpen.set(false)">
+                <span class="umenu-icon">🌙</span><span>切換主題</span>
               </button>
+              -->
+
+              <!-- TODO: 回饋意見 — 待串接回饋系統後啟用
               <button class="umenu-item" (click)="openFeedback()">
                 <span class="umenu-icon">✦</span><span>回饋意見</span>
+              </button>
+              -->
+
+              <button class="umenu-item" (click)="openHelp()">
+                <span class="umenu-icon">❓</span><span>說明文件</span>
               </button>
 
               <div class="umenu-sep"></div>
 
-              <button class="umenu-item" (click)="runDoctor(); userMenuOpen.set(false)">
-                <span class="umenu-icon">🩺</span><span>Claude 診斷</span>
-              </button>
               <button class="umenu-item" (click)="checkForUpdates(); userMenuOpen.set(false)">
                 <span class="umenu-icon">⬇</span><span>檢查更新</span>
               </button>
@@ -575,6 +589,93 @@
           </button>
         </div>
       </aside>
+    }
+
+    <!-- ── 用量監控彈窗 ─────────────────────────────────── -->
+    @if (usageOpen()) {
+      <div class="usage-modal-overlay" (click)="usageOpen.set(false)"></div>
+      <div class="usage-modal" (click)="$event.stopPropagation()">
+        <div class="usage-modal-header">
+          <span class="usage-modal-title">📊 用量監控</span>
+          <button class="usage-modal-close" (click)="usageOpen.set(false)">✕</button>
+        </div>
+
+        <!-- 本次對話 Token -->
+        <div class="usage-section">
+          <div class="usage-section-title">本次對話用量</div>
+          @if (tokenUsage()) {
+            <div class="usage-row">
+              <span class="usage-label">輸入 Token</span>
+              <span class="usage-val">{{ tokenUsage()!.input | number }}</span>
+            </div>
+            <div class="usage-row">
+              <span class="usage-label">輸出 Token</span>
+              <span class="usage-val">{{ tokenUsage()!.output | number }}</span>
+            </div>
+            <div class="usage-row">
+              <span class="usage-label">合計</span>
+              <span class="usage-val usage-total">{{ (tokenUsage()!.input + tokenUsage()!.output) | number }}</span>
+            </div>
+            @if (tokenUsage()!.cost > 0) {
+              <div class="usage-row">
+                <span class="usage-label">估算費用</span>
+                <span class="usage-val usage-cost">${{ tokenUsage()!.cost.toFixed(4) }}</span>
+              </div>
+            }
+            <!-- Context 用量進度條 (200k 上限估算) -->
+            <div class="usage-bar-wrap">
+              <div class="usage-bar-label">
+                <span>Context 視窗使用率</span>
+                <span>{{ ((tokenUsage()!.input + tokenUsage()!.output) / 200000 * 100).toFixed(1) }}%</span>
+              </div>
+              <div class="usage-bar-track">
+                <div class="usage-bar-fill"
+                  [style.width.%]="Math.min(((tokenUsage()!.input + tokenUsage()!.output) / 200000) * 100, 100)"
+                  [class.warn]="(tokenUsage()!.input + tokenUsage()!.output) > 120000"
+                  [class.danger]="(tokenUsage()!.input + tokenUsage()!.output) > 180000">
+                </div>
+              </div>
+            </div>
+            @if (outOfQuota()) {
+              <div class="usage-quota-warn">⚠ 已達 Session 用量上限，請稍候重置或開啟新對話</div>
+            }
+          } @else {
+            <div class="usage-empty">尚未有對話資料</div>
+          }
+        </div>
+
+        <!-- 累積統計 -->
+        <div class="usage-section">
+          <div class="usage-section-title">累積統計</div>
+          @if (stats()) {
+            <div class="usage-row">
+              <span class="usage-label">總對話數</span>
+              <span class="usage-val">{{ stats()!.sessions | number }}</span>
+            </div>
+            <div class="usage-row">
+              <span class="usage-label">總訊息數</span>
+              <span class="usage-val">{{ stats()!.messages | number }}</span>
+            </div>
+            <div class="usage-row">
+              <span class="usage-label">總 Token 用量</span>
+              <span class="usage-val">{{ stats()!.total_tokens | number }}</span>
+            </div>
+            <div class="usage-row">
+              <span class="usage-label">活躍天數</span>
+              <span class="usage-val">{{ stats()!.active_days }} 天</span>
+            </div>
+            <div class="usage-row">
+              <span class="usage-label">連續使用</span>
+              <span class="usage-val">{{ stats()!.streak_current }} 天連續（最長 {{ stats()!.streak_longest }} 天）</span>
+            </div>
+            @if (funFact()) {
+              <div class="usage-fun-fact">💡 {{ funFact() }}</div>
+            }
+          } @else {
+            <div class="usage-empty">載入中…</div>
+          }
+        </div>
+      </div>
     }
 
     <!-- ── Session 右鍵選單 ─────────────────────────── -->

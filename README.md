@@ -113,7 +113,7 @@ pip --version
 ### 步驟 1 — 取得原始碼
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-desktop.git
+git clone https://github.com/Chester930/claude-desktop.git
 cd claude-desktop
 ```
 
@@ -336,7 +336,7 @@ npm run build
 ```json
 "publish": {
   "provider": "github",
-  "owner": "YOUR_GITHUB_USERNAME",
+  "owner": "Chester930",
   "repo": "claude-desktop"
 }
 ```

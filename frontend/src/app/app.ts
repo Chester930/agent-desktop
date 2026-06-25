@@ -816,6 +816,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   showSettingsHelp = signal(false);
   bannerDismissed = signal(false);
   outOfQuota = signal(false);
+  usageOpen  = signal(false);
   bannerMessage = computed(() => {
     if (this.model() === 'fable' && !this.bannerDismissed()) {
       return 'Claude Fable 5 is currently unavailable.';
