@@ -7,6 +7,7 @@ import { SettingsService } from './settings.service';
 export interface Agent   { id: string; name: string; description: string; }
 export interface Skill   { id: string; name: string; description: string; }
 export interface Session { id: string; title: string; mtime: number; snippet?: string; }
+export interface Profile { slug: string; mtime: number; memoryCount: number; hasSoul: boolean; hasSchedules: boolean; }
 export interface SoulProfile { id: string; name: string; content: string; }
 
 export interface ChatMessage {
@@ -206,6 +207,62 @@ export class ClaudeService {
     return this.http.get<{ name: string; lines: string[] }>(
       `${this.api}/mcp/${encodeURIComponent(name)}/logs`
     );
+  }
+
+  getProfiles(): Observable<{ profiles: Profile[]; current: string }> {
+    return this.http.get<{ profiles: Profile[]; current: string }>(`${this.api}/profiles`);
+  }
+
+  getTelegram(): Observable<{ token: string; enabled: boolean; running: boolean }> {
+    return this.http.get<any>(`${this.api}/telegram`);
+  }
+
+  setTelegram(cfg: { token?: string; enabled?: boolean }): Observable<{ ok: boolean; running: boolean }> {
+    return this.http.put<any>(`${this.api}/telegram`, cfg);
+  }
+
+  debugDumpUrl(): string {
+    return `${this.api}/debug-dump`;
+  }
+
+  streamProviderChat(
+    messages: { role: string; content: string }[],
+    onEvent: (ev: any) => void,
+    onDone: () => void,
+    onError: (e: any) => void,
+  ): () => void {
+    const s       = this.settings.get();
+    const controller = new AbortController();
+    const PRESET_URLS: Record<string, string> = {
+      openai:     'https://api.openai.com/v1',
+      openrouter: 'https://openrouter.ai/api/v1',
+      gemini:     'https://generativelanguage.googleapis.com/v1beta/openai',
+    };
+    const apiUrl  = s.providerApiUrl || PRESET_URLS[s.provider] || 'https://api.openai.com/v1';
+    fetch(`${this.api}/chat/provider`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, apiUrl, apiKey: s.providerApiKey, model: s.providerModel || 'gpt-4o-mini' }),
+    }).then(async (res) => {
+      const reader  = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim();
+          if (!line) continue;
+          try { onEvent(JSON.parse(line)); } catch {}
+        }
+      }
+      onDone();
+    }).catch(e => { if (e?.name !== 'AbortError') onError(e); });
+    return () => controller.abort();
   }
 
   async pickDirectory(): Promise<string | null> {

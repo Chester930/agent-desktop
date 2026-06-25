@@ -180,12 +180,19 @@ function checkForUpdates() {
   }
   try {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.on('update-available',     () => dialog.showMessageBox({ message: '發現新版本，開始下載…' }));
-    autoUpdater.on('update-not-available', () => dialog.showMessageBox({ message: '目前已是最新版本。' }));
-    autoUpdater.on('update-downloaded',    () =>
+    autoUpdater.on('update-available', () => {
+      if (mainWindow) mainWindow.webContents.send('update-available');
+    });
+    autoUpdater.on('download-progress', (prog) => {
+      const pct = Math.round(prog.percent ?? 0);
+      if (mainWindow) mainWindow.webContents.send('update-progress', pct);
+    });
+    autoUpdater.on('update-downloaded', () => {
+      if (mainWindow) mainWindow.webContents.send('update-ready');
       dialog.showMessageBox({ message: '更新已下載，將重啟應用程式。', buttons: ['立即重啟', '稍後'] })
-        .then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); })
-    );
+        .then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
+    });
+    autoUpdater.on('update-not-available', () => dialog.showMessageBox({ message: '目前已是最新版本。' }));
     autoUpdater.on('error', (e) => dialog.showMessageBox({ message: '更新失敗：' + e.message }));
     autoUpdater.checkForUpdates();
   } catch {

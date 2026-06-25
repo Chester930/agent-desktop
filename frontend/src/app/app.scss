@@ -2657,3 +2657,91 @@ body {
 .mcp-log-empty {
   color: #555; font-style: italic; font-size: 10px;
 }
+// ── P3 styles ──────────────────────────────────────────────────────────────
+
+// #17 Profile switcher (sidebar header)
+.profile-switcher {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 3px 6px;
+  max-width: 140px;
+  cursor: pointer;
+  &:hover { border-color: var(--accent); }
+}
+
+// #16 Provider badge (topbar)
+.provider-badge {
+  background: #6d28d9;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  &:hover { background: #7c3aed; }
+}
+
+// #18 Telegram status chip
+.tg-status-chip {
+  font-size: 10px;
+  color: #9ca3af;
+  &.running { color: #10b981; }
+}
+
+// #21 Export format select (topbar)
+.export-format-select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 2px 4px;
+  cursor: pointer;
+  max-width: 56px;
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+  &:hover:not(:disabled) { border-color: var(--accent); }
+}
+
+// #22 Update progress bar (topbar)
+.update-progress-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 90px;
+  height: 18px;
+  background: #1a1a2e;
+  border: 1px solid #6d28d9;
+  border-radius: 9px;
+  overflow: hidden;
+  position: relative;
+  cursor: default;
+}
+.update-progress-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, #6d28d9, #7c3aed);
+  border-radius: 9px;
+  transition: width 0.3s ease;
+}
+.update-progress-label {
+  position: relative;
+  z-index: 1;
+  font-size: 9px;
+  font-weight: 600;
+  color: #e9d5ff;
+  width: 100%;
+  text-align: center;
+}
+
+// Settings: .btn-sm
+.btn-sm {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  margin-top: 6px;
+}

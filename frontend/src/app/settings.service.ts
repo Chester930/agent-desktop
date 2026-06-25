@@ -17,6 +17,13 @@ export interface AppSettings {
   permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto';
   projectDir: string;
   apiKeyCmd: string;
+  // #16 Multi-provider
+  provider: 'claude' | 'openai' | 'openrouter' | 'gemini' | 'custom';
+  providerApiUrl: string;
+  providerApiKey: string;
+  providerModel: string;
+  // #19 i18n
+  lang: 'zh' | 'en';
 }
 
 const DEFAULTS: AppSettings = {
@@ -39,6 +46,11 @@ const DEFAULTS: AppSettings = {
   permissionMode: 'acceptEdits',
   projectDir: '',
   apiKeyCmd: '',
+  provider: 'claude',
+  providerApiUrl: '',
+  providerApiKey: '',
+  providerModel: '',
+  lang: 'zh',
 };
 
 const KEY = 'claude_desktop_settings';

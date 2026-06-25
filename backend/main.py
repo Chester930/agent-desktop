@@ -1040,6 +1040,223 @@ def _get_mcp_command(name: str) -> list[str] | None:
     return None
 
 
+# ── #17 Profile switching ─────────────────────────────────────────────────────
+
+async def handle_profiles(request: web.Request) -> web.Response:
+    """List available project profiles from ~/.claude/projects/."""
+    projects_dir = CLAUDE_HOME / "projects"
+    profiles = []
+    if projects_dir.exists():
+        for d in sorted(projects_dir.iterdir(), key=lambda x: -x.stat().st_mtime):
+            if not d.is_dir():
+                continue
+            mem_dir = d / "memory"
+            mem_count = len(list(mem_dir.glob("*.md"))) if mem_dir.exists() else 0
+            profiles.append({
+                "slug":         d.name,
+                "mtime":        d.stat().st_mtime,
+                "memoryCount":  mem_count,
+                "hasSoul":      (d / "soul.md").exists() or (d / "souls").exists(),
+                "hasSchedules": (d / "schedules.json").exists(),
+            })
+    current = _load_config().get("projectDir", "")
+    return web.json_response({"profiles": profiles, "current": current})
+
+
+# ── #16 Multi-provider OpenAI-compatible streaming ────────────────────────────
+
+async def handle_chat_provider(request: web.Request) -> web.StreamResponse:
+    """Stream chat via any OpenAI-compatible API (OpenAI / OpenRouter / Gemini)."""
+    data     = await request.json()
+    api_url  = data.get("apiUrl", "https://api.openai.com/v1").rstrip("/")
+    api_key  = data.get("apiKey", "")
+    model    = data.get("model", "gpt-4o-mini")
+    messages = data.get("messages", [])
+
+    resp = web.StreamResponse()
+    resp.headers["Content-Type"]  = "text/event-stream"
+    resp.headers["Cache-Control"] = "no-cache"
+    await resp.prepare(request)
+
+    async def send(ev: dict) -> None:
+        await resp.write(("data: " + json.dumps(ev) + "\n\n").encode())
+
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"{api_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": model, "messages": messages, "stream": True},
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as upstream:
+                if upstream.status >= 400:
+                    body = await upstream.text()
+                    await send({"type": "error", "text": f"Provider {upstream.status}: {body[:300]}"})
+                    return
+                async for line in upstream.content:
+                    line_s = line.decode("utf-8").strip()
+                    if not line_s.startswith("data: "):
+                        continue
+                    payload = line_s[6:]
+                    if payload == "[DONE]":
+                        await send({"type": "result", "usage": {}, "total_cost_usd": 0})
+                        break
+                    try:
+                        chunk   = json.loads(payload)
+                        delta   = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            await send({"type": "text", "text": content})
+                    except Exception:
+                        pass
+    except Exception as e:
+        await send({"type": "error", "text": str(e)})
+
+    return resp
+
+
+# ── #18 Telegram Bot gateway ──────────────────────────────────────────────────
+
+TELEGRAM_CONFIG_FILE = CLAUDE_HOME / "claude-desktop-telegram.json"
+
+_tg_state: dict = {"token": "", "enabled": False, "offset": 0}
+_tg_task = None
+
+def _load_tg_config() -> dict:
+    if TELEGRAM_CONFIG_FILE.exists():
+        try:
+            return json.loads(TELEGRAM_CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"token": "", "enabled": False}
+
+def _save_tg_config(cfg: dict) -> None:
+    TELEGRAM_CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+async def _tg_send_msg(session: aiohttp.ClientSession, token: str, chat_id: int, text: str) -> None:
+    try:
+        await session.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=aiohttp.ClientTimeout(total=10),
+        )
+    except Exception as e:
+        _log(f"[telegram] send error: {e}")
+
+async def _tg_run_claude(prompt: str) -> str:
+    env = os.environ.copy()
+    key = _resolve_api_key()
+    if key:
+        env["ANTHROPIC_API_KEY"] = key
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", prompt, "--output-format", "text", "--no-caching",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env, cwd=str(Path.home()),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        return stdout.decode("utf-8", errors="replace").strip() or "[no response]"
+    except Exception as e:
+        return f"[Error: {e}]"
+
+async def _telegram_poll() -> None:
+    cfg  = _tg_state
+    base = f"https://api.telegram.org/bot{cfg['token']}"
+    _log("[telegram] polling started")
+    async with aiohttp.ClientSession() as session:
+        while cfg["enabled"] and cfg["token"]:
+            try:
+                params: dict = {"timeout": 20}
+                if cfg["offset"]:
+                    params["offset"] = cfg["offset"]
+                async with session.get(
+                    f"{base}/getUpdates", params=params,
+                    timeout=aiohttp.ClientTimeout(total=35),
+                ) as r:
+                    data = await r.json()
+                    for upd in data.get("result", []):
+                        cfg["offset"] = upd["update_id"] + 1
+                        msg     = upd.get("message") or {}
+                        chat_id = msg.get("chat", {}).get("id")
+                        text    = msg.get("text", "")
+                        if text and chat_id:
+                            await _tg_send_msg(session, cfg["token"], chat_id, "⏳ 處理中…")
+                            reply = await _tg_run_claude(text)
+                            for i in range(0, len(reply), 4000):
+                                await _tg_send_msg(session, cfg["token"], chat_id, reply[i:i+4000])
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                _log(f"[telegram] poll error: {e}")
+                await asyncio.sleep(5)
+    _log("[telegram] polling stopped")
+
+async def handle_telegram_get(request: web.Request) -> web.Response:
+    cfg = _load_tg_config()
+    running = _tg_task is not None and not _tg_task.done()
+    return web.json_response({
+        "token":   "***" if cfg.get("token") else "",
+        "enabled": cfg.get("enabled", False),
+        "running": running,
+    })
+
+async def handle_telegram_put(request: web.Request) -> web.Response:
+    global _tg_task
+    data = await request.json()
+    cfg  = _load_tg_config()
+    if "token" in data and data["token"] not in ("***", ""):
+        cfg["token"] = data["token"]
+    if "enabled" in data:
+        cfg["enabled"] = bool(data["enabled"])
+    _save_tg_config(cfg)
+    _tg_state.update({"token": cfg.get("token",""), "enabled": cfg.get("enabled", False)})
+
+    if cfg["enabled"] and cfg["token"]:
+        if _tg_task is None or _tg_task.done():
+            _tg_task = asyncio.create_task(_telegram_poll())
+    else:
+        if _tg_task and not _tg_task.done():
+            _tg_task.cancel()
+            _tg_task = None
+
+    running = _tg_task is not None and not _tg_task.done()
+    return web.json_response({"ok": True, "running": running})
+
+
+# ── #20 Debug Dump ────────────────────────────────────────────────────────────
+
+async def handle_debug_dump(request: web.Request) -> web.Response:
+    import platform, sys
+    cfg      = _load_config()
+    safe_cfg = {k: v for k, v in cfg.items()
+                if "key" not in k.lower() and "token" not in k.lower() and "password" not in k.lower()}
+    sqlite_stats: dict = {}
+    try:
+        with _db() as c:
+            row = c.execute("SELECT COUNT(*) as n, SUM(message_count) as m FROM sessions").fetchone()
+            sqlite_stats = {"sessions": row["n"] or 0, "messages": row["m"] or 0}
+    except Exception:
+        pass
+    dump = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "platform":  {"os": platform.system(), "release": platform.release(), "python": sys.version.split()[0]},
+        "claude_bin": CLAUDE_BIN,
+        "config":    safe_cfg,
+        "sqlite":    sqlite_stats,
+        "mcp_running": [k for k, v in _mcp_procs.items() if v.returncode is None],
+        "telegram_running": _tg_task is not None and not _tg_task.done(),
+        "log_tail":  _log_buffer[-30:],
+    }
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return web.Response(
+        body=json.dumps(dump, ensure_ascii=False, indent=2).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Content-Disposition": f'attachment; filename="claude-debug-{ts}.json"',
+        },
+    )
+
+
 async def handle_status(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "active_sessions": len(active_sessions), "claude_bin": CLAUDE_BIN})
 
@@ -1115,6 +1332,12 @@ def build_app() -> web.Application:
         ("PUT",    "/api/config",          handle_config_put),
         ("POST",   "/api/mcp/{name}/{action}", handle_mcp_action),
         ("GET",    "/api/mcp/{name}/logs",    handle_mcp_logs),
+        # P3
+        ("GET",    "/api/profiles",           handle_profiles),
+        ("POST",   "/api/chat/provider",      handle_chat_provider),
+        ("GET",    "/api/telegram",           handle_telegram_get),
+        ("PUT",    "/api/telegram",           handle_telegram_put),
+        ("GET",    "/api/debug-dump",         handle_debug_dump),
     ]:
         route_groups.setdefault(path, []).append((method, handler))
 
@@ -1168,8 +1391,14 @@ async def run_schedule_prompt(prompt: str) -> None:
 
 
 async def on_startup(app: web.Application) -> None:
+    global _tg_task
     _log(f"Backend started. Claude: {CLAUDE_BIN}")
     asyncio.create_task(run_schedule_runner())
+    # Auto-start Telegram bot if configured
+    tg_cfg = _load_tg_config()
+    _tg_state.update({"token": tg_cfg.get("token",""), "enabled": tg_cfg.get("enabled", False)})
+    if tg_cfg.get("enabled") and tg_cfg.get("token"):
+        _tg_task = asyncio.create_task(_telegram_poll())
 
 
 if __name__ == "__main__":

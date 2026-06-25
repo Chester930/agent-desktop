@@ -7,7 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile
+  ClaudeService, Agent, Skill, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -1035,6 +1035,148 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     setTimeout(() => this.send(), 50);
   }
 
+  // ── #17 Profile switching ─────────────────────────────────────────────────
+  profiles         = signal<Profile[]>([]);
+  profileSwitching = signal(false);
+
+  loadProfiles() {
+    this.claude.getProfiles().subscribe(r => this.profiles.set(r.profiles));
+  }
+
+  switchProfile(slug: string) {
+    this.profileSwitching.set(true);
+    // Decode slug back to directory path (e.g. C--Users-666-Desktop-myproject → C:\Users\666\Desktop\myproject)
+    const dir = slug
+      .replace(/^([A-Za-z])--/, '$1:\\')
+      .replace(/--/g, '\\');
+    this.claude.setConfig({ projectDir: dir }).subscribe({
+      next: () => {
+        this.settingsForm.projectDir = dir;
+        this.settings.save(this.settingsForm);
+        this.profileSwitching.set(false);
+        this.reload();
+      },
+      error: () => this.profileSwitching.set(false),
+    });
+  }
+
+  // ── #16 Provider mode ─────────────────────────────────────────────────────
+  useProvider = computed(() => this.settings.get().provider !== 'claude');
+
+  // ── #19 i18n ──────────────────────────────────────────────────────────────
+  readonly EN_STRINGS: Record<string, string> = {
+    '新對話':       'New Chat',
+    '設定':         'Settings',
+    '搜尋對話':     'Search chats',
+    '發送訊息':     'Send message',
+    '停止':         'Stop',
+    '今天':         'Today',
+    '昨天':         'Yesterday',
+    '本週':         'This week',
+    '更早':         'Earlier',
+    '置頂':         'Pinned',
+    '模型':         'Model',
+    '記憶':         'Memory',
+    '排程':         'Schedule',
+    'Agents':       'Agents',
+    'Skills':       'Skills',
+    'MCP':          'MCP',
+    '匯出':         'Export',
+    '備份':         'Backup',
+    '說明':         'Help',
+    '工作目錄':     'Work dir',
+    '目前無對話':   'No conversations yet',
+    '無記憶項目':   'No memory items',
+  };
+
+  t(key: string): string {
+    const lang = this.settings.get().lang ?? 'zh';
+    if (lang === 'en') return this.EN_STRINGS[key] ?? key;
+    return key;
+  }
+
+  setLang(lang: 'zh' | 'en') {
+    this.settings.save({ lang });
+  }
+
+  // ── #21 Multi-format export ───────────────────────────────────────────────
+  exportFormat = signal<'md' | 'json' | 'txt'>('md');
+
+  exportChatAs(format: 'md' | 'json' | 'txt') {
+    const msgs = this.messages().filter(m => m.role !== 'error' && m.role !== 'system');
+    const date  = new Date().toLocaleString('zh-TW');
+    let content = '';
+    let mime    = 'text/plain';
+    let ext     = format;
+
+    if (format === 'md') {
+      mime = 'text/markdown';
+      const lines = msgs.map(m => {
+        const ts = m.time ? ` *(${m.time})*` : '';
+        if (m.role === 'user')      return `## 使用者${ts}\n\n${m.text}`;
+        if (m.role === 'assistant') return `## Claude${ts}\n\n${m.text}`;
+        if (m.role === 'tool') {
+          const res = m.result ? `\n\n**結果：**\n\`\`\`\n${m.result}\n\`\`\`` : '';
+          return `## 工具：${m.toolName}\n\n\`\`\`json\n${m.text}\n\`\`\`${res}`;
+        }
+        return '';
+      }).filter(Boolean);
+      content = `# 對話匯出\n\n> ${date}\n\n${lines.join('\n\n---\n\n')}`;
+    } else if (format === 'json') {
+      mime = 'application/json';
+      content = JSON.stringify({ exported: date, messages: msgs }, null, 2);
+    } else {
+      content = msgs.map(m => {
+        const who = m.role === 'user' ? '使用者' : m.role === 'assistant' ? 'Claude' : m.toolName ?? m.role;
+        return `[${who}]\n${m.text}\n`;
+      }).join('\n---\n\n');
+    }
+
+    const blob = new Blob([content], { type: mime });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `chat-${Date.now()}.${ext}`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── #20 Debug dump ────────────────────────────────────────────────────────
+  downloadDebugDump() {
+    window.open(this.claude.debugDumpUrl(), '_blank');
+  }
+
+  // ── #18 Telegram settings ─────────────────────────────────────────────────
+  telegramToken   = '';
+  telegramEnabled = signal(false);
+  telegramRunning = signal(false);
+  telegramSaving  = signal(false);
+
+  loadTelegramSettings() {
+    this.claude.getTelegram().subscribe(r => {
+      this.telegramToken   = r.token;
+      this.telegramEnabled.set(r.enabled);
+      this.telegramRunning.set(r.running);
+    });
+  }
+
+  saveTelegramSettings() {
+    this.telegramSaving.set(true);
+    this.claude.setTelegram({
+      token:   this.telegramToken,
+      enabled: this.telegramEnabled(),
+    }).subscribe({
+      next: r => {
+        this.telegramRunning.set(r.running);
+        this.telegramSaving.set(false);
+      },
+      error: () => this.telegramSaving.set(false),
+    });
+  }
+
+  // ── #22 Auto-update progress ──────────────────────────────────────────────
+  updateProgress  = signal<number | null>(null);
+  updateAvailable = signal(false);
+  updateReady     = signal(false);
+
   // MCP log viewer (#15)
   mcpLogOpen   = signal<string | null>(null);
   mcpLogLines  = signal<string[]>([]);
@@ -1119,24 +1261,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   exportChat() {
-    const lines = this.messages()
-      .filter(m => m.role !== 'error' && m.role !== 'system')
-      .map(m => {
-        const ts = m.time ? ` *(${m.time})*` : '';
-        if (m.role === 'user')      return `## 使用者${ts}\n\n${m.text}`;
-        if (m.role === 'assistant') return `## Claude${ts}\n\n${m.text}`;
-        if (m.role === 'tool') {
-          const result = m.result ? `\n\n**結果：**\n\`\`\`\n${m.result}\n\`\`\`` : '';
-          return `## 工具：${m.toolName}\n\n\`\`\`json\n${m.text}\n\`\`\`${result}`;
-        }
-        return '';
-      }).filter(Boolean).join('\n\n---\n\n');
-    const date = new Date().toLocaleString('zh-TW');
-    const blob = new Blob([`# 對話匯出\n\n> ${date}\n\n${lines}`], { type: 'text/markdown' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = `chat-${Date.now()}.md`; a.click();
-    URL.revokeObjectURL(url);
+    this.exportChatAs(this.exportFormat());
   }
 
   // Retry last message
@@ -1349,6 +1474,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.settingsForm = this.settings.get();
     this.settingsOpen.set(true);
     this.loadLogs();
+    this.loadTelegramSettings();
     this.claude.getStatus().subscribe(s => {
       this.statusInfo.set(s.claude_bin ?? '未知');
     });
@@ -1379,6 +1505,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ngOnInit() {
     this.reload();
     this.claude.getSoul().subscribe(s => { this.soulContent = s; });
+    this.loadProfiles();
     this._healthTimer = setInterval(() => {
       this.claude.getStatus().subscribe({
         next: () => {
@@ -1389,6 +1516,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }, 10000);
     // T06 — 每秒更新 tool timer
     this._toolTickTimer = setInterval(() => this.toolTick.update(v => v + 1), 1000);
+
+    // #22 — Wire Electron auto-updater IPC events
+    const eAPI = (window as any).electronAPI;
+    if (eAPI?.onUpdateProgress)  eAPI.onUpdateProgress((pct: number)  => this.updateProgress.set(pct));
+    if (eAPI?.onUpdateAvailable) eAPI.onUpdateAvailable(() => this.updateAvailable.set(true));
+    if (eAPI?.onUpdateReady)     eAPI.onUpdateReady(() => { this.updateReady.set(true); this.updateProgress.set(100); });
   }
 
   ngOnDestroy() { clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); }
@@ -1631,10 +1764,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.messages.update(m => [...m, assistantMsg]);
     this.shouldScroll = true;
 
-    this.stopFn = this.claude.streamChat(
-      text,
-      this.selectedAgent(),
-      (ev: any) => {
+    // Build event handler (shared between Claude and provider mode)
+    const onEvent = (ev: any) => {
         if (ev.type === 'assistant' && ev.message?.content) {
           // tool is done once assistant starts replying
           this.messages.update(msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
@@ -1704,35 +1835,48 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             });
           }
         }
-      },
-      () => {
-        this.stopFn = null;
-        this.messages.update(msgs =>
-          msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m)
-        );
-        this.messages.update(msgs => {
-          const copy = [...msgs];
-          copy[copy.length - 1] = { ...copy[copy.length - 1], isStreaming: false };
-          return copy;
-        });
-        this.isStreaming.set(false);
-        this.reload();
-        this.triggerAutoTitle();
-        this.shouldScroll = true;
-        this.inputRef?.nativeElement?.focus();
-        // T05 — Windows 通知
-        (window as any).electronAPI?.notify('Claude 完成', text.slice(0, 60));
-      },
-      (err: any) => {
-        const errStr = String(err);
-        this.messages.update(m => [...m, { role: 'error', text: errStr }]);
-        this.isStreaming.set(false);
-        if (errStr.toLowerCase().includes('session limit') || errStr.toLowerCase().includes('rate limit') || errStr.toLowerCase().includes('limit · resets') || errStr.toLowerCase().includes('quota')) {
-          this.outOfQuota.set(true);
-        }
-      },
-      attachments
-    );
+    };
+
+    const onDone = () => {
+      this.stopFn = null;
+      this.messages.update(msgs =>
+        msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m)
+      );
+      this.messages.update(msgs => {
+        const copy = [...msgs];
+        copy[copy.length - 1] = { ...copy[copy.length - 1], isStreaming: false };
+        return copy;
+      });
+      this.isStreaming.set(false);
+      this.reload();
+      this.triggerAutoTitle();
+      this.shouldScroll = true;
+      this.inputRef?.nativeElement?.focus();
+      (window as any).electronAPI?.notify('Claude 完成', text.slice(0, 60));
+    };
+
+    const onError = (err: any) => {
+      const errStr = String(err);
+      this.messages.update(m => [...m, { role: 'error', text: errStr }]);
+      this.isStreaming.set(false);
+      if (errStr.toLowerCase().includes('session limit') || errStr.toLowerCase().includes('rate limit') || errStr.toLowerCase().includes('limit · resets') || errStr.toLowerCase().includes('quota')) {
+        this.outOfQuota.set(true);
+      }
+    };
+
+    if (this.useProvider()) {
+      // #16 — Route to OpenAI-compatible provider
+      const history = this.messages()
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .slice(0, -1) // exclude the empty placeholder we just pushed
+        .map(m => ({ role: m.role as 'user' | 'assistant', content: m.text }));
+      history.push({ role: 'user', content: text });
+      this.stopFn = this.claude.streamProviderChat(history, onEvent, onDone, onError);
+    } else {
+      this.stopFn = this.claude.streamChat(
+        text, this.selectedAgent(), onEvent, onDone, onError, attachments
+      );
+    }
   }
 
   onInput() {
