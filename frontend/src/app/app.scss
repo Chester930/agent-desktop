@@ -842,9 +842,11 @@ body {
   border-radius: 12px;
   width: 440px;
   max-width: 92vw;
+  max-height: 88vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+  color-scheme: dark;
 }
 
 .modal-header {
@@ -863,6 +865,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow-y: auto;
 
   label {
     display: flex;
@@ -3721,6 +3724,7 @@ body[style*="ns-resize"] .mcp-divider-grip {
   border-top: 1px solid rgba(255,255,255,0.06);
   padding: 6px 8px;
   background: var(--bg-main, #0d0d0d);
+  z-index: 10;  // 確保 popup 蓋過 session-list
 }
 
 .umenu-trigger {

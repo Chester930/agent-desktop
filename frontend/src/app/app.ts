@@ -1798,8 +1798,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   openHelp() {
-    this.openExternalUrl('https://docs.anthropic.com/zh-TW/docs/claude-code/overview');
     this.userMenuOpen.set(false);
+    this.helpOpen.set(true);
   }
 
   openFeedback() {

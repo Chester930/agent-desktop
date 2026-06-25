@@ -198,18 +198,16 @@
             <input [(ngModel)]="settingsForm.claudeBin" placeholder="claude">
             <small>留空則自動偵測（建議留空）</small>
           </label>
-          <label>Claude Code 專案目錄
+          <label>預設工作目錄（全域）
             <div style="display:flex;gap:6px;align-items:center;">
               <input style="flex:1" [(ngModel)]="settingsForm.projectDir"
-                placeholder="例：C:\Users\666\Desktop\claude-desktop（留空則自動偵測）">
+                placeholder="例：C:\Users\666\Desktop（留空則自動偵測）">
               <button class="btn-secondary" style="flex-shrink:0;font-size:11px;padding:4px 8px"
                 (click)="pickProjectDir()">選擇…</button>
             </div>
             <small>
-              決定 memory、排程、靈魂等資料存放的 ~/.claude/projects/ 子目錄。
-              @if (projectSlug()) {
-                目前生效：<code style="color:#d4a853">{{ projectSlug() }}</code>
-              }
+              新對話的預設起始目錄。每個對話欄可個別覆蓋（點 📁）。
+              記憶、排程、靈魂等資料固定存放於 <code>~/.claude/</code>，與此設定無關。
             </small>
           </label>
           <label>Claude 資料根目錄（claudeHome）
