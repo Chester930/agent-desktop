@@ -1262,6 +1262,29 @@
 
           @if (activeTab() === 'memory') {
             <div class="memory-panel">
+              <!-- 專案切換列 -->
+              <div class="memory-project-bar">
+                <span class="memory-project-label">專案</span>
+                <div class="memory-project-select-wrap">
+                  <select class="memory-project-select"
+                    #profileSelect
+                    [value]="projectSlug()"
+                    (change)="switchProfile(profileSelect.value)">
+                    @for (p of profiles(); track p.slug) {
+                      <option [value]="p.slug">
+                        {{ p.slug }}{{ p.memoryCount ? ' (' + p.memoryCount + ')' : '' }}
+                      </option>
+                    }
+                    @if (!profiles().length) {
+                      <option [value]="projectSlug()">{{ projectSlug() || '（未設定）' }}</option>
+                    }
+                  </select>
+                </div>
+                @if (profileSwitching()) {
+                  <span class="memory-project-loading">切換中…</span>
+                }
+              </div>
+
               <!-- 狀態列：用量 + 已選上下文數 -->
               <div class="memory-status-bar">
                 <div style="display:flex;align-items:center;gap:8px;flex:1;">

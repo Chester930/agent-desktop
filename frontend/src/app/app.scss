@@ -2379,6 +2379,45 @@ body {
   overflow: hidden;
 }
 
+.memory-project-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #222;
+  background: rgba(255,255,255,0.02);
+}
+
+.memory-project-label {
+  font-size: 10px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.memory-project-select-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-project-select {
+  width: 100%;
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 5px;
+  color: #ccc;
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+  &:focus { outline: none; border-color: $accent; }
+}
+
+.memory-project-loading {
+  font-size: 10px;
+  color: $accent;
+  flex-shrink: 0;
+}
+
 .memory-status-bar {
   display: flex;
   align-items: center;

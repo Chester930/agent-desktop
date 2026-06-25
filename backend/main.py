@@ -68,13 +68,18 @@ def _find_session_file(sid: str) -> Path | None:
             return f
     return None
 
-# ── 全域路徑：靈魂/記憶/排程 與專案目錄無關 ─────────────────────────────────
-# 與 Claude Code CLI 的 ~/.claude/ 共用同一份 memory/
-MEMORY_DIR         = CLAUDE_HOME / "memory"
 SCHEDULES_FILE     = CLAUDE_HOME / "schedules.json"
 SESSION_NAMES_FILE = CLAUDE_HOME / "session_names.json"
 SOUL_FILE          = CLAUDE_HOME / "soul.md"
 SOULS_DIR          = CLAUDE_HOME / "souls"
+
+def _memory_dir() -> Path:
+    """Return ~/.claude/projects/<slug>/memory/ for the configured projectDir.
+    Falls back to ~/.claude/memory/ when no projectDir is set."""
+    proj_dir = _load_config().get("projectDir", "").strip()
+    if proj_dir:
+        return CLAUDE_HOME / "projects" / _encode_slug(proj_dir) / "memory"
+    return CLAUDE_HOME / "memory"
 
 def _encode_slug(dir_path: str) -> str:
     """Convert a filesystem path to the Claude Code project slug format."""
@@ -574,10 +579,11 @@ async def handle_restore(request: web.Request) -> web.Response:
                 if arc in zf.namelist():
                     Path(dest).parent.mkdir(parents=True, exist_ok=True)
                     Path(dest).write_bytes(zf.read(arc))
-            MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+            mem_dir = _memory_dir()
+            mem_dir.mkdir(parents=True, exist_ok=True)
             for name in zf.namelist():
                 if name.startswith('memory/') and name.endswith('.md'):
-                    (MEMORY_DIR / Path(name).name).write_bytes(zf.read(name))
+                    (mem_dir / Path(name).name).write_bytes(zf.read(name))
     except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
     return web.json_response({'ok': True})
@@ -604,8 +610,9 @@ async def handle_backup(request: web.Request) -> web.Response:
         ]:
             if Path(src).exists():
                 zf.write(src, arc)
-        if MEMORY_DIR.exists():
-            for f in MEMORY_DIR.glob('*.md'):
+        mem_dir = _memory_dir()
+        if mem_dir.exists():
+            for f in mem_dir.glob('*.md'):
                 zf.write(f, f'memory/{f.name}')
     buf.seek(0)
     return web.Response(
@@ -658,16 +665,9 @@ async def handle_resume_session(request: web.Request) -> web.Response:
 async def handle_agents(request: web.Request) -> web.Response:
     agents = []
     if AGENTS_DIR.exists():
-        for f in AGENTS_DIR.glob("*.md"):
+        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
             try:
-                text = f.read_text(encoding="utf-8")
-                desc = ""
-                name = f.stem
-                for line in text.splitlines():
-                    if line.startswith("description:"):
-                        desc = line.replace("description:", "").strip()
-                        break
-                agents.append({"id": name, "name": name, "description": desc})
+                agents.append({"id": f.stem, "name": f.stem, "description": _desc_from_md_file(f)})
             except Exception:
                 pass
     return web.json_response(agents)
@@ -749,8 +749,9 @@ async def handle_skills(request: web.Request) -> web.Response:
 
 async def handle_memory(request: web.Request) -> web.Response:
     files = {}
-    if MEMORY_DIR.exists():
-        for f in MEMORY_DIR.glob("*.md"):
+    mem_dir = _memory_dir()
+    if mem_dir.exists():
+        for f in mem_dir.glob("*.md"):
             try:
                 files[f.stem] = f.read_text(encoding="utf-8")
             except Exception:
@@ -798,13 +799,14 @@ async def handle_memory_put(request: web.Request) -> web.Response:
     content = data.get("content", "")
     if not key.replace("-", "").replace("_", "").isalnum():
         return web.json_response({"error": "invalid key"}, status=400)
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    (MEMORY_DIR / f"{key}.md").write_text(content, encoding="utf-8")
+    mem_dir = _memory_dir()
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    (mem_dir / f"{key}.md").write_text(content, encoding="utf-8")
     return web.json_response({"ok": True})
 
 async def handle_memory_delete(request: web.Request) -> web.Response:
     key = request.match_info["key"]
-    f = MEMORY_DIR / f"{key}.md"
+    f = _memory_dir() / f"{key}.md"
     if f.exists():
         f.unlink()
     return web.json_response({"ok": True})
