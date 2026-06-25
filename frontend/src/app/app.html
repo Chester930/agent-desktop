@@ -1266,115 +1266,42 @@
                 </div>
                 <div class="panel-list">
                 @for (m of externalMcpServers(); track m.id) {
-                  <div class="panel-card"
-                    [class.active-in-chat]="isMcpLinkedToActiveAgent(m.name)"
+                  <div class="mcp-card-compact"
                     [class.expanded]="expandedMcpId() === m.id"
                     (click)="toggleMcpExpand(m.id)">
-                    <div class="card-header-row">
-                      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow:hidden;">
-                        @if (isMcpLinkedToActiveAgent(m.name)) {
-                          <span class="auth-dot active" title="目前代理人已啟用此 MCP"></span>
-                        }
-                        <span class="card-name" style="word-break:break-all;">{{ m.name }}</span>
-                      </div>
-                      <div class="binding-btns" (click)="$event.stopPropagation()">
+
+                    <!-- 閉合列：● 名稱 -->
+                    <div class="mcc-row">
+                      <span class="mcp-status-lamp" [ngClass]="getMcpLampClass(m.name, m.status)"
+                        [title]="getMcpLampTitle(m.name, m.status)"></span>
+                      <span class="mcc-name">{{ m.name }}</span>
+                      <!-- hover 才顯示 -->
+                      <div class="mcc-actions" (click)="$event.stopPropagation()">
                         <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
                           (click)="toggleMcpInTab(m.name)"
                           [title]="isMcpInTab(m.name) ? '從此對話移除' : '加入此對話'">
                           {{ isMcpInTab(m.name) ? '◉' : '○' }}
                         </button>
                       </div>
-                      <button class="detail-btn" (click)="$event.stopPropagation(); openDetail({id: m.id, label: 'MCP', name: m.name, description: m.description || '', type: 'mcp'})">
-                        詳情
-                      </button>
                     </div>
-                    <div class="card-desc" style="font-size: 10px; color: #888; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;" [title]="m.url">URL: {{ m.url }}</div>
-                    <div class="card-desc" style="font-size:10px;margin-top:2px;display:flex;align-items:center;gap:5px;">
-                      <span class="mcp-status-dot" [ngClass]="getMcpLampClass(m.name, m.status)"
-                        [title]="getMcpLampTitle(m.name, m.status)"></span>
-                      <span [style.color]="getMcpColor(m.name, m.status) || '#555'">{{ m.status }}</span>
-                    </div>
+
+                    <!-- 展開詳情 -->
                     @if (expandedMcpId() === m.id) {
-                      <div class="card-detail-content" (click)="$event.stopPropagation()">
-                        <div class="detail-desc">
-                          {{ expandedTranslation() !== null && expandedTranslation() !== ''
-                              ? expandedTranslation()
-                              : (m.description || '（無說明）') }}
-                          @if (expandedTranslation() === '') {
-                            <span class="translating">翻譯中…</span>
-                          }
+                      <div class="mcc-detail" (click)="$event.stopPropagation()">
+                        <div class="mcc-url" [title]="m.url">{{ m.url }}</div>
+                        <div class="detail-desc" style="margin-top:6px;">
+                          {{ m.description || '（無說明）' }}
                         </div>
-                        @if (m.description) {
-                          <div class="detail-actions">
-                            <button class="translate-btn" (click)="translateExpanded(m.description)">
-                              {{ expandedTranslation() !== null ? '還原原文' : '翻譯成繁體中文' }}
-                            </button>
-                          </div>
-                        }
-
-                        <!-- Dockerized tag -->
-                        @if (m.dockerized) {
-                          <div style="display: flex; align-items: center; gap: 6px; margin: 4px 0; background: rgba(26, 84, 150, 0.15); border: 1px solid rgba(26, 84, 150, 0.3); border-radius: 4px; padding: 4px 8px;">
-                            <span style="font-size: 14px;">🐳</span>
-                            <div style="font-size: 10px; color: #7cb8ff;">
-                              Docker 映像檔: <code style="background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px; font-family: monospace;">{{ m.dockerImage }}</code>
+                        @if ((m.tools || []).length) {
+                          <div class="mcc-tools-label">工具 ({{ m.tools!.length }})</div>
+                          @for (tool of m.tools!; track tool.name) {
+                            <div class="mcc-tool-row">🛠 {{ tool.name }}
+                              @if (tool.description) {
+                                <span class="mcc-tool-desc">— {{ tool.description }}</span>
+                              }
                             </div>
-                          </div>
+                          }
                         }
-
-                        <!-- MCP Tools List -->
-                        <div style="margin-top: 8px; border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 8px;">
-                          <div style="font-size: 10px; font-weight: 600; color: #888; margin-bottom: 6px; display: flex; justify-content: space-between;">
-                            <span>可用工具 (MCP Tools)：</span>
-                            <span style="color: #666; font-size: 9px;">共 {{ (m.tools || []).length }} 個</span>
-                          </div>
-                          <div style="display: flex; flex-direction: column; gap: 6px;">
-                            @for (tool of m.tools || []; track tool.name) {
-                              <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 6px 8px;">
-                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px;">
-                                  <span style="font-family: monospace; font-size: 11px; color: #d4a853; font-weight: 600;">🛠 {{ tool.name }}</span>
-                                  @if (tool.workflow) {
-                                    <span style="font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: 500;"
-                                          [style.background]="tool.workflow.type === 'code' ? 'rgba(124, 111, 255, 0.2)' : 'rgba(212, 168, 83, 0.2)'"
-                                          [style.color]="tool.workflow.type === 'code' ? '#9d94ff' : '#ffe18e'">
-                                      {{ tool.workflow.type === 'code' ? '💻 程式碼工作流' : '🌿 節點工作流' }}
-                                    </span>
-                                  }
-                                </div>
-                                <div style="font-size: 10px; color: #aaa; margin-top: 3px; line-height: 1.4;">{{ tool.description }}</div>
-                                
-                                <!-- Workflow detail -->
-                                @if (tool.workflow) {
-                                  <div style="margin-top: 6px; background: #0c0c0c; border: 1px solid rgba(255,255,255,0.05); border-radius: 4px; padding: 6px; overflow-x: auto;">
-                                    <div style="font-size: 9px; color: #555; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">
-                                      <span>⚙ 執行內容/對應工作流</span>
-                                      @if (tool.workflow.dockerized) {
-                                        <span style="font-size: 9px; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 0px 3px; border-radius: 2px; font-weight: normal;">🐳 Container</span>
-                                      }
-                                    </div>
-                                    @if (tool.workflow.type === 'code') {
-                                      <pre style="margin: 0; font-family: monospace; font-size: 10px; color: #a9ffb7; line-height: 1.4; white-space: pre-wrap; word-break: break-all;">{{ tool.workflow.content }}</pre>
-                                    } @else if (tool.workflow.type === 'node') {
-                                      <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 2px;">
-                                        @for (node of tool.workflow.content.split(' ➔ '); track $index; let last = $last) {
-                                          <div style="background: #1f1f1f; border: 1px solid #333; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #fff; font-family: monospace; white-space: nowrap;">
-                                            {{ node }}
-                                          </div>
-                                          @if (!last) {
-                                            <span style="color: #666; font-size: 10px;">➔</span>
-                                          }
-                                        }
-                                      </div>
-                                    }
-                                  </div>
-                                }
-                              </div>
-                            } @empty {
-                              <div style="font-size: 10px; color: #555; font-style: italic; padding: 2px 0;">無登錄的工具</div>
-                            }
-                          </div>
-                        </div>
-                        <!-- 標記為自建 -->
                       </div>
                     }
                   </div>
@@ -1405,33 +1332,19 @@
                 </div>
                 <div class="panel-list">
                 @for (m of localMcpServers(); track m.id) {
-                  <!-- ── 本地 API 卡片 ── -->
-                  <div class="panel-card local-mcp-card"
-                    [class.docker-card]="m.mcpType === 'docker' || m.dockerized"
-                    [class.active-in-chat]="isMcpLinkedToActiveAgent(m.name)"
+                  <!-- ── 本地 API 卡片（compact） ── -->
+                  <div class="mcp-card-compact"
                     [class.expanded]="expandedMcpId() === m.id"
                     (click)="toggleMcpExpand(m.id)">
 
-                    <!-- 頂列：名稱 + 類型標籤 + 控制按鈕 -->
-                    <div class="card-header-row">
-                      <div class="local-mcp-name-col">
-                        @if (m.mcpType === 'docker' || m.dockerized) {
-                          <span class="mcp-type-chip docker-chip" title="Docker 容器">🐳</span>
-                        } @else if (m.mcpType === 'stdio') {
-                          <span class="mcp-type-chip stdio-chip" title="stdio 程序">⌨</span>
-                        } @else {
-                          <span class="mcp-type-chip http-chip" title="本地 HTTP">🔌</span>
-                        }
-                        <span class="card-name">{{ m.name }}</span>
-                      </div>
-
-                      <!-- 狀態燈（三色：綠=運行+啟用 / 黃=運行未啟用 / 紅=停止但在用 / 灰=停止） -->
+                    <!-- 閉合列：● 名稱 -->
+                    <div class="mcc-row">
                       <span class="mcp-status-lamp"
                         [ngClass]="getMcpLampClass(m.name, m.status)"
                         [title]="getMcpLampTitle(m.name, m.status)"></span>
-
-                      <!-- 啟動 / 停止 / 重啟 — 置頂顯示，不需展開 -->
-                      <div class="mcp-ctrl-bar" (click)="$event.stopPropagation()">
+                      <span class="mcc-name">{{ m.name }}</span>
+                      <!-- hover 才顯示 -->
+                      <div class="mcc-actions" (click)="$event.stopPropagation()">
                         @if (isMcpRunning(m.status)) {
                           <button class="ctrl-btn ctrl-stop"    (click)="stopMcp(m.name)"    title="停止">■</button>
                           <button class="ctrl-btn ctrl-restart" (click)="restartMcp(m.name)" title="重啟">↺</button>
@@ -1442,28 +1355,12 @@
                           (click)="toggleMcpLog(m.name)"
                           [class.active]="mcpLogOpen() === m.name"
                           title="日誌">📋</button>
+                        <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
+                          (click)="toggleMcpInTab(m.name)"
+                          [title]="isMcpInTab(m.name) ? '從此對話移除' : '加入此對話'">
+                          {{ isMcpInTab(m.name) ? '◉' : '○' }}
+                        </button>
                       </div>
-
-                      <!-- 加入對話 -->
-                      <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
-                        (click)="$event.stopPropagation(); toggleMcpInTab(m.name)"
-                        [title]="isMcpInTab(m.name) ? '從此對話移除' : '加入此對話'">
-                        {{ isMcpInTab(m.name) ? '◉' : '○' }}
-                      </button>
-                    </div>
-
-                    <!-- 第二列：Docker 映像 / URL + Port -->
-                    <div class="local-mcp-meta">
-                      @if (m.dockerImage) {
-                        <span class="docker-image-tag">{{ m.dockerImage }}</span>
-                      }
-                      @if (m.port) {
-                        <span class="mcp-port-tag">:{{ m.port }}</span>
-                      }
-                      @if (!m.dockerImage && m.url) {
-                        <span style="font-size:10px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                          [title]="m.url">{{ m.url }}</span>
-                      }
                     </div>
 
                     <!-- 日誌面板 -->
@@ -1477,7 +1374,7 @@
                           @for (line of mcpLogLines(); track $index) {
                             <div class="mcp-log-line">{{ line }}</div>
                           } @empty {
-                            <div class="mcp-log-empty">尚無日誌（伺服器啟動後才會產生輸出）</div>
+                            <div class="mcp-log-empty">尚無日誌</div>
                           }
                         </div>
                       </div>
@@ -1485,33 +1382,25 @@
 
                     <!-- 展開詳情 -->
                     @if (expandedMcpId() === m.id) {
-                      <div class="card-detail-content" (click)="$event.stopPropagation()">
-
-                        <!-- Docker 設定 -->
+                      <div class="mcc-detail" (click)="$event.stopPropagation()">
+                        @if (m.url) {
+                          <div class="mcc-url" [title]="m.url">{{ m.url }}</div>
+                        }
                         @if (m.mcpType === 'docker' || m.dockerized) {
                           <div class="docker-cfg-section">
                             @if (editingDockerMcp() === m.name && localDockerConfig()) {
-                              <!-- 編輯模式 -->
                               <div class="docker-cfg-form">
                                 <label class="docker-cfg-label">容器名稱
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.containerName"
-                                    placeholder="例: my-mcp-container">
+                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.containerName" placeholder="例: my-mcp-container">
                                 </label>
-                                <label class="docker-cfg-label">Docker Compose 路徑
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.composeFile"
-                                    placeholder="例: /home/user/compose/docker-compose.yml">
+                                <label class="docker-cfg-label">Compose 路徑
+                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.composeFile" placeholder="例: /home/user/docker-compose.yml">
                                 </label>
-                                <label class="docker-cfg-label">服務名稱（Compose）
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.composeService"
-                                    placeholder="例: mcp-server（留空=全部）">
+                                <label class="docker-cfg-label">服務名稱
+                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.composeService" placeholder="例: mcp-server">
                                 </label>
-                                <label class="docker-cfg-label">對外 Port
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.port"
-                                    placeholder="例: 3000">
-                                </label>
-                                <label class="docker-cfg-label">備註
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.notes"
-                                    placeholder="選填">
+                                <label class="docker-cfg-label">Port
+                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.port" placeholder="例: 3000">
                                 </label>
                                 <div style="display:flex;gap:6px;margin-top:6px;">
                                   <button class="btn-primary btn-xs" (click)="saveDockerConfig()">儲存</button>
@@ -1519,7 +1408,6 @@
                                 </div>
                               </div>
                             } @else {
-                              <!-- 顯示模式 -->
                               <div class="docker-cfg-display">
                                 @if (localMcpConfigs()[m.name]?.containerName) {
                                   <div class="docker-cfg-row"><span>容器</span><code>{{ localMcpConfigs()[m.name].containerName }}</code></div>
@@ -1527,30 +1415,18 @@
                                 @if (localMcpConfigs()[m.name]?.composeFile) {
                                   <div class="docker-cfg-row"><span>Compose</span><code style="font-size:9px;">{{ localMcpConfigs()[m.name].composeFile }}</code></div>
                                 }
-                                @if (localMcpConfigs()[m.name]?.notes) {
-                                  <div class="docker-cfg-row"><span>備註</span><span>{{ localMcpConfigs()[m.name].notes }}</span></div>
-                                }
-                                <button class="btn-secondary btn-xs" style="margin-top:4px;"
-                                  (click)="openDockerConfig(m)">
-                                  🐳 設定 Docker / Compose
-                                </button>
+                                <button class="btn-secondary btn-xs" style="margin-top:4px;" (click)="openDockerConfig(m)">🐳 設定 Docker / Compose</button>
                               </div>
                             }
                           </div>
                         }
-
-                        <!-- 工具清單 -->
                         @if ((m.tools || []).length) {
-                          <div style="margin-top:8px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:8px;">
-                            <div style="font-size:10px;font-weight:600;color:#888;margin-bottom:4px;">
-                              已載入工具 ({{ m.tools!.length }})
-                            </div>
-                            @for (tool of m.tools!; track tool.name) {
-                              <div style="font-family:monospace;font-size:11px;color:#d4a853;padding:2px 0;">🛠 {{ tool.name }}</div>
-                            }
-                          </div>
+                          <div class="mcc-tools-label">工具 ({{ m.tools!.length }})</div>
+                          @for (tool of m.tools!; track tool.name) {
+                            <div class="mcc-tool-row">🛠 {{ tool.name }}</div>
+                          }
                         } @else {
-                          <div style="font-size:10px;color:#555;font-style:italic;margin-top:6px;">無工具資訊（可能尚未啟動）</div>
+                          <div style="font-size:10px;color:#555;font-style:italic;">無工具資訊（尚未啟動）</div>
                         }
                       </div>
                     }
