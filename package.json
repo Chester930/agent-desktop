@@ -6,9 +6,20 @@
   "scripts": {
     "start":           "electron . --dev",
     "frontend:build":  "cd frontend && npx ng build --base-href ./",
-    "backend:compile": "cd backend && pyinstaller --onefile --name claude-backend --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --collect-all aiohttp --collect-all aiohttp_cors main.py && copy dist\\claude-backend.exe claude-backend.exe",
-    "dist":            "npm run frontend:build && npm run backend:compile && electron-builder --win",
-    "build":           "npm run frontend:build && electron-builder --win --dir"
+
+    "backend:compile:win":   "cd backend && pyinstaller --onefile --name claude-backend --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --collect-all aiohttp --collect-all aiohttp_cors main.py && copy dist\\claude-backend.exe claude-backend.exe",
+    "backend:compile:mac":   "cd backend && pyinstaller --onefile --name claude-backend --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --collect-all aiohttp --collect-all aiohttp_cors main.py && cp dist/claude-backend claude-backend",
+    "backend:compile:linux": "cd backend && pyinstaller --onefile --name claude-backend --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --collect-all aiohttp --collect-all aiohttp_cors main.py && cp dist/claude-backend claude-backend",
+
+    "dist:win":   "npm run frontend:build && npm run backend:compile:win   && electron-builder --win",
+    "dist:mac":   "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac",
+    "dist:linux": "npm run frontend:build && npm run backend:compile:linux && electron-builder --linux",
+    "dist":       "npm run dist:win",
+
+    "build:win":   "npm run frontend:build && electron-builder --win   --dir",
+    "build:mac":   "npm run frontend:build && electron-builder --mac   --dir",
+    "build:linux": "npm run frontend:build && electron-builder --linux --dir",
+    "build":       "npm run build:win"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
@@ -26,9 +37,11 @@
       "electron/**/*",
       "frontend/dist/**/*",
       "backend/claude-backend.exe",
+      "backend/claude-backend",
       "node_modules/**/*"
     ],
     "win": {
+      "icon": "electron/icon.ico",
       "target": [{ "target": "nsis", "arch": ["x64"] }]
     },
     "nsis": {
@@ -37,6 +50,22 @@
       "createDesktopShortcut":             true,
       "createStartMenuShortcut":           true,
       "shortcutName":                      "Claude 桌面版"
+    },
+    "mac": {
+      "icon": "electron/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "target": [
+        { "target": "dmg",  "arch": ["x64", "arm64"] },
+        { "target": "zip",  "arch": ["x64", "arm64"] }
+      ]
+    },
+    "linux": {
+      "icon": "electron/icon.png",
+      "category": "Development",
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb",      "arch": ["x64"] }
+      ]
     },
     "publish": {
       "provider": "github",

@@ -17,6 +17,7 @@ export interface AppSettings {
   permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto';
   projectDir: string;
   apiKeyCmd: string;
+  claudeHome: string;   // override ~/.claude (leave blank for default)
   // #16 Multi-provider
   provider: 'claude' | 'openai' | 'openrouter' | 'gemini' | 'custom';
   providerApiUrl: string;
@@ -46,6 +47,7 @@ const DEFAULTS: AppSettings = {
   permissionMode: 'acceptEdits',
   projectDir: '',
   apiKeyCmd: '',
+  claudeHome: '',
   provider: 'claude',
   providerApiUrl: '',
   providerApiKey: '',

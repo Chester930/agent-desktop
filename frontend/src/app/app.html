@@ -235,6 +235,21 @@
               }
             </small>
           </label>
+          <label>Claude 資料根目錄（claudeHome）
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input style="flex:1" [(ngModel)]="settingsForm.claudeHome"
+                placeholder="留空 = 自動使用 ~/.claude">
+              <button class="btn-secondary" style="flex-shrink:0;font-size:11px;padding:4px 8px"
+                (click)="pickClaudeHome()">選擇…</button>
+            </div>
+            <small>
+              如果你把 Claude Code 安裝到非預設路徑，或需要管理多個 Claude 環境，可在此指定根目錄。
+              留空則使用作業系統預設的 <code>~/.claude</code>。
+              @if (resolvedClaudeHome()) {
+                目前生效：<code style="color:#d4a853">{{ resolvedClaudeHome() }}</code>
+              }
+            </small>
+          </label>
           <label>API Key 命令（Vault）
             <input [(ngModel)]="settingsForm.apiKeyCmd"
               placeholder="留空 = 使用 claude login。例：op read op://vault/item/credential">

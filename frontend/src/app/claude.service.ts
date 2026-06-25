@@ -187,7 +187,7 @@ export class ClaudeService {
     return this.http.get<{ projectDir: string; slug?: string }>(`${this.api}/config`);
   }
 
-  setConfig(cfg: { projectDir?: string; apiKeyCmd?: string }): Observable<{ ok: boolean; slug: string }> {
+  setConfig(cfg: { projectDir?: string; apiKeyCmd?: string; claudeHome?: string }): Observable<{ ok: boolean; slug: string }> {
     return this.http.put<{ ok: boolean; slug: string }>(`${this.api}/config`, cfg);
   }
 

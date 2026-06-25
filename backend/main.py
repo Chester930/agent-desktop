@@ -20,11 +20,25 @@ try:
 except ImportError:
     HAS_CRONITER = False
 
-CLAUDE_HOME = Path.home() / ".claude"
-AGENTS_DIR  = CLAUDE_HOME / "agents"
-SKILLS_DIR  = CLAUDE_HOME / "skills"
+_DEFAULT_CLAUDE_HOME = Path.home() / ".claude"
+CONFIG_FILE = _DEFAULT_CLAUDE_HOME / "claude-desktop-config.json"
+
+def _resolve_claude_home() -> Path:
+    """Allow users to override ~/.claude via claudeHome in config."""
+    try:
+        raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("claudeHome", "").strip()
+        if raw:
+            p = Path(raw).expanduser()
+            if p.is_dir():
+                return p
+    except Exception:
+        pass
+    return _DEFAULT_CLAUDE_HOME
+
+CLAUDE_HOME  = _resolve_claude_home()
+AGENTS_DIR   = CLAUDE_HOME / "agents"
+SKILLS_DIR   = CLAUDE_HOME / "skills"
 SESSIONS_DIR = CLAUDE_HOME / "sessions"
-CONFIG_FILE  = CLAUDE_HOME / "claude-desktop-config.json"
 
 # Project-specific paths — updated by _apply_project_base()
 MEMORY_DIR: Path
@@ -50,13 +64,13 @@ def _save_config(cfg: dict) -> None:
 
 def _apply_project_base() -> None:
     global MEMORY_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR
-    import getpass
     cfg = _load_config()
     project_dir = cfg.get("projectDir", "").strip()
     if project_dir:
         slug = _encode_slug(project_dir)
     else:
-        slug = f"C--Users-{getpass.getuser()}"
+        # Derive slug from home directory — matches what Claude Code generates on any OS
+        slug = _encode_slug(str(Path.home()))
     base = CLAUDE_HOME / "projects" / slug
     MEMORY_DIR         = base / "memory"
     SCHEDULES_FILE     = base / "schedules.json"
@@ -245,9 +259,19 @@ def find_claude() -> str:
     if found:
         return found
     candidates = [
+        # Windows
         Path.home() / "AppData" / "Local" / "Programs" / "claude" / "claude.exe",
         Path("C:/Program Files/claude/claude.exe"),
         Path.home() / "AppData" / "Roaming" / "npm" / "claude.cmd",
+        # macOS (Homebrew + npm global + direct install)
+        Path("/usr/local/bin/claude"),
+        Path("/opt/homebrew/bin/claude"),
+        Path.home() / ".npm-global" / "bin" / "claude",
+        Path.home() / "Library" / "Application Support" / "claude" / "claude",
+        # Linux
+        Path("/usr/bin/claude"),
+        Path.home() / ".local" / "bin" / "claude",
+        Path.home() / ".nvm" / "versions" / "node" / "default" / "bin" / "claude",
     ]
     for c in candidates:
         if c.exists():
@@ -1264,19 +1288,29 @@ async def handle_status(request: web.Request) -> web.Response:
 async def handle_config_get(request: web.Request) -> web.Response:
     cfg = _load_config()
     cfg.setdefault("projectDir", "")
+    cfg.setdefault("claudeHome", "")
+    cfg["_resolvedClaudeHome"] = str(CLAUDE_HOME)   # read-only info for UI
     return web.json_response(cfg)
 
 
 async def handle_config_put(request: web.Request) -> web.Response:
+    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, SESSIONS_DIR
     data = await request.json()
     cfg = _load_config()
     if "projectDir" in data:
         cfg["projectDir"] = data["projectDir"].strip()
     if "apiKeyCmd" in data:
         cfg["apiKeyCmd"] = data["apiKeyCmd"].strip()
+    if "claudeHome" in data:
+        cfg["claudeHome"] = data["claudeHome"].strip()
     _save_config(cfg)
-    _apply_project_base()   # hot-reload paths immediately
-    _log(f"Config updated: projectDir={cfg.get('projectDir','')!r}  →  {MEMORY_DIR.parent}")
+    # Re-resolve CLAUDE_HOME in case claudeHome changed
+    CLAUDE_HOME  = _resolve_claude_home()
+    AGENTS_DIR   = CLAUDE_HOME / "agents"
+    SKILLS_DIR   = CLAUDE_HOME / "skills"
+    SESSIONS_DIR = CLAUDE_HOME / "sessions"
+    _apply_project_base()
+    _log(f"Config updated: claudeHome={CLAUDE_HOME}  projectDir={cfg.get('projectDir','')!r}")
     return web.json_response({"ok": True, "slug": MEMORY_DIR.parent.name})
 
 

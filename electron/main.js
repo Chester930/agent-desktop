@@ -15,7 +15,8 @@ const srcBackendPy = path.join(ROOT_DIR, 'backend', 'main.py');
 const useSrc       = !app.isPackaged && fs.existsSync(srcFrontend) && fs.existsSync(srcBackendPy);
 
 // 打包後的路徑
-const bundledExe      = path.join(__dirname, '..', 'backend', 'claude-backend.exe');
+const backendBin      = process.platform === 'win32' ? 'claude-backend.exe' : 'claude-backend';
+const bundledExe      = path.join(__dirname, '..', 'backend', backendBin);
 const bundledFrontend = path.join(__dirname, '..', 'frontend', 'dist', 'frontend', 'browser', 'index.html');
 
 // ── 偵測 Claude Code 是否已安裝 ───────────────────────────
@@ -155,10 +156,17 @@ function createWindow() {
 
 // ── 系統匣 ────────────────────────────────────────────────
 function createTray() {
-  const iconPath = path.join(__dirname, 'icon.ico');
-  const icon = fs.existsSync(iconPath)
-    ? nativeImage.createFromPath(iconPath)
-    : nativeImage.createEmpty();
+  // Pick best icon format per platform
+  const iconCandidates = process.platform === 'win32'
+    ? ['icon.ico', 'icon.png']
+    : process.platform === 'darwin'
+      ? ['icon.icns', 'icon.png']
+      : ['icon.png', 'icon.ico'];
+  let icon = nativeImage.createEmpty();
+  for (const name of iconCandidates) {
+    const p = path.join(__dirname, name);
+    if (fs.existsSync(p)) { icon = nativeImage.createFromPath(p); break; }
+  }
 
   tray = new Tray(icon);
   tray.setToolTip('Claude 桌面版');
@@ -225,7 +233,10 @@ app.on('before-quit', () => {
   backendProcess?.kill();
 });
 
-app.on('window-all-closed', () => { /* 保持在系統匣 */ });
+app.on('window-all-closed', () => {
+  // macOS: keep process alive (re-open via tray or Dock); other platforms: stay in tray
+  if (process.platform !== 'darwin') { /* stay alive via tray */ }
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();

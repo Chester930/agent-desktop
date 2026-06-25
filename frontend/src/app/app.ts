@@ -747,6 +747,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (dir) this.settingsForm.projectDir = dir;
   }
 
+  async pickClaudeHome() {
+    const dir = await this.claude.pickDirectory();
+    if (dir) this.settingsForm.claudeHome = dir;
+  }
+
   // T07 — Dashboard stats
   stats = signal<{
     sessions: number; messages: number; total_tokens: number;
@@ -1412,6 +1417,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   backendLogs      = signal<string[]>([]);
   statusInfo       = signal('確認中…');
   projectSlug      = signal('');
+  resolvedClaudeHome = signal('');
   skillGenBusy     = signal(false);
   skillGenResult   = signal<string | null>(null);
 
@@ -1540,11 +1546,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
     this.claude.getConfig().subscribe((c: any) => {
       this.projectSlug.set(c.slug ?? '');
+      this.resolvedClaudeHome.set(c._resolvedClaudeHome ?? '');
       if (!this.settingsForm.projectDir && c.projectDir) {
         this.settingsForm.projectDir = c.projectDir;
       }
       if (!this.settingsForm.apiKeyCmd && c.apiKeyCmd) {
         this.settingsForm.apiKeyCmd = c.apiKeyCmd;
+      }
+      if (!this.settingsForm.claudeHome && c.claudeHome) {
+        this.settingsForm.claudeHome = c.claudeHome;
       }
     });
   }
@@ -1558,6 +1568,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.setConfig({
       projectDir: this.settingsForm.projectDir,
       apiKeyCmd:  this.settingsForm.apiKeyCmd,
+      claudeHome: this.settingsForm.claudeHome,
     }).subscribe();
     this.settingsOpen.set(false);
   }
