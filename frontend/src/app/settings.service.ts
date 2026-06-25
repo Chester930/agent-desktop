@@ -7,6 +7,7 @@ export interface AppSettings {
   workDir: string;
   defaultAgent: string;
   backendPort: number;
+  backendUrl: string;
   theme: 'dark' | 'light';
   recentWorkDirs: string[];
   quickPrompts: QuickPrompt[];
@@ -23,6 +24,7 @@ const DEFAULTS: AppSettings = {
   workDir: '',
   defaultAgent: '',
   backendPort: 8765,
+  backendUrl: '',
   theme: 'dark',
   recentWorkDirs: [],
   quickPrompts: [

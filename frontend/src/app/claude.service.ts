@@ -6,7 +6,7 @@ import { SettingsService } from './settings.service';
 
 export interface Agent   { id: string; name: string; description: string; }
 export interface Skill   { id: string; name: string; description: string; }
-export interface Session { id: string; title: string; mtime: number; }
+export interface Session { id: string; title: string; mtime: number; snippet?: string; }
 export interface SoulProfile { id: string; name: string; content: string; }
 
 export interface ChatMessage {
@@ -55,7 +55,9 @@ export class ClaudeService {
   constructor(private http: HttpClient, private settings: SettingsService) {}
 
   private get api(): string {
-    return `http://localhost:${this.settings.get().backendPort}/api`;
+    const s = this.settings.get();
+    if (s.backendUrl) return s.backendUrl.replace(/\/$/, '') + '/api';
+    return `http://localhost:${s.backendPort}/api`;
   }
 
   getAgents(): Observable<Agent[]>     { return this.http.get<Agent[]>(`${this.api}/agents`); }
@@ -191,6 +193,18 @@ export class ClaudeService {
   generateSkill(sessionId: string): Observable<{ ok: boolean; slug: string; path: string; content: string }> {
     return this.http.post<{ ok: boolean; slug: string; path: string; content: string }>(
       `${this.api}/skills/generate`, { session_id: sessionId }
+    );
+  }
+
+  autoTitleSession(sessionId: string): Observable<{ ok: boolean; title: string }> {
+    return this.http.post<{ ok: boolean; title: string }>(
+      `${this.api}/sessions/${sessionId}/auto-title`, {}
+    );
+  }
+
+  getMcpLogs(name: string): Observable<{ name: string; lines: string[] }> {
+    return this.http.get<{ name: string; lines: string[] }>(
+      `${this.api}/mcp/${encodeURIComponent(name)}/logs`
     );
   }
 

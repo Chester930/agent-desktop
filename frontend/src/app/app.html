@@ -224,6 +224,11 @@
           <label>後端連接埠
             <input type="number" [(ngModel)]="settingsForm.backendPort" min="1024" max="65535">
           </label>
+          <label>遠端後端 URL <small>（選填，填寫後覆蓋連接埠設定）</small>
+            <input type="url" [(ngModel)]="settingsForm.backendUrl"
+              placeholder="例：http://192.168.1.100:8765 或 https://my-server.com">
+            <small>留空則使用 localhost:{{ settingsForm.backendPort }}</small>
+          </label>
           <label>預設代理人
             <select [(ngModel)]="settingsForm.defaultAgent">
               <option value="">（無）</option>
@@ -345,6 +350,9 @@
                     [title]="'點擊載入 / 拖曳到畫布新增面板'">
                     <span class="session-title">{{ s.title }}</span>
                     <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
+                    @if (s.snippet && sessionSearch) {
+                      <span class="session-snippet" [innerHTML]="s.snippet"></span>
+                    }
                   </button>
                 }
                 <button class="session-pin-btn" (click)="togglePin(s.id, $event)"
@@ -441,10 +449,26 @@
                         <div class="bubble system-bubble">{{ msg.text }}</div>
                       }
                       @if (msg.role === 'user') {
-                        <div class="bubble user-bubble">
-                          {{ msg.text }}
-                          @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
-                        </div>
+                        @if (editingMsgIdx() === $index) {
+                          <div class="msg-edit-wrap">
+                            <textarea class="msg-edit-input"
+                              [value]="editingMsgText()"
+                              (input)="editingMsgText.set($any($event.target).value)"
+                              (keydown.control.enter)="confirmEditMsg($index)"
+                              (keydown.escape)="cancelEditMsg()"
+                              rows="3"></textarea>
+                            <div class="msg-edit-actions">
+                              <button class="btn-primary"   (click)="confirmEditMsg($index)">重新送出</button>
+                              <button class="btn-secondary" (click)="cancelEditMsg()">取消</button>
+                            </div>
+                          </div>
+                        } @else {
+                          <div class="bubble user-bubble">
+                            {{ msg.text }}
+                            @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
+                            <button class="msg-edit-btn" (click)="startEditMsg($index, msg.text)" title="編輯並重新生成">✏</button>
+                          </div>
+                        }
                       }
                       @if (msg.role === 'assistant') {
                         <div class="bubble assistant-bubble">
@@ -1203,7 +1227,24 @@
                         <span class="mcp-status-dot" [style.background]="getMcpColor(m.name, m.status)"></span>
                       }
                       <span [style.color]="getMcpColor(m.name, m.status) || '#555'">{{ m.status }}</span>
+                      <button class="mcp-log-toggle" (click)="$event.stopPropagation(); toggleMcpLog(m.name)"
+                        [class.active]="mcpLogOpen() === m.name" title="查看日誌">📋</button>
                     </div>
+                    @if (mcpLogOpen() === m.name) {
+                      <div class="mcp-log-panel" (click)="$event.stopPropagation()">
+                        <div class="mcp-log-header">
+                          <span>日誌 · {{ m.name }}</span>
+                          <button class="icon-btn-sm" (click)="refreshMcpLog(m.name)" title="重新整理">↻</button>
+                        </div>
+                        <div class="mcp-log-body">
+                          @for (line of mcpLogLines(); track $index) {
+                            <div class="mcp-log-line">{{ line }}</div>
+                          } @empty {
+                            <div class="mcp-log-empty">尚無日誌（伺服器啟動後才會產生輸出）</div>
+                          }
+                        </div>
+                      </div>
+                    }
                     @if (expandedMcpId() === m.id) {
                       <div class="card-detail-content" (click)="$event.stopPropagation()">
                         <!-- 工具清單 -->

@@ -185,6 +185,7 @@ def _sync_index() -> None:
 active_sessions: dict[str, str] = {}   # client_id -> claude session_id
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
+_mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
 _log_buffer: list[str] = []
 
 def _log(msg: str) -> None:
@@ -373,7 +374,8 @@ async def handle_sessions(request: web.Request) -> web.Response:
         with _db() as c:
             if q:
                 rows = c.execute("""
-                    SELECT s.id, s.title, s.mtime
+                    SELECT s.id, s.title, s.mtime,
+                           snippet(sessions_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet
                     FROM sessions_fts f
                     JOIN sessions s ON s.id = f.id
                     WHERE sessions_fts MATCH ?
@@ -381,11 +383,16 @@ async def handle_sessions(request: web.Request) -> web.Response:
                 """, (q,)).fetchall()
             else:
                 rows = c.execute(
-                    "SELECT id, title, mtime FROM sessions ORDER BY mtime DESC"
+                    "SELECT id, title, mtime, '' AS snippet FROM sessions ORDER BY mtime DESC"
                 ).fetchall()
         total = len(rows)
         items = [
-            {"id": r["id"], "title": custom_names.get(r["id"]) or r["title"], "mtime": r["mtime"]}
+            {
+                "id":      r["id"],
+                "title":   custom_names.get(r["id"]) or r["title"],
+                "mtime":   r["mtime"],
+                "snippet": r["snippet"] or "",
+            }
             for r in rows[offset: offset + PAGE]
         ]
     except Exception as e:
@@ -883,6 +890,108 @@ async def handle_cli(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"output": str(e), "code": -1})
 
+async def _drain_mcp(name: str, proc: asyncio.subprocess.Process) -> None:
+    """Drain stdout+stderr of an MCP process into _mcp_logs[name]."""
+    async def read_stream(stream: asyncio.StreamReader | None) -> None:
+        if stream is None:
+            return
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            decoded = line.decode("utf-8", errors="replace").rstrip()
+            buf = _mcp_logs.setdefault(name, [])
+            buf.append(decoded)
+            if len(buf) > 300:
+                buf.pop(0)
+    await asyncio.gather(read_stream(proc.stdout), read_stream(proc.stderr))
+
+
+async def handle_mcp_logs(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    lines = _mcp_logs.get(name, [])
+    return web.json_response({"name": name, "lines": lines[-100:]})
+
+
+async def handle_session_auto_title(request: web.Request) -> web.Response:
+    """Generate a concise session title using Claude from the first few messages."""
+    sid = request.match_info["id"]
+    f = SESSIONS_DIR / f"{sid}.jsonl"
+    if not f.exists():
+        return web.json_response({"error": "session not found"}, status=404)
+
+    # Extract first user+assistant messages
+    snippets: list[str] = []
+    try:
+        for line in f.read_text(encoding="utf-8", errors="replace").strip().splitlines()[:30]:
+            try:
+                ev = json.loads(line)
+                role = ev.get("type", "")
+                if role not in ("user", "assistant"):
+                    continue
+                content = ev.get("message", {}).get("content", "")
+                text = ""
+                if isinstance(content, list):
+                    for c in content:
+                        if c.get("type") == "text":
+                            text = c["text"]; break
+                elif isinstance(content, str):
+                    text = content
+                if text:
+                    snippets.append(f"[{role}] {text[:300]}")
+                if len(snippets) >= 4:
+                    break
+            except Exception:
+                pass
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    if not snippets:
+        return web.json_response({"error": "no messages"}, status=400)
+
+    prompt = (
+        "根據以下對話片段，生成一個精簡的標題（4–10 個中文字或英文字）。"
+        "只回覆標題本身，不要標點符號或引號。\n\n"
+        + "\n".join(snippets)
+    )
+
+    env = os.environ.copy()
+    key = _resolve_api_key()
+    if key:
+        env["ANTHROPIC_API_KEY"] = key
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", prompt, "--model", "claude-haiku-4-5-20251001",
+            "--output-format", "text", "--no-caching",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env, cwd=str(Path.home()),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        title = stdout.decode("utf-8", errors="replace").strip().splitlines()[0][:60]
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    if not title:
+        return web.json_response({"error": "empty title"}, status=500)
+
+    # Save to session_names.json
+    names = load_session_names()
+    names[sid] = title
+    SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SESSION_NAMES_FILE.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Also update SQLite
+    try:
+        with _db() as c:
+            c.execute("UPDATE sessions SET title=? WHERE id=?", (title, sid))
+            c.execute("UPDATE sessions_fts SET title=? WHERE id=?", (title, sid))
+    except Exception:
+        pass
+
+    return web.json_response({"ok": True, "title": title})
+
+
 async def handle_mcp_action(request: web.Request) -> web.Response:
     name   = request.match_info["name"]
     action = request.match_info["action"]   # start | stop | restart
@@ -900,10 +1009,12 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *mcp_cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
             _mcp_procs[name] = proc
+            _mcp_logs[name] = []
+            asyncio.create_task(_drain_mcp(name, proc))
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)})
 
@@ -981,10 +1092,11 @@ def build_app() -> web.Application:
         ("GET",    "/api/souls",          handle_souls_list),
         ("PUT",    "/api/souls/{id}",     handle_soul_save),
         ("DELETE", "/api/souls/{id}",  handle_soul_delete),
-        ("GET",    "/api/sessions",        handle_sessions),
-        ("POST",   "/api/sessions/resume",   handle_resume_session),
-        ("DELETE", "/api/sessions/{id}",    handle_session_delete),
-        ("PATCH",  "/api/sessions/{id}",    handle_session_rename),
+        ("GET",    "/api/sessions",                      handle_sessions),
+        ("POST",   "/api/sessions/resume",              handle_resume_session),
+        ("DELETE", "/api/sessions/{id}",               handle_session_delete),
+        ("PATCH",  "/api/sessions/{id}",               handle_session_rename),
+        ("POST",   "/api/sessions/{id}/auto-title",    handle_session_auto_title),
         ("GET",    "/api/agents",          handle_agents),
         ("GET",    "/api/skills",          handle_skills),
         ("POST",   "/api/skills/generate", handle_skill_generate),
@@ -1002,6 +1114,7 @@ def build_app() -> web.Application:
         ("GET",    "/api/config",          handle_config_get),
         ("PUT",    "/api/config",          handle_config_put),
         ("POST",   "/api/mcp/{name}/{action}", handle_mcp_action),
+        ("GET",    "/api/mcp/{name}/logs",    handle_mcp_logs),
     ]:
         route_groups.setdefault(path, []).append((method, handler))
 

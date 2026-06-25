@@ -1011,6 +1011,73 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     navigator.clipboard.writeText(text);
   }
 
+  // Message edit + regenerate (#11)
+  editingMsgIdx  = signal<number | null>(null);
+  editingMsgText = signal('');
+
+  startEditMsg(idx: number, text: string) {
+    this.editingMsgIdx.set(idx);
+    this.editingMsgText.set(text);
+  }
+  cancelEditMsg() {
+    this.editingMsgIdx.set(null);
+    this.editingMsgText.set('');
+  }
+  confirmEditMsg(idx: number) {
+    const newText = this.editingMsgText().trim();
+    if (!newText) { this.cancelEditMsg(); return; }
+    // slice off from this user message onward
+    this.messages.set(this.messages().slice(0, idx));
+    this.editingMsgIdx.set(null);
+    this.editingMsgText.set('');
+    this.inputText = newText;
+    // slight delay so DOM settles before send
+    setTimeout(() => this.send(), 50);
+  }
+
+  // MCP log viewer (#15)
+  mcpLogOpen   = signal<string | null>(null);
+  mcpLogLines  = signal<string[]>([]);
+
+  toggleMcpLog(name: string) {
+    if (this.mcpLogOpen() === name) {
+      this.mcpLogOpen.set(null);
+      return;
+    }
+    this.mcpLogOpen.set(name);
+    this.refreshMcpLog(name);
+  }
+  refreshMcpLog(name: string) {
+    this.claude.getMcpLogs(name).subscribe(r => this.mcpLogLines.set(r.lines));
+  }
+
+  // Auto session title (#10)
+  private _autoTitleBusy = false;
+  triggerAutoTitle() {
+    if (this._autoTitleBusy) return;
+    this._autoTitleBusy = true;
+    // Find latest session (first after reload) and auto-title if title looks auto-generated
+    setTimeout(() => {
+      const sess = this.sessions();
+      if (!sess.length) { this._autoTitleBusy = false; return; }
+      const latest = sess[0];
+      // Only auto-title if title looks like truncated user text (< 80 chars, no special structure)
+      if (latest.title && latest.title.length < 80) {
+        this.claude.autoTitleSession(latest.id).subscribe({
+          next: r => {
+            this.sessions.update(list =>
+              list.map(s => s.id === latest.id ? { ...s, title: r.title } : s)
+            );
+            this._autoTitleBusy = false;
+          },
+          error: () => { this._autoTitleBusy = false; },
+        });
+      } else {
+        this._autoTitleBusy = false;
+      }
+    }, 1500);
+  }
+
   // Auto-resize textarea
   autoResize(event: Event) {
     const el = event.target as HTMLTextAreaElement;
@@ -1650,6 +1717,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         });
         this.isStreaming.set(false);
         this.reload();
+        this.triggerAutoTitle();
         this.shouldScroll = true;
         this.inputRef?.nativeElement?.focus();
         // T05 — Windows 通知
