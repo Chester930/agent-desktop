@@ -3,6 +3,11 @@ const path = require('path');
 const fs   = require('fs');
 const { spawn, execFileSync } = require('child_process');
 
+// dev 模式用獨立 userData，避免和其他 Electron app 搶快取目錄
+if (!app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'claude-desktop-dev'));
+}
+
 let mainWindow;
 let backendProcess;
 let tray;
@@ -21,10 +26,13 @@ const bundledFrontend = path.join(__dirname, '..', 'frontend', 'dist', 'frontend
 
 // ── 偵測 Claude Code 是否已安裝 ───────────────────────────
 function detectClaude() {
-  const bins = ['claude'];
+  // Windows: 優先找 .cmd 包裝器（npm global 安裝方式）
+  const bins = process.platform === 'win32'
+    ? ['claude.cmd', 'claude']
+    : ['claude'];
   for (const bin of bins) {
     try {
-      execFileSync(bin, ['--version'], { stdio: 'pipe', windowsHide: true, shell: true, timeout: 5000 });
+      execFileSync(bin, ['--version'], { stdio: 'pipe', windowsHide: true, shell: false, timeout: 5000 });
       return bin;
     } catch {}
   }
@@ -35,12 +43,18 @@ function detectClaude() {
 function startBackend() {
   if (useSrc) {
     // 開發者模式：用 Python 直接跑原始碼
-    const candidates = ['python', 'python3', 'py'];
+    // Windows 用 cmd /c 包裝，避免 DEP0190 (shell:true + args) 警告
+    const candidates = process.platform === 'win32'
+      ? ['python', 'py', 'python3']
+      : ['python3', 'python'];
     for (const py of candidates) {
       try {
-        backendProcess = spawn(py, [srcBackendPy], {
+        const [cmd, args] = process.platform === 'win32'
+          ? ['cmd', ['/c', py, srcBackendPy]]
+          : [py, [srcBackendPy]];
+        backendProcess = spawn(cmd, args, {
           cwd: path.dirname(srcBackendPy),
-          stdio: 'pipe', windowsHide: true, shell: true,
+          stdio: 'pipe', windowsHide: true, shell: false,
         });
         backendProcess.on('error', () => {});
         break;
