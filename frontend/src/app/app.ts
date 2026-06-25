@@ -917,7 +917,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (e.ctrlKey && e.key === 'b' && !inInput) { e.preventDefault(); this.sidebarOpen.update(v => !v); }
     if (e.ctrlKey && e.key === 'k') { e.preventDefault(); if (this.cmdOpen()) this.closeCmd(); else this.openCmd(); }
     if (e.key === 'Escape') {
-      if (this.cmdOpen())             this.closeCmd();
+      if (this.contextMenu())         this.closeContextMenu();
+      else if (this.cmdOpen())        this.closeCmd();
       else if (this.settingsOpen())   this.settingsOpen.set(false);
       else if (this.expandedAgentId() || this.expandedSkillId() || this.expandedMcpId()) {
         this.expandedAgentId.set('');
@@ -1017,6 +1018,38 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   dismissToast(id: string) {
     this.toasts.update(t => t.filter(x => x.id !== id));
+  }
+
+  // ── Session right-click context menu ─────────────────────────────────────
+  contextMenu = signal<{ x: number; y: number; session: Session } | null>(null);
+
+  onSessionContextMenu(s: Session, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Keep menu inside viewport
+    const x = Math.min(e.clientX, window.innerWidth  - 180);
+    const y = Math.min(e.clientY, window.innerHeight - 180);
+    this.contextMenu.set({ x, y, session: s });
+  }
+
+  closeContextMenu() { this.contextMenu.set(null); }
+
+  ctxRename(s: Session) {
+    this.renamingId.set(s.id);
+    this.renameTitle = s.title;
+    this.closeContextMenu();
+  }
+
+  ctxDelete(s: Session) {
+    this.closeContextMenu();
+    this.claude.deleteSession(s.id).subscribe(() =>
+      this.claude.getSessions(this.sessionSearch, 0).subscribe(r => this.sessions.set(r.items))
+    );
+  }
+
+  ctxCopyId(s: Session) {
+    navigator.clipboard.writeText(s.id).then(() => this.showToast('Session ID 已複製', 'success', 1500));
+    this.closeContextMenu();
   }
 
   // Copy message

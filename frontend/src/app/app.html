@@ -454,7 +454,8 @@
                     (dragstart)="onSessionDragStart(s, $event)"
                     (click)="loadSession(s)"
                     (dblclick)="startRename(s, $event)"
-                    [title]="s.title + '\n雙擊重新命名'">
+                    (contextmenu)="onSessionContextMenu(s, $event)"
+                    [title]="s.title + '\n雙擊重新命名 · 右鍵選單'">
                     <span class="session-title">{{ s.title }}</span>
                     <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
                     @if (s.snippet && sessionSearch) {
@@ -484,6 +485,32 @@
         </div>
         <div class="sidebar-resize" (mousedown)="onResizeStart($event)" title="拖曳調整寬度"></div>
       </aside>
+    }
+
+    <!-- ── Session 右鍵選單 ─────────────────────────── -->
+    @if (contextMenu()) {
+      <div class="ctx-overlay" (click)="closeContextMenu()"></div>
+      <div class="ctx-menu" [style.left.px]="contextMenu()!.x" [style.top.px]="contextMenu()!.y">
+        <button class="ctx-item" (click)="loadSession(contextMenu()!.session); closeContextMenu()">
+          📂 開啟對話
+        </button>
+        <button class="ctx-item" (click)="ctxRename(contextMenu()!.session)">
+          ✏ 重新命名
+        </button>
+        <button class="ctx-item" (click)="togglePin(contextMenu()!.session.id, $event); closeContextMenu()">
+          📌 {{ isPinned(contextMenu()!.session.id) ? '取消置頂' : '置頂' }}
+        </button>
+        <button class="ctx-item" (click)="generateSkillFromSession(contextMenu()!.session.id); closeContextMenu()">
+          ✦ 產生 Skill
+        </button>
+        <button class="ctx-item" (click)="ctxCopyId(contextMenu()!.session)">
+          🔗 複製 Session ID
+        </button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item ctx-danger" (click)="ctxDelete(contextMenu()!.session)">
+          ✕ 刪除
+        </button>
+      </div>
     }
 
     <!-- ── 聊天主區域 ────────────────────────────────── -->
@@ -579,25 +606,29 @@
                         }
                       }
                       @if (msg.role === 'assistant') {
-                        <div class="bubble assistant-bubble">
-                          <span class="role-tag">Claude</span>
-                          @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
-                          @if (msg.cost && msg.cost > 0) {
-                            <span class="msg-cost" title="本則訊息費用">${{ msg.cost.toFixed(4) }}</span>
-                          }
-                          @if (!msg.isStreaming || msg.text) {
-                            <button class="copy-btn" (click)="copyMessage(msg.text)" title="複製訊息" aria-label="複製訊息">⎘</button>
-                          }
-                          @if (msg.isStreaming && !msg.text) {
-                            <!-- Loading skeleton while waiting for first token -->
-                            <div class="msg-skeleton" aria-label="Claude 思考中">
-                              <div class="skeleton-line" style="width:78%"></div>
-                              <div class="skeleton-line" style="width:55%"></div>
-                              <div class="skeleton-line" style="width:35%"></div>
+                        <div class="msg-assistant-group">
+                          <div class="bubble assistant-bubble">
+                            <span class="role-tag">Claude</span>
+                            @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
+                            @if (msg.cost && msg.cost > 0) {
+                              <span class="msg-cost" title="本則訊息費用">${{ msg.cost.toFixed(4) }}</span>
+                            }
+                            @if (msg.isStreaming && !msg.text) {
+                              <div class="msg-skeleton" aria-label="Claude 思考中">
+                                <div class="skeleton-line" style="width:78%"></div>
+                                <div class="skeleton-line" style="width:55%"></div>
+                                <div class="skeleton-line" style="width:35%"></div>
+                              </div>
+                            } @else {
+                              <div class="md-body" [class.streaming]="msg.isStreaming"
+                                   [innerHTML]="msg.text | markdown"></div>
+                            }
+                          </div>
+                          @if (!msg.isStreaming && msg.text) {
+                            <div class="msg-action-row">
+                              <button class="msg-action-btn" (click)="copyMessage(msg.text)" title="複製全文">⎘ 複製</button>
+                              <button class="msg-action-btn" (click)="retryLast()" title="重新生成此回覆">↺ 重試</button>
                             </div>
-                          } @else {
-                            <div class="md-body" [class.streaming]="msg.isStreaming"
-                                 [innerHTML]="msg.text | markdown"></div>
                           }
                         </div>
                       }
@@ -626,7 +657,28 @@
                         </div>
                       }
                     </div>
-                  } @empty {}
+                  } @empty {
+                    <!-- Empty chat welcome state -->
+                    <div class="chat-welcome">
+                      <div class="chat-welcome-logo">⚡</div>
+                      <div class="chat-welcome-title">{{ t('Claude 桌面版') }}</div>
+                      <p class="chat-welcome-sub">選擇下方提示快速開始，或直接輸入訊息</p>
+                      <div class="chat-welcome-prompts">
+                        @for (p of quickPrompts(); track p.label) {
+                          <button class="welcome-prompt-btn"
+                            (click)="inputText = p.text; inputRef.focus()">
+                            {{ p.label }}
+                          </button>
+                        }
+                      </div>
+                      <div class="chat-welcome-tips">
+                        <span class="welcome-tip"><kbd>/</kbd> 選擇 Skill</span>
+                        <span class="welcome-tip"><kbd>Ctrl+K</kbd> 全局搜尋</span>
+                        <span class="welcome-tip"><kbd>Ctrl+V</kbd> 貼上截圖</span>
+                        <span class="welcome-tip">📁 拖曳附加檔案</span>
+                      </div>
+                    </div>
+                  }
                   <div #chatEnd></div>
                 </div>
               } @else {
@@ -644,9 +696,12 @@
                         <div class="bubble assistant-bubble">
                           <span class="role-tag">Claude</span>
                           @if (msg.isStreaming && !msg.text) {
-                            <span class="cursor"></span>
+                            <div class="msg-skeleton">
+                              <div class="skeleton-line" style="width:70%"></div>
+                              <div class="skeleton-line" style="width:45%"></div>
+                            </div>
                           } @else {
-                            <div class="md-body" [class.cursor]="msg.isStreaming"
+                            <div class="md-body" [class.streaming]="msg.isStreaming"
                                  [innerHTML]="msg.text | markdown"></div>
                           }
                         </div>
@@ -812,10 +867,10 @@
                 {{ inputText.length }}/4000
               </span>
             }
-            <button class="sb-btn" (click)="cycleModel()" [title]="'模型：' + model()">
+            <button class="sb-btn" (click)="cycleModel()" [title]="'模型：' + model() + '（點擊切換 · /model 指令）'">
               {{ MODEL_LABELS[model()] || model() }}
             </button>
-            <button class="sb-btn" (click)="cycleEffort()" [title]="'思考深度：' + effort()">
+            <button class="sb-btn" (click)="cycleEffort()" [title]="'思考深度：' + effort() + '（點擊切換 low→medium→high→xhigh→max）'">
               {{ effort() }}
             </button>
             <span class="status-dot" [class.online]="!backendDown() && !outOfQuota()" [title]="backendDown() ? '已斷開後端連線' : outOfQuota() ? '已達用量限制' : '後端連線正常，可用量充足'"></span>

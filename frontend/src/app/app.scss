@@ -2919,3 +2919,148 @@ body {
     &:hover { background: #991b1b; }
   }
 }
+
+// ── Welcome screen (empty chat) ────────────────────────────────────────────
+.chat-welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 40px 24px;
+  text-align: center;
+  animation: toast-slide-in 0.3s ease;
+}
+.chat-welcome-logo {
+  font-size: 48px;
+  line-height: 1;
+  filter: drop-shadow(0 0 20px rgba(163,230,53,0.3));
+}
+.chat-welcome-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+.chat-welcome-sub {
+  font-size: 13px;
+  color: var(--text-dim, #6b7280);
+  margin: 0;
+}
+.chat-welcome-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 480px;
+}
+.welcome-prompt-btn {
+  background: var(--bg-surface, #1a1a1a);
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s;
+  &:hover {
+    background: var(--bg-surface2, #252525);
+    border-color: var(--accent, #a3e635);
+    color: var(--accent, #a3e635);
+  }
+}
+.chat-welcome-tips {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 4px;
+}
+.welcome-tip {
+  font-size: 11px;
+  color: var(--text-dim, #6b7280);
+  kbd {
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-family: monospace;
+  }
+}
+
+// ── Session right-click context menu ──────────────────────────────────────
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+.ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 168px;
+  background: #1e1e2e;
+  border: 1px solid #3a3a4e;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  animation: ctx-pop 0.12s ease;
+}
+@keyframes ctx-pop {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--text-primary, #e5e7eb);
+  cursor: pointer;
+  &:hover { background: #2a2a3e; }
+  &.ctx-danger { color: #f87171; &:hover { background: #3f1010; } }
+}
+.ctx-sep {
+  height: 1px;
+  background: #3a3a4e;
+  margin: 3px 8px;
+}
+
+// ── Message hover action row ───────────────────────────────────────────────
+.msg-assistant-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.msg-action-row {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding-left: 2px;
+}
+.msg:hover .msg-action-row,
+.msg-assistant-group:hover .msg-action-row {
+  opacity: 1;
+}
+.msg-action-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: none;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.12s;
+  &:hover {
+    background: #2a2a2a;
+    border-color: #3a3a3a;
+    color: #e5e7eb;
+  }
+}
