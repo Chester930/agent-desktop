@@ -150,36 +150,13 @@
 
 
     <div class="topbar-right">
-      <!-- 設定狀態標籤 -->
-      @if (!projectSlug() && !backendDown()) {
-        <button class="config-warn-chip" (click)="openSettings()" title="點擊前往設定">
-          ⚠ 未設定專案目錄
-        </button>
-      }
-      <!-- #16 provider badge -->
-      @if (useProvider()) {
-        <button class="provider-badge" (click)="openSettings()" title="使用外部 AI Provider — 點擊前往設定">
-          {{ settingsForm.provider | uppercase }}
-        </button>
-      }
-      <!-- #22 update progress -->
+      <!-- update progress (保留，有更新時才出現) -->
       @if (updateProgress() !== null) {
         <div class="update-progress-bar" [title]="updateReady() ? '更新已就緒' : '下載更新中…'">
           <div class="update-progress-fill" [style.width.%]="updateProgress()"></div>
           <span class="update-progress-label">{{ updateReady() ? '✓ 就緒' : updateProgress() + '%' }}</span>
         </div>
       }
-      <!-- #21 export format + button -->
-      <select class="export-format-select" [(ngModel)]="exportFormat" [ngModelOptions]="{standalone: true}"
-        title="匯出格式" [disabled]="!messages().length">
-        <option value="md">.md</option>
-        <option value="json">.json</option>
-        <option value="txt">.txt</option>
-      </select>
-      <button class="icon-btn" (click)="exportChat()" title="匯出對話" aria-label="匯出對話" [disabled]="!messages().length">⬇</button>
-      <button class="icon-btn" (click)="reload()" title="重新整理" aria-label="重新整理">↻</button>
-      <button class="icon-btn" (click)="helpOpen.set(true)" title="說明中心" aria-label="說明中心">❓</button>
-      <button class="icon-btn" (click)="openSettings()" title="設定" aria-label="開啟設定">⚙</button>
       <button class="icon-btn" (click)="rightOpen.set(!rightOpen())" title="切換右側面板" aria-label="切換右側面板">⊞</button>
     </div>
   </header>
