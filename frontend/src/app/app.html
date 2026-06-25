@@ -596,6 +596,7 @@
                   <span class="panel-active-badge">✏ 輸入中</span>
                 }
                 <span class="panel-msg-count">{{ getPanelMessages(tab.id).length }} 則</span>
+                <button class="panel-clear" (click)="$event.stopPropagation(); exportChat()" title="匯出對話" [disabled]="!getPanelMessages(tab.id).length">⬇</button>
                 <button class="panel-clear" (click)="clearTab(tab.id, $event)" title="清空此對話">🗑</button>
                 @if (chatTabs().length > 1) {
                   <button class="panel-close" (click)="closeChatTab(tab.id, $event)" title="關閉面板">✕</button>
