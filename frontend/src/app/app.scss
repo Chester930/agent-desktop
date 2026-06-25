@@ -842,6 +842,7 @@ body {
   border-radius: 12px;
   width: 440px;
   max-width: 92vw;
+  height: 88vh;          // 明確高度，讓 flex 子元素有參考基準
   max-height: 88vh;
   display: flex;
   flex-direction: column;
@@ -858,6 +859,7 @@ body {
   font-size: 15px;
   font-weight: 600;
   color: $text;
+  flex-shrink: 0;
 }
 
 .modal-scroll-wrap {
