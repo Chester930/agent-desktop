@@ -1065,8 +1065,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const map = new Map<string, { sessions: Session[]; latestMtime: number; folderName: string; fullPath: string }>();
     for (const s of all) {
       const fullPath   = s.projectPath || '';
-      const folderName = s.projectDir  || (fullPath ? fullPath.split(/[/\\]/).filter(Boolean).pop()! : '');
-      const key        = fullPath || folderName || '未知專案';
+      // Use actual path's last segment as folder name; fall back to slug-derived projectDir
+      const folderName = fullPath
+        ? (fullPath.split(/[/\\]/).filter(Boolean).pop() ?? s.projectDir ?? '未知專案')
+        : (s.projectDir || '未知專案');
+      const key        = fullPath || s.projectDir || '未知專案';
       if (!map.has(key)) map.set(key, { sessions: [], latestMtime: 0, folderName: folderName || '未知專案', fullPath });
       const entry = map.get(key)!;
       entry.sessions.push(s);

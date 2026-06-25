@@ -134,8 +134,27 @@ def _migrate_db() -> None:
         if "project_path" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT ''")
 
+def _backfill_project_paths() -> None:
+    """One-time: populate project_path for sessions that still have empty value."""
+    try:
+        with _db() as c:
+            rows = c.execute(
+                "SELECT id, file_path FROM sessions WHERE project_path = '' AND file_path != ''"
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                cwd = _read_session_cwd(Path(row["file_path"]))
+                if cwd:
+                    c.execute("UPDATE sessions SET project_path = ? WHERE id = ?", (cwd, row["id"]))
+                    updated += 1
+            if updated:
+                print(f"[sqlite] backfilled project_path for {updated} sessions")
+    except Exception as e:
+        print(f"[sqlite] backfill error: {e}")
+
 _init_db()
 _migrate_db()
+_backfill_project_paths()
 
 def _read_session_cwd(f: Path) -> str:
     """Read the first cwd value found in a session JSONL (scans at most 20 lines)."""
@@ -199,13 +218,15 @@ def _sync_index() -> None:
         return
     try:
         with _db() as c:
-            indexed = {r["id"]: r["mtime"] for r in c.execute("SELECT id, mtime FROM sessions")}
+            indexed = {r["id"]: (r["mtime"], r["project_path"]) for r in c.execute("SELECT id, mtime, project_path FROM sessions")}
             existing_ids: set[str] = set()
             for f in all_files:
                 sid = f.stem
                 existing_ids.add(sid)
                 mtime = f.stat().st_mtime
-                if indexed.get(sid) == mtime:
+                entry = indexed.get(sid)
+                if entry and entry[0] == mtime and entry[1]:  # same mtime AND has project_path
+
                     continue
                 title, search_text, inp, out, msg_count = _parse_jsonl_session(f)
                 project_path = _read_session_cwd(f)
