@@ -1218,8 +1218,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // ── #17 Profile switching ─────────────────────────────────────────────────
-  profiles         = signal<Profile[]>([]);
-  profileSwitching = signal(false);
+  profiles            = signal<Profile[]>([]);
+  profileSwitching    = signal(false);
+  profileDropdownOpen = signal(false);
 
   loadProfiles() {
     this.claude.getProfiles().subscribe(r => this.profiles.set(r.profiles));
@@ -1227,10 +1228,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   switchProfile(slug: string) {
     this.profileSwitching.set(true);
-    // Decode slug back to directory path (e.g. C--Users-666-Desktop-myproject → C:\Users\666\Desktop\myproject)
-    const dir = slug
-      .replace(/^([A-Za-z])--/, '$1:\\')
-      .replace(/--/g, '\\');
+    const dir = slug.replace(/^([A-Za-z])--/, '$1:\\').replace(/--/g, '\\');
     this.claude.setConfig({ projectDir: dir }).subscribe({
       next: () => {
         this.settingsForm.projectDir = dir;
@@ -1240,6 +1238,36 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       },
       error: () => this.profileSwitching.set(false),
     });
+  }
+
+  switchProfileNewTab(slug: string) {
+    this.profileDropdownOpen.set(false);
+    if (slug === this.projectSlug()) return;
+    this.profileSwitching.set(true);
+    const dir = slug.replace(/^([A-Za-z])--/, '$1:\\').replace(/--/g, '\\');
+    this.claude.setConfig({ projectDir: dir }).subscribe({
+      next: (res) => {
+        this.settingsForm.projectDir = dir;
+        this.settings.save(this.settingsForm);
+        this.projectSlug.set(res.slug ?? slug);
+        this.profileSwitching.set(false);
+        this.addChatTab();   // 建立新對話欄
+        this.reload();       // 重載 sessions / agents（即該目錄的歷史對話）
+      },
+      error: () => this.profileSwitching.set(false),
+    });
+  }
+
+  // 清空某個對話欄的訊息
+  clearTab(tabId: string, e: Event) {
+    e.stopPropagation();
+    this.chatTabs.update(tabs => tabs.map(t =>
+      t.id === tabId ? { ...t, messages: [], label: '新對話' } : t
+    ));
+    if (tabId === this.activeChatId()) {
+      this.messages.set([]);
+      this.tokenUsage.set(null);
+    }
   }
 
   // ── #16 Provider mode ─────────────────────────────────────────────────────

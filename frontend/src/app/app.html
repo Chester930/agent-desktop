@@ -431,17 +431,32 @@
     @if (sidebarOpen()) {
       <aside class="sidebar" [style.width.px]="sidebarWidth()">
         <div class="sidebar-header">
-          <!-- #17 Profile switcher -->
+          <!-- #17 Profile switcher — 自訂 dropdown -->
           @if (profiles().length > 1) {
-            <select class="profile-switcher" title="切換專案 Profile"
-              [ngModel]="projectSlug()" (ngModelChange)="switchProfile($event)"
-              [ngModelOptions]="{standalone: true}" [disabled]="profileSwitching()">
-              @for (p of profiles(); track p.slug) {
-                <option [value]="p.slug">{{ p.slug.split('--').pop() ?? p.slug }}</option>
+            <div class="profile-dd-wrap">
+              <button class="profile-dd-btn"
+                (click)="profileDropdownOpen.set(!profileDropdownOpen())"
+                [disabled]="profileSwitching()"
+                title="切換專案目錄">
+                📁 {{ projectSlug().split('--').at(-1) || '…' }}
+              </button>
+              @if (profileDropdownOpen()) {
+                <div class="profile-dd-overlay" (click)="profileDropdownOpen.set(false)"></div>
+                <div class="profile-dd-menu">
+                  @for (p of profiles(); track p.slug) {
+                    @if (p.slug && p.slug !== '-') {
+                      <div class="profile-dd-item"
+                        [class.active]="p.slug === projectSlug()"
+                        (click)="switchProfileNewTab(p.slug)">
+                        {{ p.slug.split('--').at(-1) ?? p.slug }}
+                      </div>
+                    }
+                  }
+                </div>
               }
-            </select>
+            </div>
           } @else {
-            <span>對話紀錄</span>
+            <span class="sidebar-title-label">對話紀錄</span>
           }
           <div style="display:flex;gap:4px">
             <button class="new-chat-btn" (click)="continueLastSession()" title="繼續上次對話">⏎</button>
@@ -581,6 +596,7 @@
                   <span class="panel-active-badge">✏ 輸入中</span>
                 }
                 <span class="panel-msg-count">{{ getPanelMessages(tab.id).length }} 則</span>
+                <button class="panel-clear" (click)="clearTab(tab.id, $event)" title="清空此對話">🗑</button>
                 @if (chatTabs().length > 1) {
                   <button class="panel-close" (click)="closeChatTab(tab.id, $event)" title="關閉面板">✕</button>
                 }
