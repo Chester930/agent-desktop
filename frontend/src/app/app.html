@@ -431,13 +431,8 @@
               }
             </div>
             @for (s of group.items; track s.id) {
-              <div class="session-item-wrap" [class.pinned]="isPinned(s.id)"
+              <div class="session-card-wrap" [class.pinned]="isPinned(s.id)"
                    [attr.data-color]="getSessionMeta(s.id).color || null">
-
-                <!-- 顏色標記點：點擊循環切換 -->
-                <button class="sess-color-dot scd-{{ getSessionMeta(s.id).color || 'none' }}"
-                  (click)="cycleSessionColor(s.id, $event)"
-                  title="顏色標記（點擊切換）"></button>
 
                 @if (renamingId() === s.id) {
                   <input class="session-rename-input" [(ngModel)]="renameTitle"
@@ -446,26 +441,20 @@
                     (blur)="confirmRename(s)"
                     autofocus>
                 } @else {
-                  <button class="session-item"
+                  <div class="session-card"
                     draggable="true"
                     (dragstart)="onSessionDragStart(s, $event)"
                     (click)="loadSession(s)"
-                    (contextmenu)="onSessionContextMenu(s, $event)"
-                    [title]="s.title + (s.snippet ? '\n\n' + s.snippet : '')">
+                    (contextmenu)="onSessionContextMenu(s, $event)">
 
-                    <!-- 第一行：標題 + 訊息數 -->
-                    <div class="sess-main-row">
-                      <span class="session-title">{{ s.title }}</span>
+                    <!-- 上排：顏色點 + 標題 + 訊息數 -->
+                    <div class="sess-row-top">
+                      <button class="sess-color-dot scd-{{ getSessionMeta(s.id).color || 'none' }}"
+                        (click)="cycleSessionColor(s.id, $event)"
+                        title="顏色標記（點擊切換）"></button>
+                      <span class="session-title" [title]="s.title + (s.snippet ? '\n\n' + s.snippet : '')">{{ s.title }}</span>
                       @if (s.messageCount) {
                         <span class="sess-msgcount">{{ s.messageCount }}</span>
-                      }
-                    </div>
-
-                    <!-- 時間 + 專案目錄 badge -->
-                    <div class="sess-sub-row">
-                      <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
-                      @if (s.projectDir) {
-                        <span class="sess-project-badge">{{ s.projectDir }}</span>
                       }
                     </div>
 
@@ -497,20 +486,24 @@
                     @if (s.snippet && sessionSearch) {
                       <span class="session-snippet" [innerHTML]="s.snippet"></span>
                     }
-                  </button>
-                }
 
-                <!-- Hover 操作按鈕 -->
-                <div class="sess-actions">
-                  <button class="sess-act-btn" (click)="startRename(s, $event)" title="重新命名">✏</button>
-                  <button class="sess-act-btn" (click)="showTagInput(s.id, $event)" title="新增標籤">🏷</button>
-                  <button class="session-pin-btn" (click)="togglePin(s.id, $event)"
-                    [title]="isPinned(s.id) ? '取消置頂' : '置頂'"
-                    [class.pinned]="isPinned(s.id)">📌</button>
-                  <button class="session-skill-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
-                    title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
-                  <button class="session-del-btn" (click)="deleteSession(s, $event)" title="刪除">✕</button>
-                </div>
+                    <!-- 下排：功能按鈕（左）＋ 時間（右） -->
+                    <div class="sess-row-bottom" (click)="$event.stopPropagation()">
+                      <div class="sess-inline-actions">
+                        <button class="sess-act-btn" (click)="startRename(s, $event)" title="重新命名">✏</button>
+                        <button class="sess-act-btn" (click)="showTagInput(s.id, $event)" title="新增標籤">🏷</button>
+                        <button class="sess-act-btn" (click)="togglePin(s.id, $event)"
+                          [title]="isPinned(s.id) ? '取消置頂' : '置頂'"
+                          [class.active]="isPinned(s.id)">📌</button>
+                        <button class="sess-act-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
+                          title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
+                        <button class="sess-act-btn danger" (click)="deleteSession(s, $event)" title="刪除">✕</button>
+                      </div>
+                      <span class="session-time">{{ s.mtime * 1000 | date:'M/d HH:mm' }}</span>
+                    </div>
+
+                  </div>
+                }
               </div>
             }
           } @empty {
