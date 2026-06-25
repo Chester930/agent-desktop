@@ -19,6 +19,7 @@ export interface ChatMessage {
   result?: string;
   time?: string;
   startTime?: number;
+  cost?: number;
 }
 
 export interface Schedule {

@@ -832,8 +832,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   readonly BUILTIN_CMDS = [
     { id: '__new',       name: 'new',       description: '開始新對話' },
     { id: '__clear',     name: 'clear',     description: '清除目前訊息' },
+    { id: '__undo',      name: 'undo',      description: '撤銷最後一次對話（移除最後一組問答）' },
     { id: '__retry',     name: 'retry',     description: '重試上一則訊息' },
     { id: '__compact',   name: 'compact',   description: '壓縮對話以節省 token' },
+    { id: '__model',     name: 'model',     description: '切換 AI 模型' },
     { id: '__usage',     name: 'usage',     description: '顯示 token 用量' },
     { id: '__debug',     name: 'debug',     description: '切換 debug 模式' },
     { id: '__status',    name: 'status',    description: '顯示 Claude 狀態' },
@@ -845,6 +847,66 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     { id: '__search',    name: 'search',    description: '搜尋對話歷史' },
     { id: '__shortcuts', name: 'shortcuts', description: '顯示所有鍵盤快捷鍵' },
   ];
+
+  // Model picker
+  readonly MODEL_PICKER_OPTIONS = [
+    { id: 'opus',   label: 'Opus 4.8',   desc: '最強能力，適合複雜任務' },
+    { id: 'sonnet', label: 'Sonnet 4.6', desc: '速度與能力的最佳平衡（預設）' },
+    { id: 'haiku',  label: 'Haiku 4.5',  desc: '最快速，適合簡單任務' },
+    { id: 'fable',  label: 'Fable 5',    desc: '特殊能力模型' },
+  ];
+  modelPickerOpen = signal(false);
+
+  // Cron presets
+  readonly CRON_PRESETS = [
+    { label: '每 5 分鐘',  value: '*/5 * * * *' },
+    { label: '每小時',     value: '0 * * * *'   },
+    { label: '每天 9:00',  value: '0 9 * * *'   },
+    { label: '每週一早上', value: '0 9 * * 1'   },
+  ];
+
+  // Session pin/star
+  pinnedIds = signal<string[]>([]);
+
+  pinnedSessions = computed(() =>
+    this.sessions().filter(s => this.pinnedIds().includes(s.id))
+  );
+
+  groupedSessionsWithPins = computed(() => {
+    const pinned = this.pinnedIds();
+    const now = Date.now() / 1000;
+    const day = 86400;
+    const groups: { label: string; items: any[]; pinned?: boolean }[] = [];
+    const pinItems = this.sessions().filter(s => pinned.includes(s.id));
+    if (pinItems.length) groups.push({ label: '📌 置頂', items: pinItems, pinned: true });
+    const unpinned = this.sessions().filter(s => !pinned.includes(s.id));
+    const today: any[] = [], yesterday: any[] = [], week: any[] = [], older: any[] = [];
+    for (const s of unpinned) {
+      const age = now - s.mtime;
+      if      (age < day)       today.push(s);
+      else if (age < 2 * day)   yesterday.push(s);
+      else if (age < 7 * day)   week.push(s);
+      else                      older.push(s);
+    }
+    if (today.length)     groups.push({ label: '今天',  items: today });
+    if (yesterday.length) groups.push({ label: '昨天',  items: yesterday });
+    if (week.length)      groups.push({ label: '本週',  items: week });
+    if (older.length)     groups.push({ label: '更早',  items: older });
+    return groups;
+  });
+
+  togglePin(id: string, e: Event) {
+    e.stopPropagation();
+    this.pinnedIds.update(ids =>
+      ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]
+    );
+    localStorage.setItem('claude_pinned_sessions', JSON.stringify(this.pinnedIds()));
+  }
+
+  isPinned(id: string) { return this.pinnedIds().includes(id); }
+
+  // Per-message cost tracking
+  private _prevCostUsd = 0;
 
   // Keyboard shortcuts
   @HostListener('window:keydown', ['$event'])
@@ -1160,6 +1222,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     this.loadMcp();
 
+    // 草稿恢復
+    const draft = localStorage.getItem('claude_input_draft');
+    if (draft) this.inputText = draft;
+
+    // 置頂 session ID 恢復
+    try {
+      const pinned = localStorage.getItem('claude_pinned_sessions');
+      if (pinned) this.pinnedIds.set(JSON.parse(pinned));
+    } catch {}
+
     // 首次啟動精靈
     if (!localStorage.getItem('claude_onboarding_done')) {
       setTimeout(() => {
@@ -1474,6 +1546,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.lastUserText    = text;
     this.lastAttachments = this.attachedFiles().map(f => f.path);
     this.inputText = '';
+    localStorage.removeItem('claude_input_draft');
     this.isStreaming.set(true);
     const attachments = this.attachedFiles().map(f => f.path);
     this.attachedFiles.set([]);
@@ -1542,11 +1615,27 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
           }
         } else if (ev.type === 'result') {
+          const totalCost = ev.total_cost_usd ?? 0;
+          const msgCost   = Math.max(0, totalCost - this._prevCostUsd);
+          this._prevCostUsd = totalCost;
           this.tokenUsage.set({
             input:  ev.usage?.input_tokens  ?? 0,
             output: ev.usage?.output_tokens ?? 0,
-            cost:   ev.total_cost_usd       ?? 0,
+            cost:   totalCost,
           });
+          // 標記本次訊息費用
+          if (msgCost > 0) {
+            this.messages.update(msgs => {
+              const copy = [...msgs];
+              for (let i = copy.length - 1; i >= 0; i--) {
+                if (copy[i].role === 'assistant') {
+                  copy[i] = { ...copy[i], cost: msgCost };
+                  break;
+                }
+              }
+              return copy;
+            });
+          }
         }
       },
       () => {
@@ -1580,6 +1669,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   onInput() {
     const val = this.inputText;
+    // 草稿持久化
+    if (val) localStorage.setItem('claude_input_draft', val);
+    else     localStorage.removeItem('claude_input_draft');
     const slashMatch = val.match(/(?:^|\s)\/(\S*)$/);
     if (slashMatch) {
       this.slashQuery.set(slashMatch[1]);
@@ -1607,8 +1699,21 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.newChat(); break;
       case '__clear':
         this.messages.set([]); break;
+      case '__undo': {
+        const msgs = this.messages();
+        let cut = msgs.length;
+        // remove last assistant block
+        while (cut > 0 && msgs[cut - 1].role !== 'assistant') cut--;
+        if (cut > 0) cut--;
+        // remove trailing user message
+        while (cut > 0 && msgs[cut - 1].role === 'user') cut--;
+        this.messages.set(msgs.slice(0, cut));
+        break;
+      }
       case '__retry':
         this.retryLast(); break;
+      case '__model':
+        this.modelPickerOpen.set(true); break;
       case '__compact':
         this.inputText = '請簡潔摘要我們到目前為止的對話重點，之後以此摘要為基礎繼續對話。';
         this.inputRef?.nativeElement?.focus(); break;
@@ -1654,6 +1759,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           'Alt+← / → — 切換對話分頁'
         }]); break;
     }
+  }
+
+  selectModel(modelId: string) {
+    this.model.set(modelId as any);
+    this.settings.save({ model: modelId });
+    this.modelPickerOpen.set(false);
+    const label = this.MODEL_LABELS[modelId] ?? modelId;
+    this.messages.update(m => [...m, { role: 'system', text: `🤖 已切換模型：${label}` }]);
   }
 
   generateSkillFromSession(sessionId: string) {

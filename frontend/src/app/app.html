@@ -326,10 +326,10 @@
             placeholder="搜尋對話…" class="session-search-input">
         </div>
         <div class="session-list">
-          @for (group of groupedSessions(); track group.label) {
-            <div class="session-group-label">{{ group.label }}</div>
+          @for (group of groupedSessionsWithPins(); track group.label) {
+            <div class="session-group-label" [class.pinned-label]="group['pinned']">{{ group.label }}</div>
             @for (s of group.items; track s.id) {
-              <div class="session-item-wrap">
+              <div class="session-item-wrap" [class.pinned]="isPinned(s.id)">
                 @if (renamingId() === s.id) {
                   <input class="session-rename-input" [(ngModel)]="renameTitle"
                     (keydown.enter)="confirmRename(s)"
@@ -347,6 +347,9 @@
                     <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
                   </button>
                 }
+                <button class="session-pin-btn" (click)="togglePin(s.id, $event)"
+                  [title]="isPinned(s.id) ? '取消置頂' : '置頂'"
+                  [class.pinned]="isPinned(s.id)">📌</button>
                 <button class="session-skill-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
                   title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
                 <button class="session-del-btn" (click)="deleteSession(s, $event)" title="刪除">✕</button>
@@ -447,6 +450,9 @@
                         <div class="bubble assistant-bubble">
                           <span class="role-tag">Claude</span>
                           @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
+                          @if (msg.cost && msg.cost > 0) {
+                            <span class="msg-cost" title="本則訊息費用">${{ msg.cost.toFixed(4) }}</span>
+                          }
                           <button class="copy-btn" (click)="copyMessage(msg.text)" title="複製">⎘</button>
                           @if (msg.isStreaming && !msg.text) {
                             <span class="cursor"></span>
@@ -932,9 +938,16 @@
             <div class="schedule-view">
               <div class="schedule-form">
                 <input [(ngModel)]="newSchedulePrompt" placeholder="要排程執行的指令…" class="schedule-input">
-                <input [(ngModel)]="newScheduleCron" placeholder="Cron（例：0 9 * * *）" class="schedule-input">
-                <button class="btn-primary schedule-add-btn" (click)="addSchedule()"
-                  [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim()">新增排程</button>
+                <div class="cron-row">
+                  <input [(ngModel)]="newScheduleCron" placeholder="Cron（例：0 9 * * *）" class="schedule-input cron-input">
+                  <button class="btn-primary schedule-add-btn" (click)="addSchedule()"
+                    [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim()">新增</button>
+                </div>
+                <div class="cron-presets">
+                  @for (p of CRON_PRESETS; track p.value) {
+                    <button class="cron-preset-btn" (click)="newScheduleCron = p.value" [title]="p.value">{{ p.label }}</button>
+                  }
+                </div>
               </div>
               <div class="panel-list" style="margin-top:10px">
                 @for (sc of schedules(); track sc.id) {
@@ -1374,6 +1387,25 @@
         <div class="modal-footer">
           <button class="btn-primary" (click)="showSettingsHelp.set(false)">關閉</button>
         </div>
+      </div>
+    </div>
+  }
+
+  <!-- ── Model Picker ──────────────────────────────── -->
+  @if (modelPickerOpen()) {
+    <div class="modal-backdrop" (click)="modelPickerOpen.set(false)">
+      <div class="model-picker-modal" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <span>🤖 切換模型</span>
+          <button class="icon-btn" (click)="modelPickerOpen.set(false)">✕</button>
+        </div>
+        @for (m of MODEL_PICKER_OPTIONS; track m.id) {
+          <button class="model-option" [class.active]="model() === m.id" (click)="selectModel(m.id)">
+            <div class="model-option-name">{{ m.label }}</div>
+            <div class="model-option-desc">{{ m.desc }}</div>
+            @if (model() === m.id) { <span class="model-check">✓</span> }
+          </button>
+        }
       </div>
     </div>
   }
