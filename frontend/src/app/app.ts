@@ -2523,12 +2523,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   loadSession(s: Session) {
-    this.saveCurrentTab();
+    // 目前 active tab 沒有任何訊息 → 直接取代（不另開新欄）
+    const activeHasMessages = (this.activeChat?.messages.length ?? 0) > 0;
+    if (activeHasMessages && this.chatTabs().length < 4) {
+      this.addChatTab();
+    } else {
+      this.saveCurrentTab();
+    }
     this.messages.set([{ role: 'assistant', text: `Session resumed: "${s.title}"` }]);
     this.claude.resumeSession(s.id).subscribe();
-    // 更新 tab 標籤
     const id = this.activeChatId();
-    this.chatTabs.update(tabs => tabs.map(t => t.id === id ? { ...t, label: s.title.slice(0, 20) } : t));
+    this.chatTabs.update(tabs => tabs.map(t =>
+      t.id === id ? { ...t, label: s.title.slice(0, 20) } : t
+    ));
   }
 
   deleteSession(s: Session, event: Event) {
