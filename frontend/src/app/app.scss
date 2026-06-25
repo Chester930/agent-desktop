@@ -4432,3 +4432,103 @@ body[style*="ns-resize"] .mcp-divider-grip {
   color: #555;
   font-size: 14px;
 }
+
+// ── Team Run Panel ────────────────────────────────────────────────────────────
+.tr-overlay {
+  position: fixed; inset: 0; z-index: 2100;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(2px);
+}
+
+.tr-panel {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2101;
+  width: 560px;
+  max-height: 82vh;
+  display: flex; flex-direction: column;
+  background: #13131f;
+  border: 1px solid rgba(124,111,255,0.35);
+  border-radius: 16px;
+  box-shadow: 0 32px 80px rgba(0,0,0,0.7);
+  overflow: hidden;
+}
+
+.tr-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.tr-title   { font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 2px; }
+.tr-subtitle { font-size: 11px; color: #666; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tr-input-area {
+  padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 10px;
+  flex-shrink: 0;
+}
+
+.tr-task-input {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 13px;
+  padding: 10px 12px;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  &:focus { border-color: #7c6fff; }
+}
+
+.tr-input-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.tr-steps {
+  overflow-y: auto; flex: 1;
+  padding: 8px 18px 4px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.tr-step {
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 10px 12px;
+  transition: border-color 0.2s;
+  &.running { border-color: rgba(251,191,36,0.35); background: rgba(251,191,36,0.04); }
+  &.done    { border-color: rgba(110,231,183,0.25); background: rgba(110,231,183,0.03); }
+}
+
+.tr-step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.tr-step-icon  { font-size: 14px; width: 16px; text-align: center; }
+.tr-step-agent { font-size: 13px; font-weight: 600; color: #c0b0ff; }
+.tr-step-role  {
+  font-size: 11px; color: #666; font-style: italic;
+  &::before { content: '·'; margin: 0 4px; }
+}
+
+.tr-spin { display: inline-block; animation: tr-spin 1s linear infinite; }
+@keyframes tr-spin { to { transform: rotate(360deg); } }
+
+.tr-step-status-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: auto;
+  &.badge-pending { color: #666;    background: rgba(255,255,255,0.05); }
+  &.badge-running { color: #fbbf24; background: rgba(251,191,36,0.12); animation: tr-pulse 1.5s infinite; }
+  &.badge-done    { color: #6ee7b7; background: rgba(110,231,183,0.1); }
+  &.badge-error   { color: #f87171; background: rgba(248,113,113,0.1); }
+}
+@keyframes tr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.tr-step-output {
+  font-size: 11px; color: #888; line-height: 1.5;
+  margin-top: 6px; padding-left: 24px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 160px; overflow-y: auto;
+}
+
+.tr-footer {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}

@@ -1091,6 +1091,223 @@ async def handle_team_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+# ── Phase 3: Multi-Agent Sequential Execution ─────────────────────────────────
+
+import uuid as _uuid
+
+_team_runs:   dict[str, dict] = {}
+_team_events: dict[str, list] = {}
+_team_queues: dict[str, list] = {}
+
+
+def _tr_emit(run_id: str, event: dict) -> None:
+    _team_events.setdefault(run_id, []).append(event)
+    for q in _team_queues.get(run_id, []):
+        q.put_nowait(event)
+
+
+async def _agent_run_capture(
+    run_id: str, step_idx: int,
+    agent_id: str, prompt: str,
+    model: str, cwd: str
+) -> str:
+    agent_file = AGENTS_DIR / f"{agent_id}.md"
+    agent_body = ""
+    if agent_file.exists():
+        try:
+            raw_text = agent_file.read_text(encoding="utf-8")
+            if raw_text.startswith("---"):
+                parts = raw_text.split("---", 2)
+                agent_body = parts[2].strip() if len(parts) >= 3 else ""
+            else:
+                agent_body = raw_text
+        except Exception:
+            pass
+
+    soul = get_concatenated_soul()
+    full_prompt = prompt
+    if agent_body:
+        full_prompt = f"[代理人：{agent_id}]\n{agent_body}\n\n---\n\n{full_prompt}"
+    if soul:
+        full_prompt = f"[System Persona]\n{soul}\n\n{full_prompt}"
+
+    cmd = [CLAUDE_BIN, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]
+    if model and model not in ("sonnet", ""):
+        cmd += ["--model", model]
+
+    env = {**os.environ}
+    api_key = _resolve_api_key()
+    if api_key:
+        env["ANTHROPIC_API_KEY"] = api_key
+
+    safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
+    output_parts: list[str] = []
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            stdin=asyncio.subprocess.DEVNULL,
+            cwd=safe_cwd,
+            env=env,
+        )
+        async for line in proc.stdout:
+            raw = line.decode("utf-8", errors="replace").strip()
+            if not raw:
+                continue
+            try:
+                ev = json.loads(raw)
+                chunk = ""
+                if ev.get("type") == "assistant":
+                    for block in ev.get("message", {}).get("content", []):
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            chunk += block["text"]
+                elif ev.get("type") == "text":
+                    chunk = ev.get("text", "")
+                if chunk:
+                    output_parts.append(chunk)
+                    _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": chunk})
+            except json.JSONDecodeError:
+                pass
+        await proc.wait()
+    except Exception as e:
+        err = f"\n[Error running {agent_id}: {e}]\n"
+        output_parts.append(err)
+        _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": err})
+
+    return "".join(output_parts)
+
+
+async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> None:
+    run = _team_runs[run_id]
+    steps = run["steps"]
+    prev_output = ""
+
+    for i, step in enumerate(steps):
+        if run.get("status") == "cancelled":
+            break
+        step["status"] = "running"
+        _tr_emit(run_id, {"type": "step_start", "step": i,
+                           "agent": step["agent"], "role": step["role"]})
+
+        if i == 0:
+            prompt = task
+        else:
+            prompt = (
+                f"{task}\n\n"
+                f"---\n## 前置 Agent（{steps[i-1]['agent']}）的輸出\n\n"
+                f"{prev_output}"
+            )
+
+        output = await _agent_run_capture(run_id, i, step["agent"], prompt, model, cwd)
+        step["output"] = output
+        step["status"] = "done"
+        prev_output = output
+        _tr_emit(run_id, {"type": "step_done", "step": i})
+
+    if run.get("status") != "cancelled":
+        run["status"] = "done"
+        summary_parts = [
+            f"### {s['agent']}（{s['role']}）\n\n{s['output']}" for s in steps
+        ]
+        run["summary"] = "\n\n---\n\n".join(summary_parts)
+        _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+
+
+async def handle_team_run_post(request: web.Request) -> web.Response:
+    data    = await request.json()
+    team_id = data.get("team_id", "")
+    task    = data.get("task", "").strip()
+    model   = data.get("model", "")
+    cwd     = data.get("cwd", "")
+
+    if not task:
+        return web.json_response({"error": "task required"}, status=400)
+
+    f = TEAMS_DIR / f"{team_id}.yaml"
+    if not f.exists():
+        return web.json_response({"error": "team not found"}, status=404)
+
+    team = _team_dict(f)
+    if not team["members"]:
+        return web.json_response({"error": "team has no members"}, status=400)
+
+    run_id = _uuid.uuid4().hex[:8]
+    _team_runs[run_id] = {
+        "id":      run_id,
+        "team_id": team_id,
+        "name":    team["name"],
+        "task":    task,
+        "status":  "running",
+        "steps": [
+            {"agent": m["agent"], "role": m["role"], "status": "pending", "output": ""}
+            for m in team["members"]
+        ],
+        "summary": "",
+    }
+    _team_events[run_id] = []
+    _team_queues[run_id] = []
+
+    asyncio.create_task(_execute_team_run(run_id, task, model, cwd))
+    return web.json_response({"ok": True, "run_id": run_id})
+
+
+async def handle_team_run_get(request: web.Request) -> web.Response:
+    run_id = request.match_info["run_id"]
+    run = _team_runs.get(run_id)
+    if not run:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(run)
+
+
+async def handle_team_run_stream(request: web.Request) -> web.StreamResponse:
+    run_id = request.match_info["run_id"]
+    if run_id not in _team_runs:
+        return web.Response(status=404)
+
+    response = web.StreamResponse(headers={
+        "Content-Type":      "text/event-stream",
+        "Cache-Control":     "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+    await response.prepare(request)
+
+    q: asyncio.Queue = asyncio.Queue()
+    _team_queues.setdefault(run_id, []).append(q)
+
+    for ev in _team_events.get(run_id, []):
+        await response.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
+        if ev.get("type") in ("done", "error"):
+            _team_queues[run_id].remove(q)
+            return response
+
+    try:
+        while True:
+            try:
+                ev = await asyncio.wait_for(q.get(), timeout=30.0)
+            except asyncio.TimeoutError:
+                await response.write(b'data: {"type":"ping"}\n\n')
+                continue
+            await response.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
+            if ev.get("type") in ("done", "error"):
+                break
+    finally:
+        queues = _team_queues.get(run_id, [])
+        if q in queues:
+            queues.remove(q)
+
+    return response
+
+
+async def handle_team_run_cancel(request: web.Request) -> web.Response:
+    run_id = request.match_info["run_id"]
+    run = _team_runs.get(run_id)
+    if run:
+        run["status"] = "cancelled"
+        _tr_emit(run_id, {"type": "error", "text": "cancelled"})
+    return web.json_response({"ok": True})
+
+
 async def handle_memory(request: web.Request) -> web.Response:
     files = {}
     mem_dir = _memory_dir()
@@ -1942,6 +2159,10 @@ def build_app() -> web.Application:
         ("GET",    "/api/teams/{id}",          handle_team_get),
         ("PUT",    "/api/teams/{id}",          handle_team_put),
         ("DELETE", "/api/teams/{id}",          handle_team_delete),
+        ("POST",   "/api/team/run",               handle_team_run_post),
+        ("GET",    "/api/team/run/{run_id}",       handle_team_run_get),
+        ("GET",    "/api/team/run/{run_id}/stream",handle_team_run_stream),
+        ("DELETE", "/api/team/run/{run_id}",       handle_team_run_cancel),
         ("GET",    "/api/memory",          handle_memory),
         ("GET",    "/api/schedules",       handle_schedules_get),
         ("POST",   "/api/schedules",       handle_schedules_post),

@@ -7,7 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -1545,10 +1545,84 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   activateTeam(team: Team) {
-    team.members.forEach(m => {
-      const agent = this.agents().find(a => a.id === m.agent);
-      if (agent) this.activateAgent(agent);
+    this.openTeamRun(team);
+  }
+
+  // ── Team Run (Phase 3) ────────────────────────────────────────────────────
+  teamRunOpen    = signal(false);
+  teamRunTarget  = signal<Team | null>(null);
+  teamRunTask    = signal('');
+  teamRunState   = signal<TeamRun | null>(null);
+  teamRunLoading = signal(false);
+  private _teamRunStopFn: (() => void) | null = null;
+
+  openTeamRun(team: Team) {
+    this.teamRunTarget.set(team);
+    this.teamRunTask.set('');
+    this.teamRunState.set(null);
+    this.teamRunOpen.set(true);
+  }
+
+  submitTeamRun() {
+    const team = this.teamRunTarget();
+    const task = this.teamRunTask().trim();
+    if (!team || !task) return;
+    this.teamRunLoading.set(true);
+
+    this.teamRunState.set({
+      id: '', team_id: team.id, name: team.name, task,
+      status: 'running',
+      steps: team.members.map(m => ({ agent: m.agent, role: m.role, status: 'pending' as const, output: '' })),
+      summary: '',
     });
+
+    const s = this.settings.get();
+    this.claude.runTeam(team.id, task, s.model, s.workDir).subscribe({
+      next: (r) => {
+        this.teamRunLoading.set(false);
+        const runId = r.run_id;
+        this.teamRunState.update(st => st ? { ...st, id: runId } : st);
+        this._teamRunStopFn = this.claude.streamTeamRun(
+          runId,
+          (ev) => this._handleTeamRunEvent(ev),
+          () => {},
+          (e) => { console.error('team run error', e); }
+        );
+      },
+      error: () => this.teamRunLoading.set(false),
+    });
+  }
+
+  private _handleTeamRunEvent(ev: any) {
+    if (ev.type === 'ping') return;
+    this.teamRunState.update(st => {
+      if (!st) return st;
+      const steps = [...st.steps];
+      if (ev.type === 'step_start' && steps[ev.step]) {
+        steps[ev.step] = { ...steps[ev.step], status: 'running' };
+      } else if (ev.type === 'step_text' && steps[ev.step]) {
+        steps[ev.step] = { ...steps[ev.step], output: steps[ev.step].output + ev.text };
+      } else if (ev.type === 'step_done' && steps[ev.step]) {
+        steps[ev.step] = { ...steps[ev.step], status: 'done' };
+      } else if (ev.type === 'done') {
+        return { ...st, status: 'done', steps, summary: ev.summary ?? '' };
+      } else if (ev.type === 'error') {
+        return { ...st, status: 'error', steps };
+      }
+      return { ...st, steps };
+    });
+  }
+
+  cancelTeamRun() {
+    const st = this.teamRunState();
+    if (st?.id) this.claude.cancelTeamRun(st.id).subscribe();
+    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
+    this.teamRunState.update(s => s ? { ...s, status: 'cancelled' } : s);
+  }
+
+  closeTeamRun() {
+    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
+    this.teamRunOpen.set(false);
   }
 
   // 清空某個對話欄的訊息

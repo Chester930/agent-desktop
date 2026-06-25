@@ -34,6 +34,14 @@ export interface ChatMessage {
 
 export interface TeamMember { agent: string; role: string; }
 export interface Team { id: string; name: string; description: string; members: TeamMember[]; }
+export interface TeamRunStep {
+  agent: string; role: string; status: 'pending' | 'running' | 'done' | 'error'; output: string;
+}
+export interface TeamRun {
+  id: string; team_id: string; name: string; task: string;
+  status: 'running' | 'done' | 'cancelled' | 'error';
+  steps: TeamRunStep[]; summary: string;
+}
 
 export interface Schedule {
   id: string;
@@ -156,6 +164,52 @@ export class ClaudeService {
   }
   deleteTeam(id: string): Observable<{ ok: boolean }> {
     return this.http.delete<{ ok: boolean }>(`${this.api}/teams/${id}`);
+  }
+
+  runTeam(teamId: string, task: string, model?: string, cwd?: string): Observable<{ ok: boolean; run_id: string }> {
+    return this.http.post<{ ok: boolean; run_id: string }>(`${this.api}/team/run`, {
+      team_id: teamId, task, model: model ?? '', cwd: cwd ?? '',
+    });
+  }
+
+  getTeamRun(runId: string): Observable<TeamRun> {
+    return this.http.get<TeamRun>(`${this.api}/team/run/${runId}`);
+  }
+
+  cancelTeamRun(runId: string): Observable<{ ok: boolean }> {
+    return this.http.delete<{ ok: boolean }>(`${this.api}/team/run/${runId}`);
+  }
+
+  streamTeamRun(
+    runId: string,
+    onEvent: (ev: any) => void,
+    onDone: () => void,
+    onError: (e: any) => void,
+  ): () => void {
+    const s = this.settings.get();
+    const api = s.backendUrl ? s.backendUrl.replace(/\/$/, '') + '/api' : `http://localhost:${s.backendPort}/api`;
+    const controller = new AbortController();
+    fetch(`${api}/team/run/${runId}/stream`, { signal: controller.signal })
+      .then(async (res) => {
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop() ?? '';
+          for (const part of parts) {
+            const line = part.replace(/^data: /, '').trim();
+            if (!line) continue;
+            try { onEvent(JSON.parse(line)); } catch {}
+          }
+        }
+        onDone();
+      })
+      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
+    return () => controller.abort();
   }
 
   getSchedules(): Observable<Schedule[]> { return this.http.get<Schedule[]>(`${this.api}/schedules`); }

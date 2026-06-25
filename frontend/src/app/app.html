@@ -1212,7 +1212,7 @@
                   <div class="card-header-row">
                     <span class="card-name">{{ t.name }}</span>
                     <div class="agent-action-btns">
-                      <button class="agent-activate-btn" (click)="activateTeam(t)" title="依序啟動所有成員 Agent">▶ 啟動</button>
+                      <button class="agent-activate-btn" (click)="openTeamRun(t)" title="發任務給此 Team">▶ 發任務</button>
                       <button class="agent-edit-btn" (click)="openTeamEditor(t)" title="編輯 Team">✎</button>
                     </div>
                   </div>
@@ -2332,6 +2332,73 @@
         <button class="btn-secondary" (click)="teamEditorOpen.set(false)">取消</button>
         <button class="btn-primary" (click)="saveTeamEditor()">儲存</button>
       </div>
+    </div>
+  }
+
+  <!-- ── Team Run Panel ─────────────────────────────────────────────────── -->
+  @if (teamRunOpen()) {
+    <div class="tr-overlay" (click)="closeTeamRun()"></div>
+    <div class="tr-panel" (click)="$event.stopPropagation()">
+      <div class="tr-header">
+        <div>
+          <div class="tr-title">👥 {{ teamRunTarget()?.name }}</div>
+          <div class="tr-subtitle">{{ teamRunState()?.task || '輸入任務…' }}</div>
+        </div>
+        <button class="usage-modal-close" (click)="closeTeamRun()">✕</button>
+      </div>
+
+      @if (!teamRunState() || teamRunState()?.status === 'cancelled') {
+        <div class="tr-input-area">
+          <textarea class="tr-task-input"
+            rows="4"
+            placeholder="描述你要交給這個 Team 的任務…"
+            [value]="teamRunTask()"
+            (input)="teamRunTask.set($any($event.target).value)">
+          </textarea>
+          <div class="tr-input-actions">
+            <button class="btn-secondary" (click)="closeTeamRun()">取消</button>
+            <button class="btn-primary"
+              [disabled]="!teamRunTask().trim() || teamRunLoading()"
+              (click)="submitTeamRun()">
+              {{ teamRunLoading() ? '準備中…' : '▶ 開始執行' }}
+            </button>
+          </div>
+        </div>
+      }
+
+      @if (teamRunState() && teamRunState()?.status !== 'cancelled') {
+        <div class="tr-steps">
+          @for (step of teamRunState()!.steps; track $index) {
+            <div class="tr-step" [class.running]="step.status === 'running'" [class.done]="step.status === 'done'">
+              <div class="tr-step-header">
+                <span class="tr-step-icon">
+                  @if (step.status === 'pending') { <span>○</span> }
+                  @if (step.status === 'running') { <span class="tr-spin">⟳</span> }
+                  @if (step.status === 'done')    { <span>✓</span> }
+                  @if (step.status === 'error')   { <span>✕</span> }
+                </span>
+                <span class="tr-step-agent">@{{ step.agent }}</span>
+                @if (step.role) { <span class="tr-step-role">{{ step.role }}</span> }
+                <span class="tr-step-status-badge" [class]="'badge-' + step.status">{{ step.status }}</span>
+              </div>
+              @if (step.output) {
+                <div class="tr-step-output">{{ step.output | slice:0:600 }}{{ step.output.length > 600 ? '…' : '' }}</div>
+              }
+            </div>
+          }
+        </div>
+
+        <div class="tr-footer">
+          @if (teamRunState()?.status === 'running') {
+            <button class="btn-danger" (click)="cancelTeamRun()">⏹ 停止</button>
+          }
+          @if (teamRunState()?.status === 'done') {
+            <span style="color:#6ee7b7;font-size:12px;">✓ 全部完成</span>
+          }
+          <div style="flex:1"></div>
+          <button class="btn-secondary" (click)="closeTeamRun()">關閉</button>
+        </div>
+      }
     </div>
   }
 </div>
