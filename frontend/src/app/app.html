@@ -193,6 +193,7 @@
           <span>⚙ 設定</span>
           <button class="icon-btn" (click)="settingsOpen.set(false)">✕</button>
         </div>
+        <div class="modal-scroll-wrap">
         <div class="modal-body">
           <label>Claude 執行路徑
             <input [(ngModel)]="settingsForm.claudeBin" placeholder="claude">
@@ -384,6 +385,7 @@
           <pre class="modal-logs-body">{{ backendLogs().join('\n') || '（尚無日誌）' }}</pre>
         </div>
 
+        </div><!-- /modal-scroll-wrap -->
         <div class="modal-footer">
           <span class="settings-status">Claude：{{ statusInfo() }}</span>
           <button class="btn-secondary" (click)="resetOnboarding(); settingsOpen.set(false)" title="重新開啟設定精靈">🧭 精靈</button>

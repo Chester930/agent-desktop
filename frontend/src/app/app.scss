@@ -860,14 +860,19 @@ body {
   color: $text;
 }
 
+.modal-scroll-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
 .modal-body {
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  overflow-y: auto;
-  flex: 1 1 0;      // 讓 flex 子元素受 max-height 約束
-  min-height: 0;    // 關鍵：flex 列必須加這個才能捲動
 
   label {
     display: flex;
@@ -899,6 +904,17 @@ body {
       background-position: right 10px center;
       padding-right: 28px;
       cursor: pointer;
+      option { background: #1e1e2e; color: #e8e8e8; }
+    }
+
+    // checkbox 自訂深色外觀
+    input[type="checkbox"] {
+      appearance: auto;
+      -webkit-appearance: auto;
+      width: 14px; height: 14px;
+      accent-color: $accent;
+      cursor: pointer;
+      padding: 0;
     }
 
     small {
@@ -1535,6 +1551,13 @@ body {
     background-position: right 10px center;
     padding-right: 28px;
     cursor: pointer;
+    option { background: #1e1e2e; color: #e8e8e8; }
+  }
+  input[type="checkbox"] {
+    appearance: auto; -webkit-appearance: auto;
+    width: 14px; height: 14px;
+    accent-color: $accent;
+    cursor: pointer; padding: 0;
   }
 }
 
