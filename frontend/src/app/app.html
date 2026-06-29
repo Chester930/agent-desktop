@@ -1090,6 +1090,7 @@
           <button [class.active]="activeTab()==='skills'"    (click)="activeTab.set('skills')">SKILL</button>
           <button [class.active]="activeTab()==='mcp'"       (click)="activeTab.set('mcp');loadMcp()">MCP</button>
           <button [class.active]="activeTab()==='schedules'" (click)="activeTab.set('schedules')">Scheduling</button>
+          <button [class.active]="activeTab()==='memview'"   (click)="activeTab.set('memview');loadMemoryOverview()">記憶</button>
         </div>
         @if (['agents','skills','mcp'].includes(activeTab())) {
           <div class="right-panel-search">
@@ -1475,6 +1476,160 @@
                   <p class="empty-hint">尚無排程任務</p>
                 }
               </div>
+            </div>
+          }
+
+          @if (activeTab() === 'memview') {
+            <div class="memview-panel">
+              @if (!memoryOverview()) {
+                <div class="empty-hint">載入中…</div>
+              } @else {
+                <div class="memview-toolbar">
+                  <button class="btn-secondary btn-xs" (click)="loadMemoryOverview()">⟳ 重新整理</button>
+                  <span class="memview-hint">唯讀 — 直接編輯檔案以更新</span>
+                </div>
+
+                <!-- 使用者記憶 -->
+                <div class="memview-section">
+                  <div class="memview-section-header" (click)="toggleMemViewSection('user')">
+                    <span class="memview-arrow">{{ memViewIsOpen('user') ? '▾' : '▸' }}</span>
+                    <span class="memview-section-title">使用者記憶</span>
+                    <span class="memview-path">memory\user\profile.md</span>
+                  </div>
+                  @if (memViewIsOpen('user')) {
+                    <div class="memview-content">
+                      @if (memoryOverview().user?.content) {
+                        <div class="memview-md" [innerHTML]="memoryOverview().user.content | markdown"></div>
+                      } @else {
+                        <div class="memview-empty">尚無內容</div>
+                      }
+                    </div>
+                  }
+                </div>
+
+                <!-- 系統記憶 -->
+                <div class="memview-section">
+                  <div class="memview-section-header" (click)="toggleMemViewSection('system')">
+                    <span class="memview-arrow">{{ memViewIsOpen('system') ? '▾' : '▸' }}</span>
+                    <span class="memview-section-title">系統狀態</span>
+                    <span class="memview-path">memory\system\state.md</span>
+                  </div>
+                  @if (memViewIsOpen('system')) {
+                    <div class="memview-content">
+                      @if (memoryOverview().system?.content) {
+                        <div class="memview-md" [innerHTML]="memoryOverview().system.content | markdown"></div>
+                      } @else {
+                        <div class="memview-empty">尚無內容</div>
+                      }
+                    </div>
+                  }
+                </div>
+
+                <!-- Agent 記憶 -->
+                <div class="memview-section">
+                  <div class="memview-section-header" (click)="toggleMemViewSection('agents')">
+                    <span class="memview-arrow">{{ memViewIsOpen('agents') ? '▾' : '▸' }}</span>
+                    <span class="memview-section-title">Agent 記憶</span>
+                    <span class="memview-badge">{{ memoryOverview().agents?.length || 0 }}</span>
+                  </div>
+                  @if (memViewIsOpen('agents')) {
+                    @for (agent of memoryOverview().agents; track agent.id) {
+                      <div class="memview-subsection">
+                        <div class="memview-subsection-header" (click)="toggleMemViewSection('agent-' + agent.id)">
+                          <span class="memview-arrow">{{ memViewIsOpen('agent-' + agent.id) ? '▾' : '▸' }}</span>
+                          <span class="memview-agent-name">&#64;{{ agent.id }}</span>
+                          @if (agent.projects?.length) {
+                            <span class="memview-badge">{{ agent.projects.length }} 專案</span>
+                          }
+                        </div>
+                        @if (memViewIsOpen('agent-' + agent.id)) {
+                          <div class="memview-content">
+                            <div class="memview-path-row">
+                              <span class="memview-label">身份</span>
+                              <span class="memview-path">memory\agents\{{ agent.id }}\identity.md</span>
+                            </div>
+                            @if (agent.identity) {
+                              <div class="memview-md" [innerHTML]="agent.identity | markdown"></div>
+                            } @else {
+                              <div class="memview-empty">尚無身份記憶</div>
+                            }
+                            @for (proj of agent.projects; track proj.slug) {
+                              <div class="memview-proj-row">
+                                <span class="memview-label">專案</span>
+                                <span class="memview-path">memory\agents\{{ agent.id }}\projects\{{ proj.slug }}.md</span>
+                              </div>
+                            }
+                          </div>
+                        }
+                      </div>
+                    } @empty {
+                      <div class="memview-empty" style="padding-left:24px">尚無 Agent 記憶</div>
+                    }
+                  }
+                </div>
+
+                <!-- Team 記憶 -->
+                <div class="memview-section">
+                  <div class="memview-section-header" (click)="toggleMemViewSection('teams')">
+                    <span class="memview-arrow">{{ memViewIsOpen('teams') ? '▾' : '▸' }}</span>
+                    <span class="memview-section-title">Team 記憶</span>
+                    <span class="memview-badge">{{ memoryOverview().teams?.length || 0 }}</span>
+                  </div>
+                  @if (memViewIsOpen('teams')) {
+                    @for (team of memoryOverview().teams; track team.id) {
+                      <div class="memview-subsection">
+                        <div class="memview-subsection-header" (click)="toggleMemViewSection('team-' + team.id)">
+                          <span class="memview-arrow">{{ memViewIsOpen('team-' + team.id) ? '▾' : '▸' }}</span>
+                          <span class="memview-agent-name">{{ team.id }}</span>
+                          @if (team.projects?.length) {
+                            <span class="memview-badge">{{ team.projects.length }} 專案</span>
+                          }
+                        </div>
+                        @if (memViewIsOpen('team-' + team.id)) {
+                          <div class="memview-content">
+                            <div class="memview-path-row">
+                              <span class="memview-label">共享</span>
+                              <span class="memview-path">memory\teams\{{ team.id }}\shared.md</span>
+                            </div>
+                            @if (team.shared) {
+                              <div class="memview-md" [innerHTML]="team.shared | markdown"></div>
+                            } @else {
+                              <div class="memview-empty">尚無共享記憶</div>
+                            }
+                            @for (proj of team.projects; track proj.slug) {
+                              <div class="memview-proj-row">
+                                <span class="memview-label">專案</span>
+                                <span class="memview-path">memory\teams\{{ team.id }}\projects\{{ proj.slug }}.md</span>
+                              </div>
+                            }
+                          </div>
+                        }
+                      </div>
+                    } @empty {
+                      <div class="memview-empty" style="padding-left:24px">尚無 Team 記憶</div>
+                    }
+                  }
+                </div>
+
+                <!-- 專案內部記憶 -->
+                <div class="memview-section">
+                  <div class="memview-section-header" (click)="toggleMemViewSection('project')">
+                    <span class="memview-arrow">{{ memViewIsOpen('project') ? '▾' : '▸' }}</span>
+                    <span class="memview-section-title">專案內部記憶</span>
+                    <span class="memview-badge">{{ memoryOverview().project?.length || 0 }}</span>
+                  </div>
+                  @if (memViewIsOpen('project')) {
+                    @for (p of memoryOverview().project; track p.key) {
+                      <div class="memview-proj-row" style="padding-left:24px">
+                        <span class="memview-path">projects\…\memory\{{ p.key }}.md</span>
+                      </div>
+                    } @empty {
+                      <div class="memview-empty" style="padding-left:24px">尚無專案內部記憶</div>
+                    }
+                  }
+                </div>
+
+              }
             </div>
           }
 

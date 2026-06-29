@@ -71,6 +71,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
+  memoryOverview = signal<any>(null);
+  memViewExpanded = signal<Record<string, boolean>>({});
 
   rightPanelFilter = signal('');
 
@@ -374,7 +376,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   inputText = '';
   isStreaming = signal(false);
   selectedAgent = signal('');
-  activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp'>('teams');
+  activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp' | 'memview'>('teams');
   selectedMemoryKey = signal('');
   sessionSearch = '';
 
@@ -1294,6 +1296,24 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!key) return;
     this.memoryDraft = this.memory()[key] ?? '';
     this.memoryDraftSaved.set(true);
+  }
+
+  loadMemoryOverview() {
+    this.claude.getMemoryOverview().subscribe(data => this.memoryOverview.set(data));
+  }
+
+  toggleMemViewSection(key: string) {
+    this.memViewExpanded.update(m => ({ ...m, [key]: !m[key] }));
+  }
+
+  memViewIsOpen(key: string): boolean {
+    return !!this.memViewExpanded()[key];
+  }
+
+  memViewFilePath(type: string, ...parts: string[]): string {
+    const base = 'C:\\Users\\666\\.claude\\memory';
+    const segments = [base, ...parts].join('\\');
+    return segments;
   }
 
   isMemoryInContext(key: string): boolean {

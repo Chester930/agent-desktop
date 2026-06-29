@@ -4551,3 +4551,96 @@ body[style*="ns-resize"] .mcp-divider-grip {
   border-top: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0;
 }
+
+// ── Memory Viewer ─────────────────────────────────────────────────────────────
+.memview-panel {
+  display: flex; flex-direction: column; gap: 0;
+  overflow-y: auto; height: 100%; padding: 8px 0;
+}
+
+.memview-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  margin-bottom: 4px;
+}
+
+.memview-hint {
+  font-size: 10px; color: #555; flex: 1; text-align: right;
+}
+
+.memview-section {
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.memview-section-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 12px; cursor: pointer;
+  user-select: none;
+  &:hover { background: rgba(255,255,255,0.04); }
+}
+
+.memview-section-title {
+  font-size: 12px; font-weight: 600; color: #ccc; flex: 1;
+}
+
+.memview-arrow {
+  font-size: 10px; color: #666; width: 10px; flex-shrink: 0;
+}
+
+.memview-badge {
+  font-size: 10px; color: #888;
+  background: rgba(255,255,255,0.06);
+  border-radius: 10px; padding: 1px 6px;
+}
+
+.memview-path {
+  font-size: 9px; color: #555; font-family: monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 180px;
+}
+
+.memview-subsection {
+  border-top: 1px solid rgba(255,255,255,0.04);
+}
+
+.memview-subsection-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px 5px 24px; cursor: pointer;
+  user-select: none;
+  &:hover { background: rgba(255,255,255,0.03); }
+}
+
+.memview-agent-name {
+  font-size: 11px; color: #aaa; flex: 1;
+}
+
+.memview-content {
+  padding: 6px 12px 8px 24px;
+  font-size: 11px;
+}
+
+.memview-md {
+  color: #bbb; line-height: 1.5;
+  max-height: 200px; overflow-y: auto;
+  background: rgba(0,0,0,0.2); border-radius: 4px;
+  padding: 6px 8px; margin-top: 4px;
+  p, li { margin: 2px 0; }
+  h1, h2, h3 { font-size: 12px; margin: 4px 0 2px; color: #ddd; }
+  code { font-size: 10px; background: rgba(255,255,255,0.08); padding: 1px 3px; border-radius: 3px; }
+}
+
+.memview-empty {
+  font-size: 11px; color: #444; padding: 4px 0; font-style: italic;
+}
+
+.memview-path-row, .memview-proj-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 0; margin-top: 4px;
+}
+
+.memview-label {
+  font-size: 9px; color: #666; background: rgba(255,255,255,0.06);
+  border-radius: 3px; padding: 1px 4px; flex-shrink: 0;
+}
+

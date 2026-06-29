@@ -86,6 +86,32 @@ def _encode_slug(dir_path: str) -> str:
     """Convert a filesystem path to the Claude Code project slug format."""
     return dir_path.replace(":", "-").replace("\\", "-").replace("/", "-")
 
+def _global_memory_dir() -> Path:
+    """~/.claude/memory/ — 全域公共記憶根目錄"""
+    return CLAUDE_HOME / "memory"
+
+def _agent_memory_dir(agent_id: str) -> Path:
+    """~/.claude/memory/agents/<id>/"""
+    return CLAUDE_HOME / "memory" / "agents" / agent_id
+
+def _team_memory_dir(team_id: str) -> Path:
+    """~/.claude/memory/teams/<id>/"""
+    return CLAUDE_HOME / "memory" / "teams" / team_id
+
+def _read_md(path: Path) -> str | None:
+    """讀取 markdown 檔案，不存在回傳 None，限制 2000 字元。"""
+    if not path.exists():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+        return content[:2000] if len(content) > 2000 else content
+    except Exception:
+        return None
+
+def _write_md(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
 def _load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
@@ -474,6 +500,95 @@ def _resolve_api_key() -> str:
         return ""
 
 
+def build_memory_context(agent_id: str, cwd: str) -> str:
+    """
+    依序組裝五層記憶並回傳注入字串。
+    注入順序：User → System → Agent Identity → Agent Project → Project Internal
+    缺少的層自動跳過，全部為空時回傳空字串。
+    """
+    slug = _encode_slug(cwd) if cwd else ""
+    sections: list[str] = []
+
+    user = _read_md(_global_memory_dir() / "user" / "profile.md")
+    if user:
+        sections.append(f"[User Memory]\n{user}")
+
+    system = _read_md(_global_memory_dir() / "system" / "state.md")
+    if system:
+        sections.append(f"[System Memory]\n{system}")
+
+    if agent_id:
+        identity = _read_md(_agent_memory_dir(agent_id) / "identity.md")
+        if identity:
+            sections.append(f"[Agent Identity — {agent_id}]\n{identity}")
+
+        if slug:
+            proj = _read_md(_agent_memory_dir(agent_id) / "projects" / f"{slug}.md")
+            if proj:
+                sections.append(f"[Agent Experience — {agent_id} / {slug}]\n{proj}")
+
+    if slug:
+        proj_mem_dir = CLAUDE_HOME / "projects" / slug / "memory"
+        if proj_mem_dir.exists():
+            parts = []
+            for f in sorted(proj_mem_dir.glob("*.md")):
+                content = _read_md(f)
+                if content:
+                    parts.append(f"### {f.stem}\n{content}")
+            if parts:
+                sections.append(f"[Project Internal Memory — {slug}]\n" + "\n\n".join(parts))
+
+    return "\n\n---\n\n".join(sections) if sections else ""
+
+
+def build_team_memory_context(
+    team_id: str,
+    all_member_ids: list[str],
+    current_agent_id: str,
+    cwd: str,
+) -> str:
+    """
+    組裝 Team Run 的記憶 context（每位成員各自收到）。
+    注入順序：
+      User → Team Shared → Team Project → 所有成員 Identity（互知）
+      → 當前成員 Agent Project → Project Internal
+    """
+    slug = _encode_slug(cwd) if cwd else ""
+    sections: list[str] = []
+
+    user = _read_md(_global_memory_dir() / "user" / "profile.md")
+    if user:
+        sections.append(f"[User Memory]\n{user}")
+
+    team_shared = _read_md(_team_memory_dir(team_id) / "shared.md")
+    if team_shared:
+        sections.append(f"[Team Memory — {team_id}]\n{team_shared}")
+
+    if slug:
+        team_proj = _read_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md")
+        if team_proj:
+            sections.append(f"[Team Project Memory — {team_id} / {slug}]\n{team_proj}")
+
+    member_identities = []
+    for mid in all_member_ids:
+        identity = _read_md(_agent_memory_dir(mid) / "identity.md")
+        if identity:
+            label = "（你）" if mid == current_agent_id else ""
+            member_identities.append(f"#### {mid}{label}\n{identity}")
+    if member_identities:
+        sections.append("[Team Members — 成員背景與專長]\n" + "\n\n".join(member_identities))
+
+    if current_agent_id and slug:
+        agent_proj = _read_md(_agent_memory_dir(current_agent_id) / "projects" / f"{slug}.md")
+        if agent_proj:
+            sections.append(f"[Agent Experience — {current_agent_id} / {slug}]\n{agent_proj}")
+
+    # 專案內部記憶（詳細進度）不預載入 Team context。
+    # 需要細節時由 Agent 主動查詢，保持 Team 共享的是智慧與經驗而非行程表。
+
+    return "\n\n---\n\n".join(sections) if sections else ""
+
+
 async def handle_chat(request: web.Request) -> web.StreamResponse:
     data      = await request.json()
     message      = data.get("message", "")
@@ -491,6 +606,10 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
 
     soul = get_concatenated_soul()
     full_message = f"[System Persona]\n{soul}\n\n{message}" if soul else message
+
+    mem_ctx = build_memory_context(agent, cwd)
+    if mem_ctx:
+        full_message = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{full_message}"
 
     cmd = [claude_bin, "-p", full_message, "--output-format", "stream-json", "--verbose"]
     if model and model not in ("sonnet", ""):
@@ -1413,6 +1532,8 @@ async def _agent_run_capture(
 async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> None:
     run = _team_runs[run_id]
     steps = run["steps"]
+    team_id = run.get("team_id", "")
+    all_member_ids = [s["agent"] for s in steps]
     prev_output = ""
 
     for i, step in enumerate(steps):
@@ -1431,7 +1552,11 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         except Exception:
             pass
 
-        memory_content = []
+        # 分層 team memory 注入
+        mem_ctx = build_team_memory_context(team_id, all_member_ids, agent_id, cwd)
+
+        # 舊式 KV memory（向下相容，保留原有 memory 欄位讀取）
+        legacy_memory: list[str] = []
         read_keys = agent_info.get("memory", [])
         mem_dir = _memory_dir()
         for key in read_keys:
@@ -1439,24 +1564,25 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
             if key_file.exists():
                 try:
                     content = key_file.read_text(encoding="utf-8")
-                    memory_content.append(f"### Memory Context: {key}\n\n{content}")
+                    legacy_memory.append(f"### {key}\n\n{content}")
                 except Exception:
                     pass
 
         prompt_parts = []
+        if mem_ctx:
+            prompt_parts.append(f"[Memory Context]\n{mem_ctx}")
+        if legacy_memory:
+            prompt_parts.append("---\n## 相關 Memory 上下文\n\n" + "\n\n".join(legacy_memory))
+
         if i == 0:
-            prompt_parts.append(task)
+            prompt_parts.append(f"---\n## 任務\n\n{task}")
         else:
             prompt_parts.append(
-                f"{task}\n\n"
-                f"---\n## 前置 Agent（{steps[i-1]['agent']}）的輸出\n\n"
-                f"{prev_output}"
+                f"---\n## 任務\n\n{task}\n\n"
+                f"---\n## 前置 Agent（{steps[i-1]['agent']}）的輸出\n\n{prev_output}"
             )
 
-        if memory_content:
-            prompt_parts.append("\n\n---\n## 相關 Memory 上下文\n\n" + "\n\n".join(memory_content))
-
-        prompt = "\n".join(prompt_parts)
+        prompt = "\n\n".join(prompt_parts)
 
         output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd)
         step["output"] = output
@@ -1464,13 +1590,13 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         prev_output = output
         _tr_emit(run_id, {"type": "step_done", "step": i})
 
+        # 舊式 KV output_memory（向下相容）
         write_keys = agent_info.get("output_memory", [])
         if write_keys:
             mem_dir.mkdir(parents=True, exist_ok=True)
             for key in write_keys:
                 try:
-                    key_file = mem_dir / f"{key}.md"
-                    key_file.write_text(output, encoding="utf-8")
+                    (mem_dir / f"{key}.md").write_text(output, encoding="utf-8")
                 except Exception:
                     pass
 
@@ -1481,6 +1607,20 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         ]
         run["summary"] = "\n\n---\n\n".join(summary_parts)
         _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+
+        # Team Run 完成後自動更新 team project memory
+        if team_id and cwd:
+            slug = _encode_slug(cwd)
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            proj_summary = (
+                f"# Team Run 記錄 — {timestamp}\n\n"
+                f"## 任務\n\n{task}\n\n"
+                f"## 成員\n\n" +
+                "\n".join(f"- {mid}" for mid in all_member_ids) +
+                f"\n\n## 執行摘要\n\n{run['summary'][:1800]}"
+            )
+            _write_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md", proj_summary)
 
 
 async def handle_team_run_post(request: web.Request) -> web.Response:
@@ -1647,6 +1787,212 @@ async def handle_memory_delete(request: web.Request) -> web.Response:
     if f.exists():
         f.unlink()
     return web.json_response({"ok": True})
+
+
+# ── 分層記憶 API ──────────────────────────────────────────────────────────────
+
+async def handle_mem_user_get(request: web.Request) -> web.Response:
+    content = _read_md(_global_memory_dir() / "user" / "profile.md")
+    return web.json_response({"content": content or ""})
+
+async def handle_mem_user_put(request: web.Request) -> web.Response:
+    data = await request.json()
+    _write_md(_global_memory_dir() / "user" / "profile.md", data.get("content", ""))
+    return web.json_response({"ok": True})
+
+
+async def handle_mem_system_get(request: web.Request) -> web.Response:
+    content = _read_md(_global_memory_dir() / "system" / "state.md")
+    return web.json_response({"content": content or ""})
+
+async def handle_mem_system_put(request: web.Request) -> web.Response:
+    data = await request.json()
+    _write_md(_global_memory_dir() / "system" / "state.md", data.get("content", ""))
+    return web.json_response({"ok": True})
+
+
+async def handle_mem_agents_list(request: web.Request) -> web.Response:
+    base = _global_memory_dir() / "agents"
+    agents = []
+    if base.exists():
+        for d in sorted(base.iterdir()):
+            if d.is_dir():
+                has_identity = (d / "identity.md").exists()
+                proj_dir = d / "projects"
+                project_count = len(list(proj_dir.glob("*.md"))) if proj_dir.exists() else 0
+                agents.append({"id": d.name, "has_identity": has_identity, "project_count": project_count})
+    return web.json_response(agents)
+
+async def handle_mem_agent_get(request: web.Request) -> web.Response:
+    agent_id = request.match_info["id"]
+    content = _read_md(_agent_memory_dir(agent_id) / "identity.md")
+    return web.json_response({"agent_id": agent_id, "content": content or ""})
+
+async def handle_mem_agent_put(request: web.Request) -> web.Response:
+    agent_id = request.match_info["id"]
+    data = await request.json()
+    _write_md(_agent_memory_dir(agent_id) / "identity.md", data.get("content", ""))
+    return web.json_response({"ok": True})
+
+async def handle_mem_agent_projects_list(request: web.Request) -> web.Response:
+    agent_id = request.match_info["id"]
+    proj_dir = _agent_memory_dir(agent_id) / "projects"
+    projects = []
+    if proj_dir.exists():
+        for f in sorted(proj_dir.glob("*.md")):
+            try:
+                projects.append({"slug": f.stem, "size": f.stat().st_size, "mtime": int(f.stat().st_mtime)})
+            except Exception:
+                pass
+    return web.json_response(projects)
+
+async def handle_mem_agent_project_get(request: web.Request) -> web.Response:
+    agent_id = request.match_info["id"]
+    slug     = request.match_info["slug"]
+    content  = _read_md(_agent_memory_dir(agent_id) / "projects" / f"{slug}.md")
+    return web.json_response({"agent_id": agent_id, "slug": slug, "content": content or ""})
+
+async def handle_mem_agent_project_put(request: web.Request) -> web.Response:
+    agent_id = request.match_info["id"]
+    slug     = request.match_info["slug"]
+    data     = await request.json()
+    _write_md(_agent_memory_dir(agent_id) / "projects" / f"{slug}.md", data.get("content", ""))
+    return web.json_response({"ok": True})
+
+
+async def handle_mem_teams_list(request: web.Request) -> web.Response:
+    base = _global_memory_dir() / "teams"
+    teams = []
+    if base.exists():
+        for d in sorted(base.iterdir()):
+            if d.is_dir():
+                has_shared = (d / "shared.md").exists()
+                proj_dir = d / "projects"
+                project_count = len(list(proj_dir.glob("*.md"))) if proj_dir.exists() else 0
+                teams.append({"id": d.name, "has_shared": has_shared, "project_count": project_count})
+    return web.json_response(teams)
+
+async def handle_mem_team_get(request: web.Request) -> web.Response:
+    team_id = request.match_info["id"]
+    content = _read_md(_team_memory_dir(team_id) / "shared.md")
+    return web.json_response({"team_id": team_id, "content": content or ""})
+
+async def handle_mem_team_put(request: web.Request) -> web.Response:
+    team_id = request.match_info["id"]
+    data    = await request.json()
+    _write_md(_team_memory_dir(team_id) / "shared.md", data.get("content", ""))
+    return web.json_response({"ok": True})
+
+async def handle_mem_team_projects_list(request: web.Request) -> web.Response:
+    team_id  = request.match_info["id"]
+    proj_dir = _team_memory_dir(team_id) / "projects"
+    projects = []
+    if proj_dir.exists():
+        for f in sorted(proj_dir.glob("*.md")):
+            try:
+                projects.append({"slug": f.stem, "size": f.stat().st_size, "mtime": int(f.stat().st_mtime)})
+            except Exception:
+                pass
+    return web.json_response(projects)
+
+async def handle_mem_team_project_get(request: web.Request) -> web.Response:
+    team_id = request.match_info["id"]
+    slug    = request.match_info["slug"]
+    content = _read_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md")
+    return web.json_response({"team_id": team_id, "slug": slug, "content": content or ""})
+
+async def handle_mem_team_project_put(request: web.Request) -> web.Response:
+    team_id = request.match_info["id"]
+    slug    = request.match_info["slug"]
+    data    = await request.json()
+    _write_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md", data.get("content", ""))
+    return web.json_response({"ok": True})
+
+async def handle_mem_overview(request: web.Request) -> web.Response:
+    """回傳整個記憶體系的結構概覽，供前端瀏覽器使用。"""
+    base = _global_memory_dir()
+
+    user_content    = _read_md(base / "user" / "profile.md")
+    system_content  = _read_md(base / "system" / "state.md")
+
+    agents = []
+    agents_dir = base / "agents"
+    if agents_dir.exists():
+        for d in sorted(agents_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            proj_dir = d / "projects"
+            projects = []
+            if proj_dir.exists():
+                for f in sorted(proj_dir.glob("*.md")):
+                    projects.append({"slug": f.stem, "mtime": int(f.stat().st_mtime)})
+            agents.append({
+                "id": d.name,
+                "identity": _read_md(d / "identity.md"),
+                "projects": projects,
+            })
+
+    teams = []
+    teams_dir = base / "teams"
+    if teams_dir.exists():
+        for d in sorted(teams_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            proj_dir = d / "projects"
+            projects = []
+            if proj_dir.exists():
+                for f in sorted(proj_dir.glob("*.md")):
+                    projects.append({"slug": f.stem, "mtime": int(f.stat().st_mtime)})
+            teams.append({
+                "id": d.name,
+                "shared": _read_md(d / "shared.md"),
+                "projects": projects,
+            })
+
+    proj_mem = []
+    mem_dir = _memory_dir()
+    if mem_dir.exists():
+        for f in sorted(mem_dir.glob("*.md")):
+            proj_mem.append({"key": f.stem, "mtime": int(f.stat().st_mtime)})
+
+    return web.json_response({
+        "user":    {"content": user_content or ""},
+        "system":  {"content": system_content or ""},
+        "agents":  agents,
+        "teams":   teams,
+        "project": proj_mem,
+    })
+
+async def handle_mem_preview(request: web.Request) -> web.Response:
+    """
+    Debug 端點：預覽 build_memory_context / build_team_memory_context 的輸出。
+    GET /api/mem/preview?agent=Pi&cwd=/path/to/project
+    GET /api/mem/preview?mode=team&team_id=MyTeam&members=Pi,CodeReviewer&cwd=/path
+    """
+    mode     = request.rel_url.query.get("mode", "agent")
+    agent_id = request.rel_url.query.get("agent", "")
+    cwd      = request.rel_url.query.get("cwd", "")
+    team_id  = request.rel_url.query.get("team_id", "")
+    members  = [m.strip() for m in request.rel_url.query.get("members", "").split(",") if m.strip()]
+
+    if mode == "team":
+        ctx = build_team_memory_context(team_id, members or [agent_id], agent_id, cwd)
+    else:
+        ctx = build_memory_context(agent_id, cwd)
+
+    sections = [s.split("\n")[0] for s in ctx.split("\n\n---\n\n")] if ctx else []
+    return web.json_response({
+        "mode":        mode,
+        "agent":       agent_id,
+        "team_id":     team_id,
+        "cwd":         cwd,
+        "slug":        _encode_slug(cwd) if cwd else "",
+        "sections":    sections,
+        "char_count":  len(ctx),
+        "context":     ctx,
+    })
+
+# ── End 分層記憶 API ───────────────────────────────────────────────────────────
 
 
 async def handle_soul_get(request: web.Request) -> web.Response:
@@ -2640,6 +2986,25 @@ def build_app() -> web.Application:
         ("PUT",    "/api/telegram",           handle_telegram_put),
         ("POST",   "/api/line/webhook",       handle_line_webhook),
         ("GET",    "/api/debug-dump",         handle_debug_dump),
+        # 分層記憶 API
+        ("GET",    "/api/mem/overview",                              handle_mem_overview),
+        ("GET",    "/api/mem/preview",                               handle_mem_preview),
+        ("GET",    "/api/mem/user",                                  handle_mem_user_get),
+        ("PUT",    "/api/mem/user",                                  handle_mem_user_put),
+        ("GET",    "/api/mem/system",                                handle_mem_system_get),
+        ("PUT",    "/api/mem/system",                                handle_mem_system_put),
+        ("GET",    "/api/mem/agents",                                handle_mem_agents_list),
+        ("GET",    "/api/mem/agents/{id}",                           handle_mem_agent_get),
+        ("PUT",    "/api/mem/agents/{id}",                           handle_mem_agent_put),
+        ("GET",    "/api/mem/agents/{id}/projects",                  handle_mem_agent_projects_list),
+        ("GET",    "/api/mem/agents/{id}/projects/{slug}",           handle_mem_agent_project_get),
+        ("PUT",    "/api/mem/agents/{id}/projects/{slug}",           handle_mem_agent_project_put),
+        ("GET",    "/api/mem/teams",                                 handle_mem_teams_list),
+        ("GET",    "/api/mem/teams/{id}",                            handle_mem_team_get),
+        ("PUT",    "/api/mem/teams/{id}",                            handle_mem_team_put),
+        ("GET",    "/api/mem/teams/{id}/projects",                   handle_mem_team_projects_list),
+        ("GET",    "/api/mem/teams/{id}/projects/{slug}",            handle_mem_team_project_get),
+        ("PUT",    "/api/mem/teams/{id}/projects/{slug}",            handle_mem_team_project_put),
     ]:
         route_groups.setdefault(path, []).append((method, handler))
 
@@ -2743,4 +3108,4 @@ if __name__ == "__main__":
     print("Claude Desktop backend starting on http://localhost:8765")
     app = build_app()
     app.on_startup.append(on_startup)
-    web.run_app(app, host="127.0.0.1", port=8765)
+    web.run_app(app, host="0.0.0.0", port=8765)

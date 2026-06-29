@@ -342,6 +342,22 @@ export class ClaudeService {
     return `${this.api}/debug-dump`;
   }
 
+  getMemoryOverview(): Observable<any> {
+    return this.http.get<any>(`${this.api}/mem/overview`);
+  }
+
+  putMemoryUser(content: string): Observable<any> {
+    return this.http.put(`${this.api}/mem/user`, { content });
+  }
+
+  putMemoryAgent(agentId: string, content: string): Observable<any> {
+    return this.http.put(`${this.api}/mem/agents/${encodeURIComponent(agentId)}`, { content });
+  }
+
+  putMemoryTeam(teamId: string, content: string): Observable<any> {
+    return this.http.put(`${this.api}/mem/teams/${encodeURIComponent(teamId)}`, { content });
+  }
+
   streamProviderChat(
     messages: { role: string; content: string }[],
     onEvent: (ev: any) => void,
