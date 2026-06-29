@@ -1757,7 +1757,7 @@ async def handle_schedules_run(request: web.Request) -> web.Response:
     target = next((s for s in schedules if s["id"] == sid), None)
     if not target:
         return web.json_response({"error": "not found"}, status=404)
-    asyncio.create_task(run_schedule_prompt(target["prompt"]))
+    asyncio.create_task(run_schedule_prompt(target))
     target["last_run"] = datetime.now().isoformat()
     save_schedules(schedules)
     return web.json_response({"ok": True})
@@ -2397,6 +2397,99 @@ async def handle_telegram_put(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "running": running})
 
 
+# ── #19 LINE Bot Webhook ──────────────────────────────────────────────────────
+
+def _load_pi_soul() -> str:
+    soul_path = CLAUDE_HOME / "souls" / "Pi.md"
+    if soul_path.exists():
+        return soul_path.read_text(encoding="utf-8")
+    return "You are Pi, a professional and efficient AI butler."
+
+def _verify_line_signature(body: bytes, signature: str) -> bool:
+    secret = _load_config().get("lineChannelSecret", "").strip()
+    if not secret:
+        return True  # skip verification if not configured
+    import hmac, hashlib, base64
+    expected = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    ).decode("utf-8")
+    return hmac.compare_digest(expected, signature)
+
+async def _line_reply(reply_token: str, text: str) -> None:
+    token = _load_config().get("lineChannelAccessToken", "").strip()
+    if not token:
+        return
+    chunks = [text[i:i+4500] for i in range(0, len(text), 4500)]
+    messages = [{"type": "text", "text": c} for c in chunks[:5]]
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.line.me/v2/bot/message/reply",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"replyToken": reply_token, "messages": messages},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    _log(f"[line] reply error {resp.status}: {await resp.text()}")
+    except Exception as e:
+        _log(f"[line] reply exception: {e}")
+
+async def _line_run_claude(user_message: str) -> str:
+    soul = _load_pi_soul()
+    prompt = f"<instructions>\n{soul}\n</instructions>\n\n{user_message}"
+    env = os.environ.copy()
+    key = _resolve_api_key()
+    if key:
+        env["ANTHROPIC_API_KEY"] = key
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", prompt, "--output-format", "json",
+            "--dangerously-skip-permissions",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=str(Path.home()),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
+        output = json.loads(stdout.decode("utf-8", errors="replace"))
+        return output.get("result", "[Pi 無回應]").strip()
+    except Exception as e:
+        _log(f"[line] claude call exception: {e}")
+        return "[Pi 暫時無法回應，請稍後再試]"
+
+async def handle_line_webhook(request: web.Request) -> web.Response:
+    body = await request.read()
+    sig  = request.headers.get("X-Line-Signature", "")
+    if not _verify_line_signature(body, sig):
+        return web.Response(status=400, text="invalid signature")
+    try:
+        data = json.loads(body)
+    except Exception:
+        return web.Response(status=400, text="invalid json")
+    allowed = _load_config().get("lineAllowedUsers", [])
+    for event in data.get("events", []):
+        if event.get("type") != "message":
+            continue
+        sender_id = event.get("source", {}).get("userId", "")
+        if allowed and sender_id not in allowed:
+            _log(f"[line] blocked user: {sender_id}")
+            continue
+        msg = event.get("message", {})
+        if msg.get("type") != "text":
+            continue
+        text        = msg.get("text", "").strip()
+        reply_token = event.get("replyToken", "")
+        if text and reply_token:
+            asyncio.create_task(_process_line_message(text, reply_token))
+    return web.Response(status=200, text="OK")
+
+async def _process_line_message(text: str, reply_token: str) -> None:
+    _log(f"[line] received: {text[:50]}")
+    reply = await _line_run_claude(text)
+    await _line_reply(reply_token, reply)
+    _log(f"[line] replied, length={len(reply)}")
+
+
 # ── #20 Debug Dump ────────────────────────────────────────────────────────────
 
 async def handle_debug_dump(request: web.Request) -> web.Response:
@@ -2545,6 +2638,7 @@ def build_app() -> web.Application:
         ("POST",   "/api/chat/provider",      handle_chat_provider),
         ("GET",    "/api/telegram",           handle_telegram_get),
         ("PUT",    "/api/telegram",           handle_telegram_put),
+        ("POST",   "/api/line/webhook",       handle_line_webhook),
         ("GET",    "/api/debug-dump",         handle_debug_dump),
     ]:
         route_groups.setdefault(path, []).append((method, handler))
@@ -2577,23 +2671,59 @@ async def run_schedule_runner() -> None:
                 if last_run is None or (now - prev).total_seconds() < 60 and prev > last_run:
                     sc["last_run"] = now.isoformat()
                     changed = True
-                    asyncio.create_task(run_schedule_prompt(sc["prompt"]))
+                    asyncio.create_task(run_schedule_prompt(sc))
             except Exception:
                 pass
         if changed:
             save_schedules(schedules)
 
 
-async def run_schedule_prompt(prompt: str) -> None:
-    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json"]
+async def _send_line_message(to: str, text: str) -> None:
+    token = _load_config().get("lineChannelAccessToken", "").strip()
+    if not token:
+        print("[schedule] lineChannelAccessToken not set in claude-desktop-config.json")
+        return
+    if not to:
+        print("[schedule] LINE recipient (to) is empty")
+        return
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    chunks = [text[i:i+4500] for i in range(0, len(text), 4500)]
+    messages = [{"type": "text", "text": chunk} for chunk in chunks[:5]]
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json={"to": to, "messages": messages}) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(f"[schedule] LINE API error {resp.status}: {body}")
+                else:
+                    print(f"[schedule] LINE message sent to {to}")
+    except Exception as e:
+        print(f"[schedule] Failed to send LINE message: {e}")
+
+
+async def run_schedule_prompt(schedule: dict) -> None:
+    prompt = schedule["prompt"] if isinstance(schedule, dict) else schedule
+    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            stderr=asyncio.subprocess.PIPE,
             cwd=str(Path.home()),
         )
-        await proc.communicate()
+        stdout, _ = await proc.communicate()
+        result_text = ""
+        try:
+            output = json.loads(stdout.decode("utf-8", errors="replace"))
+            result_text = output.get("result", "")
+        except Exception:
+            pass
+        print(f"[schedule] Prompt finished, result length: {len(result_text)}")
+        if isinstance(schedule, dict):
+            delivery = schedule.get("delivery", {})
+            if delivery.get("channel") == "line" and result_text:
+                await _send_line_message(delivery.get("to", ""), result_text)
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
 

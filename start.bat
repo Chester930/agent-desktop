@@ -1,20 +1,48 @@
 @echo off
 echo Starting Claude Desktop...
 
-:: Auto-detect Python
-set PYTHON=python
-where python >nul 2>&1 || (set PYTHON=python3)
-
-:: Start Python backend
-start "Claude Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
-
-:: Check for --dev flag
+:: Parse flags
 set DEV_MODE=0
+set DOCKER_MODE=0
 for %%A in (%*) do (
-  if /I "%%A"=="--dev" set DEV_MODE=1
+  if /I "%%A"=="--dev"    set DEV_MODE=1
+  if /I "%%A"=="--docker" set DOCKER_MODE=1
 )
 
+:: ── Docker mode ───────────────────────────────────────────────────────────────
+if "%DOCKER_MODE%"=="1" (
+  echo [Docker] Starting backend + ngrok via Docker Compose...
+  cd /d %~dp0
+  docker compose up -d --build
+  if errorlevel 1 (
+    echo [Error] Docker Compose failed. Is Docker Desktop running?
+    pause & exit /b 1
+  )
+
+  :: Wait for backend to be healthy
+  echo Waiting for backend...
+  :wait_backend
+  docker inspect --format="{{.State.Health.Status}}" claude-desktop-backend 2>nul | findstr /i "healthy" >nul
+  if errorlevel 1 ( timeout /t 2 /nobreak >nul & goto wait_backend )
+
+  :: Get ngrok public URL
+  echo.
+  for /f "delims=" %%U in ('powershell -NoProfile -Command "(Invoke-WebRequest -Uri http://localhost:4040/api/tunnels -UseBasicParsing | ConvertFrom-Json).tunnels[0].public_url" 2^>nul') do set NGROK_URL=%%U
+  echo Backend:  http://localhost:8765
+  echo ngrok:    %NGROK_URL%
+  echo Webhook:  %NGROK_URL%/api/line/webhook
+  echo.
+
+  :: Launch Electron (Docker mode: skip local backend, load from port 4200)
+  cd /d %~dp0 && node_modules\.bin\electron.cmd . --docker
+  goto end
+)
+
+:: ── Dev mode ──────────────────────────────────────────────────────────────────
 if "%DEV_MODE%"=="1" (
+  set PYTHON=python
+  where python >nul 2>&1 || (set PYTHON=python3)
+  start "Claude Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
   echo Starting Angular dev server with HMR...
   timeout /t 2 /nobreak >nul
   start "Angular Dev" cmd /k "cd /d %~dp0frontend && npm run start"
@@ -22,12 +50,19 @@ if "%DEV_MODE%"=="1" (
   echo Backend:  http://localhost:8765
   echo Frontend: http://localhost:4200  [HMR enabled]
   echo.
-  echo Run electron after Angular finishes loading...
   timeout /t 10 /nobreak >nul
   cd /d %~dp0 && node_modules\.bin\electron.cmd . --dev
-) else (
-  echo.
-  echo Backend:  http://localhost:8765
-  echo.
-  echo Backend started. Run ^"npm run electron^" or double-click the Electron binary to launch UI.
+  goto end
 )
+
+:: ── Default mode (local backend only) ─────────────────────────────────────────
+set PYTHON=python
+where python >nul 2>&1 || (set PYTHON=python3)
+start "Claude Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
+echo.
+echo Backend:  http://localhost:8765
+echo.
+timeout /t 3 /nobreak >nul
+cd /d %~dp0 && node_modules\.bin\electron.cmd .
+
+:end

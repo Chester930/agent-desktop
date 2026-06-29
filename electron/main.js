@@ -145,10 +145,8 @@ ipcMain.handle('loginItem:get', () => {
 });
 
 ipcMain.handle('loginItem:set', (_, enabled) => {
-  app.setLoginItemSettings({
-    openAtLogin: enabled,
-    args: enabled ? ['--hidden'] : [],
-  });
+  const args = enabled ? (isDocker ? ['--docker', '--hidden'] : ['--hidden']) : [];
+  app.setLoginItemSettings({ openAtLogin: enabled, args });
 });
 
 // ── 建立主視窗 ────────────────────────────────────────────
@@ -163,7 +161,7 @@ function createWindow() {
     show: false,
   });
 
-  const isDev = process.argv.includes('--dev');
+  const isDev = process.argv.includes('--dev') || isDocker;
   const url = isDev
     ? 'http://localhost:4200'
     : `file://${useSrc ? srcFrontend : bundledFrontend}`;
@@ -171,6 +169,11 @@ function createWindow() {
   mainWindow.loadURL(url);
   const startHidden = process.argv.includes('--hidden');
   mainWindow.once('ready-to-show', () => { if (!startHidden) mainWindow.show(); });
+  mainWindow.webContents.on('did-fail-load', (_e, code, _desc, failedUrl) => {
+    if (failedUrl && failedUrl.startsWith('file://')) {
+      mainWindow.loadURL('http://localhost:4200');
+    }
+  });
 
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
@@ -239,16 +242,30 @@ function checkForUpdates() {
 }
 
 // ── 應用程式生命週期 ──────────────────────────────────────
+const isDocker = process.argv.includes('--docker');
+
 app.whenReady().then(async () => {
-  // 同步 Login Item args（確保已打包版本帶 --hidden）
+  // 同步 Login Item args
   const current = app.getLoginItemSettings();
-  if (current.openAtLogin && !current.openAsHidden) {
-    app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] });
+  const wantedArgs = isDocker ? ['--docker', '--hidden'] : ['--hidden'];
+  if (current.openAtLogin && JSON.stringify(current.launchItems?.[0]?.args ?? current.openAsHidden) === 'false') {
+    app.setLoginItemSettings({ openAtLogin: true, args: wantedArgs });
   }
 
   createTray();
 
-  // 偵測 Claude Code
+  if (isDocker) {
+    // Docker 模式：後端已在容器內，直接等待連線
+    const ready = await waitForBackend();
+    if (!ready) {
+      dialog.showMessageBox({ message: 'Docker 後端未回應，請確認容器是否已啟動。\n執行：docker compose up -d' });
+      app.quit(); return;
+    }
+    createWindow();
+    return;
+  }
+
+  // 本機模式：偵測並啟動本機後端
   const claudeBin = detectClaude();
   if (!claudeBin) {
     showNoClaudePage();

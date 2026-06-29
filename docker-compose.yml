@@ -1,0 +1,41 @@
+services:
+  backend:
+    build: ./backend
+    container_name: claude-desktop-backend
+    ports:
+      - "8765:8765"
+    volumes:
+      - type: bind
+        source: ${CLAUDE_HOME:-C:/Users/666/.claude}
+        target: /root/.claude
+    environment:
+      - CLAUDE_BIN=claude
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    image: nginx:alpine
+    container_name: claude-desktop-frontend
+    ports:
+      - "4200:80"
+    volumes:
+      - ./frontend/dist/frontend/browser:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: claude-desktop-ngrok
+    ports:
+      - "4040:4040"
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:-}
+    command: http backend:8765 --log stdout
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
