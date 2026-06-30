@@ -3823,7 +3823,9 @@ async def _send_line_message(to: str, text: str) -> None:
         print("[schedule] lineChannelAccessToken not set in claude-desktop-config.json")
         return
     if not to:
-        print("[schedule] LINE recipient (to) is empty")
+        to = _load_config().get("lineAdminUserId", "").strip()
+    if not to:
+        print("[schedule] LINE recipient (to) is empty and lineAdminUserId is not set")
         return
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -3843,12 +3845,14 @@ async def _send_line_message(to: str, text: str) -> None:
 
 async def run_schedule_prompt(schedule: dict) -> None:
     prompt = schedule["prompt"] if isinstance(schedule, dict) else schedule
-    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"]
+    # 移除 --dangerously-skip-permissions 旗標以支援 Docker 容器安全執行
+    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json"]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(), # 確保環境變數（如 API Key）被傳入
             cwd=str(Path.home()),
         )
         stdout, _ = await proc.communicate()
@@ -3859,12 +3863,13 @@ async def run_schedule_prompt(schedule: dict) -> None:
         except Exception:
             pass
         print(f"[schedule] Prompt finished, result length: {len(result_text)}")
-        if isinstance(schedule, dict):
-            delivery = schedule.get("delivery", {})
-            if delivery.get("channel") == "line" and result_text:
-                await _send_line_message(delivery.get("to", ""), result_text)
+        if result_text:
+            # 依使用者需求，預設直接推送至 LINE Admin 帳號
+            to = _load_config().get("lineAdminUserId", "").strip()
+            await _send_line_message(to, result_text)
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
+
 
 
 async def _gc_team_runs() -> None:
