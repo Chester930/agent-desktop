@@ -151,7 +151,10 @@
       <div class="usage-panel">
         <div class="usage-slot" [class.low]="(100 - usage()!.fiveHour) <= 20">
           <span class="usage-scope">5h</span>
-          <span class="usage-remain">剩 {{ 100 - usage()!.fiveHour }}%</span>
+          <div class="usage-progress-bar" [title]="'剩餘 ' + (100 - usage()!.fiveHour) + '%'">
+            <div class="usage-progress-fill" [style.width.%]="100 - usage()!.fiveHour"></div>
+          </div>
+          <span class="usage-remain">{{ 100 - usage()!.fiveHour }}%</span>
           @if (usage()!.fiveHourReset) {
             <span class="usage-reset-time">↺ {{ usage()!.fiveHourReset | date:'HH:mm' }}</span>
           }
@@ -159,7 +162,10 @@
         <span class="usage-divider">|</span>
         <div class="usage-slot" [class.low]="(100 - usage()!.sevenDay) <= 20">
           <span class="usage-scope">7d</span>
-          <span class="usage-remain">剩 {{ 100 - usage()!.sevenDay }}%</span>
+          <div class="usage-progress-bar" [title]="'剩餘 ' + (100 - usage()!.sevenDay) + '%'">
+            <div class="usage-progress-fill" [style.width.%]="100 - usage()!.sevenDay"></div>
+          </div>
+          <span class="usage-remain">{{ 100 - usage()!.sevenDay }}%</span>
           @if (usage()!.sevenDayReset) {
             <span class="usage-reset-time">↺ {{ usage()!.sevenDayReset | date:'M/d HH:mm' }}</span>
           }

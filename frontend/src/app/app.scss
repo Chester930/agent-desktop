@@ -114,14 +114,30 @@ body {
 
   .usage-slot {
     display: flex;
-    align-items: baseline;
-    gap: 4px;
+    align-items: center;
+    gap: 6px;
 
     .usage-scope {
       color: $text-dim;
       font-size: 10px;
       font-weight: 600;
       text-transform: uppercase;
+    }
+
+    .usage-progress-bar {
+      width: 42px;
+      height: 6px;
+      background: var(--border, #2a2a2a);
+      border-radius: 3px;
+      overflow: hidden;
+      display: inline-flex;
+    }
+
+    .usage-progress-fill {
+      height: 100%;
+      background: #4ade80;
+      border-radius: 3px;
+      transition: width 0.3s ease;
     }
 
     .usage-remain {
@@ -137,6 +153,7 @@ body {
 
     &.low {
       .usage-remain { color: #f87171; }
+      .usage-progress-fill { background: #f87171; }
     }
   }
 }
