@@ -690,6 +690,9 @@ async def handle_sessions(request: web.Request) -> web.Response:
     _sync_index()
     custom_names = load_session_names()
 
+    # 只保留最近 30 天的對話
+    cutoff = datetime.now(timezone.utc).timestamp() - 30 * 24 * 3600
+
     def _proj_dir(file_path: str) -> str:
         if not file_path:
             return ""
@@ -705,14 +708,17 @@ async def handle_sessions(request: web.Request) -> web.Response:
                     FROM sessions_fts f
                     JOIN sessions s ON s.id = f.id
                     WHERE sessions_fts MATCH ?
+                      AND s.mtime >= ?
                     ORDER BY s.mtime DESC
-                """, (q,)).fetchall()
+                """, (q, cutoff)).fetchall()
             else:
                 rows = c.execute("""
                     SELECT id, title, mtime, message_count, file_path, project_path,
                            substr(search_text, 1, 120) AS snippet
-                    FROM sessions ORDER BY mtime DESC
-                """).fetchall()
+                    FROM sessions
+                    WHERE mtime >= ?
+                    ORDER BY mtime DESC
+                """, (cutoff,)).fetchall()
         total = len(rows)
         items = [
             {
