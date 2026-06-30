@@ -147,7 +147,36 @@
     <button class="icon-btn" (click)="sidebarOpen.set(!sidebarOpen())" title="切換側欄" aria-label="切換側欄">☰</button>
     <span class="logo">⚡ Claude 桌面版</span>
 
-
+    @if (usage()) {
+      <div class="usage-bar-group">
+        <div class="usage-item"
+             [title]="'5小時用量：' + usage()!.fiveHour + '%\n重置：' + (usage()!.fiveHourReset | date:'MM/dd HH:mm')">
+          <span class="usage-label">5h</span>
+          <div class="usage-track">
+            <div class="usage-fill"
+                 [style.width.%]="usage()!.fiveHour"
+                 [class.warn]="usage()!.fiveHour >= 70"
+                 [class.crit]="usage()!.fiveHour >= 90"></div>
+          </div>
+          <span class="usage-pct" [class.warn]="usage()!.fiveHour >= 70" [class.crit]="usage()!.fiveHour >= 90">
+            {{ usage()!.fiveHour }}%
+          </span>
+        </div>
+        <div class="usage-item"
+             [title]="'7天用量：' + usage()!.sevenDay + '%\n重置：' + (usage()!.sevenDayReset | date:'MM/dd HH:mm')">
+          <span class="usage-label">7d</span>
+          <div class="usage-track">
+            <div class="usage-fill"
+                 [style.width.%]="usage()!.sevenDay"
+                 [class.warn]="usage()!.sevenDay >= 70"
+                 [class.crit]="usage()!.sevenDay >= 90"></div>
+          </div>
+          <span class="usage-pct" [class.warn]="usage()!.sevenDay >= 70" [class.crit]="usage()!.sevenDay >= 90">
+            {{ usage()!.sevenDay }}%
+          </span>
+        </div>
+      </div>
+    }
 
     <div class="topbar-right">
       <!-- update progress (保留，有更新時才出現) -->

@@ -262,6 +262,10 @@ export class ClaudeService {
     return this.http.get<{ messages: ChatMessage[] }>(`${this.api}/sessions/${sessionId}/messages`);
   }
 
+  getUsage(): Observable<any> {
+    return this.http.get<any>(`${this.api}/usage`);
+  }
+
   deleteSession(id: string): Observable<any> {
     return this.http.delete(`${this.api}/sessions/${id}`);
   }

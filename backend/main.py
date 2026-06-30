@@ -289,6 +289,9 @@ active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
 
+# Usage API 快取（5 分鐘）
+_usage_cache: dict = {"data": None, "expires": 0.0}
+
 # Local MCP config (Docker metadata, compose paths, etc.)
 LOCAL_MCP_CONFIG_FILE = CLAUDE_HOME / "claude-desktop-local-mcps.json"
 
@@ -874,6 +877,50 @@ async def handle_session_messages(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
     return web.json_response({"messages": messages})
+
+
+async def handle_usage(request: web.Request) -> web.Response:
+    """GET /api/usage — 查詢 Claude Code 用量，快取 5 分鐘"""
+    import time as _time
+
+    now = _time.time()
+    if _usage_cache["data"] and now < _usage_cache["expires"]:
+        return web.json_response(_usage_cache["data"])
+
+    # 讀取 OAuth token
+    creds_file = CLAUDE_HOME / ".credentials.json"
+    if not creds_file.exists():
+        return web.json_response({"error": "credentials not found"}, status=404)
+    try:
+        creds = json.loads(creds_file.read_text(encoding="utf-8"))
+        access_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+        if not access_token:
+            return web.json_response({"error": "no access token"}, status=401)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    # 呼叫 Anthropic usage API
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.anthropic.com/api/oauth/usage",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "anthropic-beta": "oauth-2025-04-20",
+                    "User-Agent": "claude-code/2.1.196",
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    return web.json_response({"error": f"API {resp.status}: {text[:200]}"}, status=resp.status)
+                data = await resp.json()
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=502)
+
+    _usage_cache["data"] = data
+    _usage_cache["expires"] = now + 300  # 5 分鐘
+    return web.json_response(data)
 
 
 async def handle_agents(request: web.Request) -> web.Response:
@@ -2960,6 +3007,7 @@ def build_app() -> web.Application:
     # Routes grouped by resource path to avoid double-CORS registration
     route_groups: dict[str, list[tuple[str, any]]] = {}
     for method, path, handler in [
+        ("GET",    "/api/usage",           handle_usage),
         ("POST",   "/api/chat",           handle_chat),
         ("POST",   "/api/chat/stop",      handle_chat_stop),
         ("GET",    "/api/backup",          handle_backup),

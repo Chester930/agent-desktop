@@ -390,6 +390,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   tokenUsage = signal<{ input: number; output: number; cost: number } | null>(null);
   readonly Math = Math;
 
+  // Claude Code 用量
+  usage = signal<{ fiveHour: number; fiveHourReset: string; sevenDay: number; sevenDayReset: string } | null>(null);
+  private usageTimer: any = null;
+
   // Attachments
   attachedFiles = signal<{ name: string; path: string; preview?: string }[]>([]);
   isUploading = signal(false);
@@ -2414,6 +2418,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     // T06 — 每秒更新 tool timer
     this._toolTickTimer = setInterval(() => this.toolTick.update(v => v + 1), 1000);
 
+    // 用量：啟動時取一次，之後每 5 分鐘輪詢
+    const fetchUsage = () => this.claude.getUsage().subscribe({
+      next: (d: any) => this.usage.set({
+        fiveHour:      d.five_hour?.utilization ?? 0,
+        fiveHourReset: d.five_hour?.resets_at   ?? '',
+        sevenDay:      d.seven_day?.utilization  ?? 0,
+        sevenDayReset: d.seven_day?.resets_at    ?? '',
+      }),
+      error: () => {},
+    });
+    fetchUsage();
+    this.usageTimer = setInterval(fetchUsage, 5 * 60 * 1000);
+
     // #22 — Wire Electron auto-updater IPC events
     const eAPI = (window as any).electronAPI;
     if (eAPI?.onUpdateProgress) eAPI.onUpdateProgress((pct: number) => this.updateProgress.set(pct));
@@ -2421,7 +2438,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (eAPI?.onUpdateReady) eAPI.onUpdateReady(() => { this.updateReady.set(true); this.updateProgress.set(100); });
   }
 
-  ngOnDestroy() { clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); }
+  ngOnDestroy() { clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); clearInterval(this.usageTimer); }
 
   // T03 — Ctrl+V 截圖貼上
   @HostListener('paste', ['$event'])
