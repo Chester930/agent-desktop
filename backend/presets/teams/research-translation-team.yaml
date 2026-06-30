@@ -1,0 +1,8 @@
+name: research-translation-team
+description: 整合網路情報研究員與翻譯專家，提供從全球網路收集最新情報並翻譯整理為繁體中文的一站式服務。
+leader: researcher-agent
+members:
+  - agent: researcher-agent
+    role: 全網檢索與網頁資料提取
+  - agent: translator-agent
+    role: 專業外文資料翻譯與本地化修飾

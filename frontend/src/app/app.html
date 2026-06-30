@@ -496,6 +496,7 @@
                     draggable="true"
                     (dragstart)="onSessionDragStart(s, $event)"
                     (click)="loadSession(s)"
+                    (dblclick)="loadSession(s)"
                     (contextmenu)="onSessionContextMenu(s, $event)">
 
                     <!-- 上排：顏色點 + 標題 + 訊息數 -->
@@ -790,10 +791,10 @@
                 
                 <!-- 對話框專屬代理人選擇器 -->
                 <div class="panel-agent-selector" (click)="$event.stopPropagation()" style="display: inline-flex; align-items: center; margin-right: 6px; margin-left: 2px;">
-                  <select [value]="tab.selectedAgent || ''" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
-                    <option value="">🤖 無代理人</option>
+                  <select [value]="tab.selectedAgent || ''" [disabled]="!!tab.selectedAgent" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
+                    <option value="" [selected]="!tab.selectedAgent">🤖 無代理人</option>
                     @for (a of dropdownAgents(); track a.id) {
-                      <option [value]="a.id">🤖 {{ a.name }}</option>
+                      <option [value]="a.id" [selected]="a.id === tab.selectedAgent">🤖 {{ a.name }}</option>
                     }
                   </select>
                 </div>
@@ -1251,7 +1252,7 @@
                 </div>
               }
               <!-- 建立 Agent 按鈕 -->
-              <div style="padding:8px 4px;">
+              <div class="sticky-create-btn-wrap">
                 <button class="btn-secondary" style="width:100%;font-size:12px;" (click)="openAgentEditor()">＋ 建立 Agent</button>
               </div>
             </div>
@@ -1264,7 +1265,7 @@
                   <div class="card-header-row">
                     <span class="card-name">{{ t.name }}</span>
                     <div class="agent-action-btns">
-                      <button class="agent-activate-btn" (click)="openTeamRun(t)" title="發任務給此 Team">▶ 發任務</button>
+                      <button class="agent-activate-btn" style="background:#28a745;color:white;" (click)="selectTeamLeader(t)" title="發任務給此 Team（與組長對話）">▶ 發任務</button>
                       <button class="agent-edit-btn" (click)="openTeamEditor(t)" title="編輯 Team">✎</button>
                     </div>
                   </div>
@@ -1274,8 +1275,9 @@
                   <!-- 成員列表 -->
                   <div class="team-members-row">
                     @for (m of t.members; track m.agent) {
-                      <span class="team-member-chip" [title]="m.role || m.agent">
-                        <span class="member-dot">●</span> {{ m.agent }}
+                      <span class="team-member-chip" [title]="m.role || m.agent" [style.border-color]="t.leader === m.agent ? '#d4a853' : null">
+                        <span class="member-dot" [style.color]="t.leader === m.agent ? '#d4a853' : null">●</span> {{ m.agent }}
+                        @if (t.leader === m.agent) { <span style="color:#d4a853;margin-left:2px;font-weight:bold;" title="組長 (Team Leader)">👑</span> }
                         @if (m.role) { <span class="member-role">{{ m.role }}</span> }
                       </span>
                     }
@@ -1294,7 +1296,7 @@
                   </div>
                 </div>
               }
-              <div style="padding:8px 4px;">
+              <div class="sticky-create-btn-wrap">
                 <button class="btn-secondary" style="width:100%;font-size:12px;" (click)="openTeamEditor()">＋ 建立 Team</button>
               </div>
             </div>
@@ -2358,6 +2360,24 @@
               (input)="teamEditorData.set({...teamEditorData(), description: $any($event.target).value})"
               placeholder="這個 Team 的用途">
           </label>
+          <label class="editor-label">組長 (Leader)
+            <select class="memory-project-select"
+              [value]="teamEditorData().leader || ''"
+              (change)="onTeamLeaderChange($any($event.target).value)">
+              <option value="">預設組長 (第一個成員)</option>
+              @if ((teamEditorData().members ?? []).length === 0) {
+                @for (a of dropdownAgents(); track a.id) {
+                  <option [value]="a.id" [selected]="a.id === teamEditorData().leader">@{{ a.name }}</option>
+                }
+              } @else {
+                @for (m of teamEditorData().members ?? []; track m.agent) {
+                  @if (m.agent) {
+                    <option [value]="m.agent" [selected]="m.agent === teamEditorData().leader">@{{ getAgentName(m.agent) }}</option>
+                  }
+                }
+              }
+            </select>
+          </label>
         </div>
         <!-- 成員 -->
         <div class="editor-section">
@@ -2369,7 +2389,7 @@
                 (change)="teamEditorUpdateMember($index, 'agent', $any($event.target).value)">
                 <option value="">選擇 Agent…</option>
                 @for (a of dropdownAgents(); track a.id) {
-                  <option [value]="a.id">@{{ a.name }}</option>
+                  <option [value]="a.id" [selected]="a.id === m.agent">@{{ a.name }}</option>
                 }
               </select>
               <input class="editor-input" style="flex:1" placeholder="角色說明（前端/審查…）"

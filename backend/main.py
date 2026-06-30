@@ -615,14 +615,39 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     model        = data.get("model", "")
     effort       = data.get("effort", "")
     permission_mode = data.get("permission_mode", "")
+    team_id      = data.get("team_id", "")
 
     claude_bin = bin_override if bin_override else CLAUDE_BIN
     cwd        = cwd_override if (cwd_override and Path(cwd_override).is_dir()) else str(Path.home())
 
+    team_info = None
+    if team_id:
+        f_team = TEAMS_DIR / f"{team_id}.yaml"
+        if f_team.exists():
+            try:
+                team_info = _team_dict(f_team)
+            except Exception:
+                pass
+
     soul = get_concatenated_soul()
     full_message = f"[System Persona]\n{soul}\n\n{message}" if soul else message
 
-    mem_ctx = build_memory_context(agent, cwd)
+    if team_id and team_info:
+        all_members = [m["agent"] for m in team_info.get("members", [])]
+        mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd)
+        
+        team_name = team_info.get("name", team_id)
+        members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
+        team_prompt = (
+            f"[團隊組長身分指引]\n"
+            f"你現在是團隊「{team_name}」的組長（Team Leader）。\n"
+            f"你的團隊成員如下：\n{members_str}\n"
+            f"當使用者交辦任務時，請以團隊組長的角色進行回覆與規畫。你可以運用其他組員的專長來協助引導對話與思考。\n\n"
+        )
+        full_message = team_prompt + full_message
+    else:
+        mem_ctx = build_memory_context(agent, cwd)
+
     if mem_ctx:
         full_message = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{full_message}"
 
@@ -996,15 +1021,47 @@ def _desc_from_skill_dir(skill_dir: Path) -> str:
 def _parse_yaml_list(lines: list, start: int):
     """Parse indented YAML list starting at index. Returns (items, next_index)."""
     items, i = [], start
+    current_item = None
+    base_indent = None
+    
     while i < len(lines):
-        s = lines[i].lstrip()
-        if s.startswith("- "):
-            items.append(s[2:].strip().strip("\"'"))
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             i += 1
-        elif lines[i].strip() == "":
+            continue
+            
+        indent = len(line) - len(line.lstrip())
+        
+        m_list_item = _re.match(r'^\s*-\s+(.*)', line)
+        if m_list_item:
+            if base_indent is None:
+                base_indent = indent
+                
+            if current_item is not None:
+                items.append(current_item)
+                current_item = None
+                
+            rest = m_list_item.group(1).strip()
+            m_kv = _re.match(r'^([\w][\w-]*):\s*(.*)', rest)
+            if m_kv:
+                k, v = m_kv.group(1), m_kv.group(2).strip().strip("\"'")
+                current_item = {k: v}
+            else:
+                items.append(rest.strip("\"'"))
             i += 1
         else:
-            break
+            m_kv = _re.match(r'^\s*([\w][\w-]*):\s*(.*)', line)
+            if current_item is not None and m_kv and base_indent is not None and indent > base_indent:
+                k, v = m_kv.group(1), m_kv.group(2).strip().strip("\"'")
+                current_item[k] = v
+                i += 1
+            else:
+                break
+                
+    if current_item is not None:
+        items.append(current_item)
+        
     return items, i
 
 
@@ -1460,10 +1517,14 @@ def _team_dict(f: Path) -> dict:
             members.append({"agent": m.get("agent", ""), "role": m.get("role", "")})
         elif isinstance(m, str):
             members.append({"agent": m, "role": ""})
+    
+    # 預設首個成員為組長
+    default_leader = members[0]["agent"] if members else ""
     return {
         "id":          f.stem,
         "name":        raw.get("name", f.stem),
         "description": raw.get("description", ""),
+        "leader":      raw.get("leader", "") or default_leader,
         "members":     members,
     }
 
@@ -1489,6 +1550,7 @@ async def handle_team_get(request: web.Request) -> web.Response:
 
 async def handle_team_post(request: web.Request) -> web.Response:
     data = await request.json()
+    print("DEBUG: handle_team_post received data:", data)
     import re as _re3
     raw = data.get("name", "").strip()
     tid = _re3.sub(r"[^\w-]", "-", raw).lower().strip("-") or "new-team"
@@ -1499,6 +1561,7 @@ async def handle_team_post(request: web.Request) -> web.Response:
     _write_team_yaml(f, {
         "name": raw or tid,
         "description": data.get("description", ""),
+        "leader": data.get("leader", ""),
         "members": data.get("members", []),
     })
     return web.json_response({"ok": True, "id": tid})
@@ -1510,12 +1573,16 @@ async def handle_team_put(request: web.Request) -> web.Response:
     if not f.exists():
         return web.json_response({"error": "not found"}, status=404)
     data = await request.json()
+    print("DEBUG: handle_team_put received data:", data)
     current = _team_dict(f)
+    print("DEBUG: handle_team_put current database item:", current)
     payload = {
         "name":        data.get("name", current["name"]),
         "description": data.get("description", current["description"]),
+        "leader":      data.get("leader", current.get("leader", "")),
         "members":     data.get("members", current["members"]),
     }
+    print("DEBUG: handle_team_put final payload to write:", payload)
     _write_team_yaml(f, payload)
     return web.json_response({"ok": True})
 
@@ -2988,10 +3055,105 @@ async def handle_config_put(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "slug": cfg.get("projectDir", "")})
 
 
+def _init_presets() -> None:
+    """如果 CLAUDE_HOME 下的 skills/agents/teams 目錄中沒有對應的 preset，就從專案 preset 目錄複製過去。
+    同時將預設的 MCP 伺服器設定合併到 ~/.claude/claude.json 中。"""
+    # 測試環境不執行
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return
+
+    try:
+        presets_dir = Path(__file__).parent / "presets"
+        if not presets_dir.exists():
+            _log(f"Presets directory not found at: {presets_dir}")
+            return
+
+        # 確保 CLAUDE_HOME 底下的目標目錄存在
+        AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        TEAMS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 1. 複製 skills
+        p_skills = presets_dir / "skills"
+        if p_skills.exists():
+            for src in p_skills.iterdir():
+                dest = SKILLS_DIR / src.name
+                if not dest.exists():
+                    if src.is_dir():
+                        shutil.copytree(src, dest)
+                    else:
+                        shutil.copy2(src, dest)
+                    _log(f"Copied preset skill: {src.name} -> {dest}")
+
+        # 2. 複製 agents
+        p_agents = presets_dir / "agents"
+        if p_agents.exists():
+            for src in p_agents.iterdir():
+                dest = AGENTS_DIR / src.name
+                if not dest.exists():
+                    if src.is_dir():
+                        shutil.copytree(src, dest)
+                    else:
+                        shutil.copy2(src, dest)
+                    _log(f"Copied preset agent: {src.name} -> {dest}")
+
+        # 3. 複製 teams
+        p_teams = presets_dir / "teams"
+        if p_teams.exists():
+            for src in p_teams.iterdir():
+                dest = TEAMS_DIR / src.name
+                if not dest.exists():
+                    shutil.copy2(src, dest)
+                    _log(f"Copied preset team: {src.name} -> {dest}")
+
+        # 4. 合併 MCP servers (claude.json)
+        p_claude_json = presets_dir / "claude.json"
+        if p_claude_json.exists():
+            dest_claude_json = CLAUDE_HOME / "claude.json"
+            
+            # 讀取 preset mcpServers
+            try:
+                preset_data = json.loads(p_claude_json.read_text(encoding="utf-8"))
+            except Exception as e:
+                preset_data = {}
+                _log(f"Error parsing preset claude.json: {e}")
+
+            preset_mcp = preset_data.get("mcpServers", {})
+            if preset_mcp:
+                # 讀取使用者現有的 claude.json
+                user_data = {}
+                if dest_claude_json.exists():
+                    try:
+                        user_data = json.loads(dest_claude_json.read_text(encoding="utf-8"))
+                    except Exception as e:
+                        _log(f"Error parsing user claude.json, resetting: {e}")
+                
+                if not isinstance(user_data, dict):
+                    user_data = {}
+                if "mcpServers" not in user_data or not isinstance(user_data["mcpServers"], dict):
+                    user_data["mcpServers"] = {}
+
+                # 合併
+                changed = False
+                for k, v in preset_mcp.items():
+                    if k not in user_data["mcpServers"]:
+                        user_data["mcpServers"][k] = v
+                        changed = True
+                        _log(f"Added preset MCP server: {k}")
+
+                if changed:
+                    CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
+                    dest_claude_json.write_text(json.dumps(user_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    except Exception as e:
+        _log(f"Error initializing presets: {e}")
+
+
 def build_app() -> web.Application:
     _init_db()
     _migrate_db()
     _backfill_project_paths()
+    _init_presets()
     app = web.Application()
 
     cors = aiohttp_cors.setup(app, defaults={

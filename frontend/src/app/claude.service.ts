@@ -33,7 +33,7 @@ export interface ChatMessage {
 }
 
 export interface TeamMember { agent: string; role: string; }
-export interface Team { id: string; name: string; description: string; members: TeamMember[]; }
+export interface Team { id: string; name: string; description: string; leader?: string; members: TeamMember[]; }
 export interface TeamRunStep {
   agent: string; role: string; status: 'pending' | 'running' | 'done' | 'error'; output: string;
 }
@@ -68,6 +68,7 @@ export interface ChatTab {
   sessionSkills: string[];  // 一次性：本對話框有效
   sessionMcps: string[];    // 一次性：本對話框有效
   projectDir: string;       // 建立時繼承 workDir，送出第一則訊息後視為鎖定
+  teamId?: string;          // 綁定的團隊 ID，若有則為與組長對話情境
 }
 
 @Injectable({ providedIn: 'root' })
@@ -423,7 +424,8 @@ export class ClaudeService {
     onDone: () => void,
     onError: (e: any) => void,
     attachments: string[] = [],
-    cwdOverride?: string        // 對話欄鎖定的目錄，優先於 settings.workDir
+    cwdOverride?: string,        // 對話欄鎖定的目錄，優先於 settings.workDir
+    teamId?: string
   ): () => void {
     const controller = new AbortController();
     const s = this.settings.get();
@@ -441,6 +443,7 @@ export class ClaudeService {
         model: s.model,
         effort: s.effort,
         permission_mode: s.permissionMode,
+        team_id: teamId,
       }),
     })
       .then(async (res) => {

@@ -515,7 +515,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.chatTabs().find(t => t.id === this.activeChatId());
   }
 
-  private makeTab(label = '新對話', projectDir?: string): ChatTab {
+  private makeTab(label = '新對話', projectDir?: string, teamId?: string): ChatTab {
     return {
       id: `tab-${Date.now()}`,
       clientId: `client-${Date.now()}`,
@@ -527,6 +527,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       sessionSkills: [],
       sessionMcps: [],
       projectDir: projectDir ?? this.settings.get().workDir,
+      teamId,
     };
   }
 
@@ -1561,14 +1562,63 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const srv = this.mcpServers().find(s => s.name === name || s.id === name);
       if (srv && srv.status !== 'running') this.startMcp(srv.name);
     });
-    // 注入 --agent 旗標到當前對話欄
-    const tab = this.chatTabs().find(t => t.id === this.activeChatId());
-    if (tab) {
-      this.chatTabs.update(tabs => tabs.map(t =>
-        t.id === tab.id ? { ...t, selectedAgent: agent.id } : t
-      ));
-      this.selectedAgent.set(agent.id);
+
+    // 儲存當前 active tab 的狀態，避免狀態流失
+    this.saveCurrentTab();
+
+    const agentName = agent.name || agent.id;
+    const tabLabel = `與 ${agentName} 對話`;
+
+    // 檢查是否已經有現成的 chat tab 的 selectedAgent 是這個 Agent，且為個人對話 (無 teamId)
+    const existingTab = this.chatTabs().find(tab => tab.selectedAgent === agent.id && !tab.teamId);
+
+    if (existingTab) {
+      // 如果有，切換到該對話分頁
+      this.switchChatTab(existingTab.id);
+    } else {
+      const activeId = this.activeChatId();
+      const activeTabObj = this.chatTabs().find(x => x.id === activeId);
+      const activeTabIsEmpty = activeTabObj && (!activeTabObj.messages || activeTabObj.messages.length === 0);
+
+      // 如果沒有，看目前 tab 數量是否小於 4
+      if (this.chatTabs().length < 4) {
+        // 建立新對話分頁
+        const tab = this.makeTab(tabLabel);
+        tab.selectedAgent = agent.id;
+        
+        if (activeTabIsEmpty) {
+          // 如果原本對話沒有內容，在添加 Agent 對話的同時，移除(關閉)原本的空對話 Tab
+          this.chatTabs.update(tabs => [...tabs.filter(x => x.id !== activeId), tab]);
+        } else {
+          this.chatTabs.update(tabs => [...tabs, tab]);
+        }
+        
+        // 延遲切換，確保 chatTabs 陣列已更新，並完整同步 Agent 與狀態
+        setTimeout(() => {
+          this.switchChatTab(tab.id);
+        }, 0);
+      } else {
+        // 如果已經 4 個分頁了，就將當前 active tab 的 agent 切換成該 Agent
+        if (activeId) {
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === activeId ? { ...tab, selectedAgent: agent.id, label: tabLabel } : tab
+          ));
+          this.selectedAgent.set(agent.id);
+        } else {
+          // 沒有 activeId 的話就使用第一個 tab
+          const firstTab = this.chatTabs()[0];
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === firstTab.id ? { ...tab, selectedAgent: agent.id, label: tabLabel } : tab
+          ));
+          this.switchChatTab(firstTab.id);
+        }
+      }
     }
+
+    // 自動讓輸入框獲取焦點，方便對話
+    setTimeout(() => {
+      this.inputRef?.nativeElement?.focus();
+    }, 100);
   }
 
   agentEditorToggleList(field: 'skills' | 'memory' | 'mcp' | 'output_memory', value: string) {
@@ -1648,9 +1698,40 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.teamEditorOpen.set(true);
   }
 
-  saveTeamEditor() {
+  getAgentName(id: string): string {
+    const a = this.dropdownAgents().find(x => x.id === id);
+    return a ? a.name : id;
+  }
+
+  onTeamLeaderChange(val: string) {
     const d = this.teamEditorData();
+    const members = d.members ?? [];
+    if (members.length === 0 && val) {
+      this.teamEditorData.set({
+        ...d,
+        leader: val,
+        members: [{ agent: val, role: '組長' }]
+      });
+    } else {
+      this.teamEditorData.set({
+        ...d,
+        leader: val
+      });
+    }
+  }
+
+  saveTeamEditor() {
+    const d = { ...this.teamEditorData() };
     if (!d.name?.trim()) return;
+
+    // 確保組長只能是成員之一。如果沒有設定組長，或該組長不在成員名單中，預設為第一個成員
+    const members = d.members ?? [];
+    const memberIds = members.map(m => m.agent).filter(Boolean);
+
+    if (!d.leader || !memberIds.includes(d.leader)) {
+      d.leader = memberIds.length > 0 ? memberIds[0] : '';
+    }
+
     const obs = this.teamEditorIsNew()
       ? this.claude.createTeam(d)
       : this.claude.updateTeam(d.id!, d);
@@ -1679,6 +1760,76 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   activateTeam(team: Team) {
     this.openTeamRun(team);
+  }
+
+  selectTeamLeader(t: Team) {
+    if (!t.leader) {
+      alert(`此團隊 "${t.name}" 尚未設定組長 (Team Leader)！`);
+      return;
+    }
+
+    const leaderAgent = this.dropdownAgents().find(a => a.id === t.leader);
+    if (!leaderAgent) {
+      alert(`找不到組長代理人 "${t.leader}"，請確認該代理人已建立！`);
+      return;
+    }
+
+    // 1. 儲存當前 active tab 的狀態，避免狀態流失
+    this.saveCurrentTab();
+
+    const leaderName = leaderAgent.name || t.leader;
+    const tabLabel = `與組長對話 (${leaderName})`;
+
+    // 2. 檢查是否已經有現成的 chat tab 綁定了該團隊的組長對話
+    const existingTab = this.chatTabs().find(tab => tab.selectedAgent === t.leader && tab.teamId === t.id);
+
+    if (existingTab) {
+      // 如果有，切換到該對話分頁
+      this.switchChatTab(existingTab.id);
+    } else {
+      const activeId = this.activeChatId();
+      const activeTabObj = this.chatTabs().find(x => x.id === activeId);
+      const activeTabIsEmpty = activeTabObj && (!activeTabObj.messages || activeTabObj.messages.length === 0);
+
+      // 如果沒有，看目前 tab 數量是否小於 4
+      if (this.chatTabs().length < 4) {
+        // 建立新對話分頁，傳入團隊 ID 進行綁定
+        const tab = this.makeTab(tabLabel, undefined, t.id);
+        tab.selectedAgent = t.leader;
+        
+        if (activeTabIsEmpty) {
+          // 如果原本對話沒有內容，在添加組長對話的同時，移除(關閉)原本的空對話 Tab
+          this.chatTabs.update(tabs => [...tabs.filter(x => x.id !== activeId), tab]);
+        } else {
+          this.chatTabs.update(tabs => [...tabs, tab]);
+        }
+        
+        // 延遲切換，確保 chatTabs 陣列已更新，並完整同步 Agent 與狀態
+        setTimeout(() => {
+          this.switchChatTab(tab.id);
+        }, 0);
+      } else {
+        // 如果已經 4 個分頁了，就將當前 active tab 的 agent 切換成該組長
+        if (activeId) {
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === activeId ? { ...tab, selectedAgent: t.leader!, label: tabLabel } : tab
+          ));
+          this.selectedAgent.set(t.leader);
+        } else {
+          // 沒有 activeId 的話就使用第一個 tab
+          const firstTab = this.chatTabs()[0];
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === firstTab.id ? { ...tab, selectedAgent: t.leader!, label: tabLabel } : tab
+          ));
+          this.switchChatTab(firstTab.id);
+        }
+      }
+    }
+
+    // 3. 自動讓輸入框獲取焦點，方便對話
+    setTimeout(() => {
+      this.inputRef?.nativeElement?.focus();
+    }, 100);
   }
 
   // ── Team Run (Phase 3) ────────────────────────────────────────────────────
@@ -2856,7 +3007,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     } else {
       this.stopFn = this.claude.streamChat(
         text, this.selectedAgent(), onEvent, onDone, onError, attachments,
-        this.activeChat?.projectDir  // 對話欄鎖定的目錄
+        this.activeChat?.projectDir,  // 對話欄鎖定的目錄
+        this.activeChat?.teamId       // 綁定的團隊 ID
       );
     }
   }
@@ -3272,13 +3424,25 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   loadSession(s: Session) {
-    // 目前 active tab 沒有任何訊息 → 直接取代（不另開新欄）
-    const activeHasMessages = (this.activeChat?.messages.length ?? 0) > 0;
-    if (activeHasMessages && this.chatTabs().length < 4) {
-      this.addChatTab();
-    } else {
+    const activeIsEmpty = (this.activeChat?.messages?.length ?? 0) === 0;
+
+    if (activeIsEmpty) {
+      // 如果當前 activeChat 是空白的，直接在當前 activeChat 中載入
+      // 同時，將其他空白 Tab 都關閉
+      const currentActiveId = this.activeChatId();
+      this.chatTabs.update(tabs => tabs.filter(t => t.id === currentActiveId || (t.messages?.length ?? 0) > 0));
       this.saveCurrentTab();
+    } else {
+      // 如果當前 activeChat 有內容，我們必須開一個新 Tab 來載入歷史對話
+      // 同時在開新 Tab 之前，將所有空白的 Tab 都關閉
+      this.chatTabs.update(tabs => tabs.filter(t => (t.messages?.length ?? 0) > 0));
+      if (this.chatTabs().length < 4) {
+        this.addChatTab();
+      } else {
+        this.saveCurrentTab();
+      }
     }
+
     const id = this.activeChatId();
     this.chatTabs.update(tabs => tabs.map(t =>
       t.id === id ? { ...t, label: s.title.slice(0, 20) } : t

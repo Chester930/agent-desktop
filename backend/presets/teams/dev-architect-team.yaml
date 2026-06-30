@@ -1,0 +1,8 @@
+name: dev-architect-team
+description: 由系統架構師與資深審查員組成的核心開發團隊，提供從架構設計到代碼審查的完整支援。
+leader: architect-agent
+members:
+  - agent: architect-agent
+    role: 系統架構規劃與技術選型
+  - agent: reviewer-agent
+    role: 程式碼質量與效能審查

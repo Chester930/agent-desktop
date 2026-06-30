@@ -638,6 +638,16 @@ body {
 
 .panel-list { display: flex; flex-direction: column; gap: 6px; }
 
+.sticky-create-btn-wrap {
+  position: sticky;
+  bottom: -8px;
+  background: $surface;
+  padding: 8px 4px 0 4px;
+  z-index: 10;
+  margin-top: 12px;
+  border-top: 1px solid $border;
+}
+
 .panel-card {
   background: $surface2;
   border: 1px solid $border;

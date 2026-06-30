@@ -13,12 +13,12 @@ for %%A in (%*) do (
 
 :: ── Docker mode ───────────────────────────────────────────────────────────────
 if "%DOCKER_MODE%"=="1" (
-  echo [Docker] Starting backend + ngrok via Docker Compose...
+  echo [Docker] Starting backend + dev-frontend via Docker Compose [dev profile]...
   cd /d %~dp0
   if "%BUILD_MODE%"=="1" (
-    docker compose up -d --build
+    docker compose --profile dev up -d --build
   ) else (
-    docker compose up -d
+    docker compose --profile dev up -d
   )
   if errorlevel 1 (
     echo [Error] Docker Compose failed. Is Docker Desktop running?
@@ -28,15 +28,12 @@ if "%DOCKER_MODE%"=="1" (
   :: Wait for backend to be healthy
   echo Waiting for backend...
   :wait_backend
-  docker inspect --format="{{.State.Health.Status}}" claude-desktop-backend 2>nul | findstr /i "healthy" >nul
+  docker inspect --format="{{.State.Health.Status}}" claude-desktop-backend-dev 2>nul | findstr /i "healthy" >nul
   if errorlevel 1 ( timeout /t 2 /nobreak >nul & goto wait_backend )
 
-  :: Get ngrok public URL
   echo.
-  for /f "delims=" %%U in ('powershell -NoProfile -Command "(Invoke-WebRequest -Uri http://localhost:4040/api/tunnels -UseBasicParsing | ConvertFrom-Json).tunnels[0].public_url" 2^>nul') do set NGROK_URL=%%U
   echo Backend:  http://localhost:8765
-  echo ngrok:    %NGROK_URL%
-  echo Webhook:  %NGROK_URL%/api/line/webhook
+  echo Frontend: http://localhost:4200 (Dev HMR)
   echo.
 
   :: Launch Electron (Docker mode: skip local backend, load from port 4200)
