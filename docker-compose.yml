@@ -6,7 +6,7 @@ services:
       - "8765:8765"
     volumes:
       - type: bind
-        source: ${CLAUDE_HOME:-C:/Users/666/.claude}
+        source: ${CLAUDE_HOME}
         target: /root/.claude
     environment:
       - CLAUDE_BIN=claude

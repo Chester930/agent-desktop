@@ -1,0 +1,52 @@
+# 開發環境用 — 前端跑 ng serve（熱重載），後端掛載原始碼自動重啟
+# 使用前請先執行：cp .env.example .env 並填入 CLAUDE_HOME
+#
+# 啟動：docker-compose -f docker-compose.dev.yml up --build
+# 停止：docker-compose -f docker-compose.dev.yml down
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: claude-desktop-backend-dev
+    ports:
+      - "8765:8765"
+    volumes:
+      # 掛載原始碼；watchmedo 偵測變動後自動重啟 Python
+      - ./backend:/app
+      - type: bind
+        source: ${CLAUDE_HOME}
+        target: /root/.claude
+    environment:
+      - CLAUDE_BIN=claude
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: claude-desktop-frontend-dev
+    ports:
+      - "4200:4200"
+    volumes:
+      # 掛載整個前端目錄以支援熱重載
+      - ./frontend:/app
+      # 用具名 volume 保留容器內的 node_modules，避免被 host 覆蓋
+      - frontend_node_modules:/app/node_modules
+    environment:
+      # 讓 chokidar 改用輪詢；在 Windows Docker Desktop 上是跨 FS 邊界所必須
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=2000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  frontend_node_modules:
