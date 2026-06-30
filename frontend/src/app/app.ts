@@ -1697,6 +1697,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const task = this.teamRunTask().trim();
     if (!team || !task) return;
     this.teamRunLoading.set(true);
+    this.expandedOutputs.set([]);
 
     this.teamRunState.set({
       id: '', team_id: team.id, name: team.name, task,
@@ -1752,6 +1753,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   closeTeamRun() {
     if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
     this.teamRunOpen.set(false);
+  }
+
+  // ── Team Run — step output expand/collapse ────────────────────────────────
+  expandedOutputs = signal<number[]>([]);
+
+  toggleStepOutput(idx: number) {
+    this.expandedOutputs.update(list =>
+      list.includes(idx) ? list.filter(i => i !== idx) : [...list, idx]
+    );
+  }
+
+  copyText(text: string) {
+    navigator.clipboard.writeText(text).then(() => this.showToast('已複製到剪貼簿', 'success', 1500));
   }
 
   // ── HR Agent (Phase 4) ────────────────────────────────────────────────────
@@ -1840,6 +1854,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.teamRunTask.set(task);
     this.teamRunLoading.set(true);
     this.teamRunOpen.set(true);
+    this.expandedOutputs.set([]);
 
     this.teamRunState.set({
       id: '', team_id: '', name: plan.name || '自動組隊任務', task,

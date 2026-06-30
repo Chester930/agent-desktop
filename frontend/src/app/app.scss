@@ -4543,6 +4543,36 @@ body[style*="ns-resize"] .mcp-divider-grip {
   margin-top: 6px; padding-left: 24px;
   white-space: pre-wrap; word-break: break-word;
   max-height: 160px; overflow-y: auto;
+  &.tr-step-output-expanded { max-height: 500px; }
+}
+.tr-output-toggle {
+  margin-left: 24px; margin-top: 2px;
+  background: none; border: none; padding: 2px 0;
+  font-size: 10px; color: #6ee7b7; cursor: pointer; opacity: 0.7;
+  &:hover { opacity: 1; }
+}
+
+.tr-summary {
+  margin: 0 18px 12px;
+  border: 1px solid rgba(110, 231, 183, 0.25);
+  border-radius: 6px;
+  background: rgba(110, 231, 183, 0.05);
+  padding: 10px 12px;
+}
+.tr-summary-label {
+  font-size: 11px; font-weight: 600; color: #6ee7b7;
+  margin-bottom: 6px; letter-spacing: 0.03em;
+}
+.tr-summary-body {
+  font-size: 11px; color: #b0b0b0; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 220px; overflow-y: auto;
+}
+.tr-summary-copy {
+  margin-top: 8px; background: none; border: 1px solid rgba(110,231,183,0.3);
+  border-radius: 4px; padding: 2px 10px; font-size: 10px; color: #6ee7b7;
+  cursor: pointer;
+  &:hover { background: rgba(110,231,183,0.08); }
 }
 
 .tr-footer {

@@ -2415,11 +2415,26 @@
                 <span class="tr-step-status-badge" [class]="'badge-' + step.status">{{ step.status }}</span>
               </div>
               @if (step.output) {
-                <div class="tr-step-output">{{ step.output | slice:0:600 }}{{ step.output.length > 600 ? '…' : '' }}</div>
+                <div class="tr-step-output" [class.tr-step-output-expanded]="expandedOutputs().includes($index)">
+                  {{ expandedOutputs().includes($index) ? step.output : (step.output | slice:0:400) }}{{ !expandedOutputs().includes($index) && step.output.length > 400 ? '…' : '' }}
+                </div>
+                @if (step.output.length > 400) {
+                  <button class="tr-output-toggle" (click)="toggleStepOutput($index)">
+                    {{ expandedOutputs().includes($index) ? '▲ 收合' : '▼ 展開完整輸出' }}
+                  </button>
+                }
               }
             </div>
           }
         </div>
+
+        @if (teamRunState()?.summary) {
+          <div class="tr-summary">
+            <div class="tr-summary-label">📋 執行摘要</div>
+            <div class="tr-summary-body">{{ teamRunState()!.summary }}</div>
+            <button class="tr-summary-copy" (click)="copyText(teamRunState()!.summary)">📋 複製摘要</button>
+          </div>
+        }
 
         <div class="tr-footer">
           @if (teamRunState()?.status === 'running') {
