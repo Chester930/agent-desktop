@@ -32,6 +32,13 @@ export interface ChatMessage {
   cost?: number;
   teamRun?: TeamRun;
   agentId?: string;
+  pendingExec?: {
+    teamId: string;
+    projectPath: string;
+    task: string;
+    projectName: string;
+  };
+  hasExecuted?: boolean;
 }
 
 export interface TeamMember { agent: string; role: string; }
@@ -310,8 +317,12 @@ export class ClaudeService {
     return fetch(`${this.api}/restore`, { method: 'POST', body: form }).then(r => r.json());
   }
 
-  stopChat(): Observable<any> {
-    return this.http.post(`${this.api}/chat/stop`, { client_id: this.clientId });
+  stopChat(clientId?: string): Observable<any> {
+    return this.http.post(`${this.api}/chat/stop`, { client_id: clientId || this.clientId });
+  }
+
+  clearChat(clientId?: string): Observable<any> {
+    return this.http.post(`${this.api}/chat/clear`, { client_id: clientId || this.clientId });
   }
 
   runCliCommand(args: string[]): Observable<string> {
@@ -434,7 +445,8 @@ export class ClaudeService {
     onError: (e: any) => void,
     attachments: string[] = [],
     cwdOverride?: string,        // 對話欄鎖定的目錄，優先於 settings.workDir
-    teamId?: string
+    teamId?: string,
+    clientId?: string            // 對話分頁的 clientId
   ): () => void {
     const controller = new AbortController();
     const s = this.settings.get();
@@ -445,7 +457,7 @@ export class ClaudeService {
       body: JSON.stringify({
         message,
         agent,
-        client_id: this.clientId,
+        client_id: clientId || this.clientId,
         cwd: cwdOverride || s.workDir || undefined,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
         attachments,
@@ -484,7 +496,8 @@ export class ClaudeService {
     onDone: () => void,
     onError: (e: any) => void,
     attachments: string[] = [],
-    cwdOverride?: string
+    cwdOverride?: string,
+    clientId?: string            // 對話分頁的 clientId
   ): () => void {
     const controller = new AbortController();
     const s = this.settings.get();
@@ -495,7 +508,7 @@ export class ClaudeService {
       body: JSON.stringify({
         message,
         team_id: teamId,
-        client_id: this.clientId,
+        client_id: clientId || this.clientId,
         cwd: cwdOverride || s.workDir || undefined,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
         attachments,
@@ -532,7 +545,8 @@ export class ClaudeService {
     task: string,
     onEvent: (ev: any) => void,
     onDone: () => void,
-    onError: (e: any) => void
+    onError: (e: any) => void,
+    clientId?: string            // 對話分頁的 clientId
   ): () => void {
     const controller = new AbortController();
     const s = this.settings.get();
@@ -544,6 +558,7 @@ export class ClaudeService {
         team_id: teamId,
         project_path: projectPath,
         task,
+        client_id: clientId || this.clientId,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
         model: s.model,
         effort: s.effort,

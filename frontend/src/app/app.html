@@ -819,7 +819,21 @@
                   @for (msg of messages(); track $index) {
                     <div class="msg" [class]="'msg-' + msg.role">
                       @if (msg.role === 'system') {
-                        <div class="bubble system-bubble">{{ msg.text }}</div>
+                        <div class="bubble system-bubble" style="display: flex; flex-direction: column; gap: 8px;">
+                          <div>{{ msg.text }}</div>
+                          @if (msg.pendingExec && !msg.hasExecuted) {
+                            <div class="system-action-row" style="margin-top: 4px; display: flex; gap: 8px;">
+                              <button class="btn-primary" style="font-size: 11px; padding: 4px 12px; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px;" (click)="approveAndExecuteTeam(msg, $index)">
+                                🚀 同意並啟動團隊執行
+                              </button>
+                            </div>
+                          }
+                          @else if (msg.pendingExec && msg.hasExecuted) {
+                            <div style="font-size: 11px; color: #888; font-style: italic; display: flex; align-items: center; gap: 4px; margin-top: 4px;">
+                              <span>✓ 已授權並啟動執行</span>
+                            </div>
+                          }
+                        </div>
                       }
                       @if (msg.role === 'user') {
                         <span class="msg-avatar user-avatar" aria-hidden="true">你</span>
