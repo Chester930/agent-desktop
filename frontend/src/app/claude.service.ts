@@ -204,7 +204,8 @@ export class ClaudeService {
     const controller = new AbortController();
     fetch(`${api}/team/run/${runId}/stream`, { signal: controller.signal })
       .then(async (res) => {
-        const reader = res.body!.getReader();
+        if (!res.body) { onError(new Error('no response body')); return; }
+        const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
         while (true) {

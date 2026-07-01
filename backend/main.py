@@ -686,6 +686,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     })
     await response.prepare(request)
 
+    proc = None
     try:
         env = {**os.environ}
         api_key = _resolve_api_key()
@@ -715,11 +716,23 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 await response.write(f"data: {payload}\n\n".encode())
 
         await proc.wait()
-        active_procs.pop(client_id, None)
-        await response.write(b'data: {"type":"done"}\n\n')
+        try:
+            await response.write(b'data: {"type":"done"}\n\n')
+        except Exception:
+            pass
     except Exception as e:
-        payload = json.dumps({"type": "error", "text": str(e)})
-        await response.write(f"data: {payload}\n\n".encode())
+        try:
+            payload = json.dumps({"type": "error", "text": str(e)})
+            await response.write(f"data: {payload}\n\n".encode())
+        except Exception:
+            pass
+    finally:
+        active_procs.pop(client_id, None)
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
 
     return response
 
@@ -2091,6 +2104,17 @@ _team_queues: dict[str, list] = {}
 _team_run_processes: dict[str, asyncio.subprocess.Process] = {}
 
 
+def _cleanup_old_runs(max_age: float = 7200.0) -> None:
+    """Remove finished runs older than max_age seconds (default 2 h)."""
+    now = time.time()
+    stale = [rid for rid, r in _team_runs.items()
+             if r.get("_finished_at") and now - r["_finished_at"] > max_age]
+    for rid in stale:
+        _team_runs.pop(rid, None)
+        _team_events.pop(rid, None)
+        _team_queues.pop(rid, None)
+
+
 def _tr_emit(run_id: str, event: dict) -> None:
     _team_events.setdefault(run_id, []).append(event)
     for q in _team_queues.get(run_id, []):
@@ -2280,6 +2304,8 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         # cancelled
         run["_finished_at"] = time.time()
 
+    _cleanup_old_runs()
+
 
 async def handle_team_run_post(request: web.Request) -> web.Response:
     data    = await request.json()
@@ -2403,15 +2429,22 @@ async def handle_memory(request: web.Request) -> web.Response:
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "claude_desktop_uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+_UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # 20 MB
+
 async def handle_upload(request: web.Request) -> web.Response:
     data = await request.json()
     b64  = data.get("data", "")
     name = data.get("name", "upload.bin")
     if not b64:
         return web.json_response({"error": "no data"}, status=400)
+    if len(b64) > _UPLOAD_MAX_BYTES * 4 // 3 + 4:
+        return web.json_response({"error": "file too large (max 20 MB)"}, status=413)
+    raw_bytes = base64.b64decode(b64)
+    if len(raw_bytes) > _UPLOAD_MAX_BYTES:
+        return web.json_response({"error": "file too large (max 20 MB)"}, status=413)
     ext  = Path(name).suffix or ".bin"
     dest = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
-    dest.write_bytes(base64.b64decode(b64))
+    dest.write_bytes(raw_bytes)
     return web.json_response({"path": str(dest), "name": name})
 
 
@@ -2972,9 +3005,18 @@ async def handle_logs(request: web.Request) -> web.Response:
 
 async def handle_files(request: web.Request) -> web.Response:
     raw = request.rel_url.query.get("path", "")
-    p = Path(raw) if raw else Path.home()
+    home = Path.home()
+    try:
+        p = Path(raw).resolve() if raw else home
+    except Exception:
+        p = home
+    # 只允許 home 目錄以下，防止路徑穿越
+    try:
+        p.relative_to(home)
+    except ValueError:
+        p = home
     if not p.is_dir():
-        p = Path.home()
+        p = home
     items = []
     try:
         for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
@@ -3843,6 +3885,8 @@ async def _send_line_message(to: str, text: str) -> None:
         print(f"[schedule] Failed to send LINE message: {e}")
 
 
+_SCHEDULE_TIMEOUT = 300  # 5 分鐘，防止 schedule 無限 hang
+
 async def run_schedule_prompt(schedule: dict) -> None:
     prompt = schedule["prompt"] if isinstance(schedule, dict) else schedule
     # 移除 --dangerously-skip-permissions 旗標以支援 Docker 容器安全執行
@@ -3851,6 +3895,7 @@ async def run_schedule_prompt(schedule: dict) -> None:
     key = _resolve_api_key()
     if key:
         env["ANTHROPIC_API_KEY"] = key
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -3859,7 +3904,7 @@ async def run_schedule_prompt(schedule: dict) -> None:
             env=env,
             cwd=str(Path.home()),
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_SCHEDULE_TIMEOUT)
         result_text = ""
         try:
             output = json.loads(stdout.decode("utf-8", errors="replace"))
@@ -3871,6 +3916,13 @@ async def run_schedule_prompt(schedule: dict) -> None:
             # 依使用者需求，預設直接推送至 LINE Admin 帳號
             to = _load_config().get("lineAdminUserId", "").strip()
             await _send_line_message(to, result_text)
+    except asyncio.TimeoutError:
+        print(f"[schedule] Prompt timed out after {_SCHEDULE_TIMEOUT}s")
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
 
