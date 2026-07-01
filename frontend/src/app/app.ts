@@ -1406,10 +1406,23 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.closeContextMenu();
   }
 
-  // Copy message
   copyMessage(text: string) {
     navigator.clipboard.writeText(text).then(() => this.showToast('已複製到剪貼簿', 'success', 1500));
   }
+
+  copyMessageWithFeedback(event: MouseEvent, text: string) {
+    const btn = event.currentTarget as HTMLButtonElement;
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent ?? '';
+      btn.textContent = '✓ 已複製';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+
 
   // Code block copy (event delegation from chat container)
   onChatClick(e: MouseEvent) {
@@ -1770,16 +1783,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
 
-    const leaderAgent = this.dropdownAgents().find(a => a.id === leaderId);
-    if (!leaderAgent) {
-      alert(`找不到組長代理人 "${leaderId}"，請確認該代理人已建立！`);
-      return;
-    }
+    // 注意：不在前端驗證 agent 是否存在，讓後端決定（避免 agents 清單未即時更新的問題）
 
     // 1. 儲存當前 active tab 的狀態，避免狀態流失
     this.saveCurrentTab();
 
-    const leaderName = leaderAgent.name || leaderId;
+    // 從 dropdownAgents 取名稱，找不到就直接用 id
+    const leaderAgent = this.dropdownAgents().find(a => a.id === leaderId);
+    const leaderName = leaderAgent?.name || leaderId;
     const tabLabel = `👥 團隊對話 (${t.name})`;
 
     // 2. 檢查是否已經有現成的 chat tab 綁定了該團隊的組長對話
