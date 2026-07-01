@@ -441,7 +441,7 @@ async def _natural_to_cron(natural_text: str) -> str:
         env["ANTHROPIC_API_KEY"] = key
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--output-format", "text", "--no-caching",
+            CLAUDE_BIN, "-p", prompt, "--output-format", "text",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env, cwd=str(Path.home()),
         )
@@ -1744,7 +1744,7 @@ JSON Schema:
         env["ANTHROPIC_API_KEY"] = key
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--output-format", "text", "--no-caching",
+            CLAUDE_BIN, "-p", prompt, "--output-format", "text",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env, cwd=str(Path.home()),
         )
@@ -3121,7 +3121,7 @@ async def handle_session_auto_title(request: web.Request) -> web.Response:
     try:
         proc = await asyncio.create_subprocess_exec(
             CLAUDE_BIN, "-p", prompt, "--model", "claude-haiku-4-5-20251001",
-            "--output-format", "text", "--no-caching",
+            "--output-format", "text",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env, cwd=str(Path.home()),
         )
@@ -3345,7 +3345,7 @@ async def _tg_run_claude(prompt: str) -> str:
         env["ANTHROPIC_API_KEY"] = key
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--output-format", "text", "--no-caching",
+            CLAUDE_BIN, "-p", prompt, "--output-format", "text",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env, cwd=str(Path.home()),
         )
