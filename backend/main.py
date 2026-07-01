@@ -2844,7 +2844,7 @@ Now convert this: {text}"""
             "content-type": "application/json"
         }
         payload = {
-            "model": "claude-3-5-sonnet-20241022",
+            "model": "claude-haiku-4-5-20251001",
             "max_tokens": 50,
             "messages": [{"role": "user", "content": prompt}]
         }
@@ -3028,11 +3028,21 @@ async def handle_files(request: web.Request) -> web.Response:
         pass
     return web.json_response({"path": str(p), "parent": str(p.parent), "items": items})
 
+_CLI_ALLOWLIST: dict[str, set[str] | None] = {
+    "logout": None, "doctor": None, "update": None,
+    "mcp": {"list", "remove"},
+}
+
 async def handle_cli(request: web.Request) -> web.Response:
     data = await request.json()
     args = data.get("args", [])
-    if not isinstance(args, list):
-        return web.json_response({"error": "args must be list"}, status=400)
+    if not isinstance(args, list) or not args:
+        return web.json_response({"error": "args must be non-empty list"}, status=400)
+    allowed_sub = _CLI_ALLOWLIST.get(args[0])
+    if args[0] not in _CLI_ALLOWLIST:
+        return web.json_response({"error": f"disallowed verb: {args[0]}"}, status=400)
+    if allowed_sub is not None and (len(args) < 2 or args[1] not in allowed_sub):
+        return web.json_response({"error": f"disallowed subcommand"}, status=400)
     try:
         proc = await asyncio.create_subprocess_exec(
             CLAUDE_BIN, *args,
