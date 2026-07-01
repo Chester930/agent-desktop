@@ -3301,65 +3301,7 @@ body {
   overflow: hidden;
 }
 
-// Code block header + copy button
-.code-block-wrap {
-  position: relative;
-  margin: 16px 0;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.05) !important;
-  border-radius: 12px;
-  background: #1b1b1b !important;
-  overflow: hidden;
-
-  .code-block-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: transparent !important;
-    border: none !important;
-    padding: 10px 16px 4px;
-    height: 32px;
-  }
-  .code-lang {
-    font-size: 11.5px;
-    color: rgba(255, 255, 255, 0.35) !important;
-    text-transform: lowercase;
-    letter-spacing: 0.02em;
-    font-family: system-ui, sans-serif;
-    font-weight: 500;
-  }
-  .copy-code-btn {
-    font-size: 11px;
-    padding: 3px 9px;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    background: rgba(255, 255, 255, 0.04) !important;
-    color: rgba(255, 255, 255, 0.6) !important;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s, background 0.12s, color 0.12s;
-    &:hover { background: rgba(255, 255, 255, 0.1) !important; color: #ffffff !important; }
-    &.copied { background: rgba(16, 185, 129, 0.15) !important; color: #34d399 !important; border-color: rgba(16, 185, 129, 0.3) !important; opacity: 1 !important; }
-  }
-  &:hover .copy-code-btn {
-    opacity: 1;
-  }
-  pre {
-    margin: 0;
-    border-radius: 0;
-    border: none !important;
-    background: transparent !important;
-    padding: 8px 16px 16px;
-  }
-  code, .hljs {
-    background: transparent !important;
-    color: #e5e7eb !important;
-    font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace !important;
-    font-size: 13.5px !important;
-    line-height: 1.55;
-    padding: 0 !important;
-  }
-}
+// Code block styles are in global styles.scss (needed for [innerHTML] content)
 
 // Loading skeleton (waiting for first streaming token)
 .msg-skeleton {
@@ -3577,7 +3519,14 @@ body {
     border-color: #3a3a3a;
     color: #e5e7eb;
   }
+  &.copied {
+    background: rgba(16, 185, 129, 0.12) !important;
+    border-color: rgba(16, 185, 129, 0.3) !important;
+    color: #34d399 !important;
+    opacity: 1 !important;
+  }
 }
+
 
 // ── MCP Panel Redesign ────────────────────────────────────────────────────────
 .mcp-view { display: flex; flex-direction: column; height: 100%; }

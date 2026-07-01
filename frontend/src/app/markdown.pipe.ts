@@ -11,13 +11,7 @@ marked.use({
       const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
       const highlighted = hljs.highlight(text, { language }).value;
       const langLabel = lang ? lang : 'code';
-      return `<div class="code-block-wrap">
-  <div class="code-block-header">
-    <span class="code-lang">${langLabel}</span>
-    <button class="copy-code-btn" data-copy-code="1">複製</button>
-  </div>
-  <pre><code class="hljs language-${language}">${highlighted}</code></pre>
-</div>`;
+      return `<div class="code-block-wrap"><div class="code-block-header"><span class="code-lang">${langLabel}</span><button class="copy-code-btn" data-copy-code="1" title="複製此程式碼">⎘ 複製</button></div><pre><code class="hljs language-${language}">${highlighted}</code></pre></div>`;
     }
   }
 });

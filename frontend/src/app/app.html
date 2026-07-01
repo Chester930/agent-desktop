@@ -920,7 +920,7 @@
                           </div>
                           @if (!msg.isStreaming && msg.text) {
                             <div class="msg-action-row">
-                              <button class="msg-action-btn" (click)="copyMessage(msg.text)" title="複製全文">⎘ 複製</button>
+                              <button class="msg-action-btn" (click)="copyMessageWithFeedback($event, msg.text)" title="複製此回覆的完整內容">⎘ 複製回覆</button>
                               <button class="msg-action-btn" (click)="retryLast()" title="重新生成此回覆">↺ 重試</button>
                             </div>
                           }
@@ -1183,9 +1183,11 @@
             <button class="sb-btn mic-btn" (click)="toggleMic()" title="語音輸入（未啟用）" style="margin-left: 4px; padding: 2px 4px; opacity: 0.8;">
               🎤
             </button>
-            <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
-              {{ hrLoading() ? '🤖 組隊中…' : '🤖 自動組隊' }}
-            </button>
+            @if (!activeChat?.teamId) {
+              <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
+                {{ hrLoading() ? '🤖 組隊中…' : '🤖 自動組隊' }}
+              </button>
+            }
           </div>
           <div class="statusbar-right">
             @if (inputText.length > 500) {

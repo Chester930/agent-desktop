@@ -1754,26 +1754,27 @@ JSON Schema:
         return {"error": f"HR dispatch failed: {e}"}
 
     s = output_str.strip()
-    if s.startswith("```"):
-        first_newline = s.find("\n")
-        if first_newline != -1:
-            s = s[first_newline:].strip()
-        if s.endswith("```"):
-            s = s[:-3].strip()
+
+    # 移除所有 markdown 程式碼圍欄（```json ... ``` 或 ``` ... ```）
+    import re as _re
+    s = _re.sub(r"^```[a-zA-Z]*\s*", "", s)  # 移除開頭 ```json 或 ```
+    s = _re.sub(r"\s*```$", "", s.strip())     # 移除結尾 ```
+    s = s.strip()
 
     try:
         plan = json.loads(s)
         return plan
     except Exception:
+        # fallback：從輸出中提取第一個完整的 JSON 物件
         start_idx = s.find("{")
         end_idx = s.rfind("}")
-        if start_idx != -1 and end_idx != -1:
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
             try:
                 plan = json.loads(s[start_idx:end_idx+1])
                 return plan
             except Exception:
                 pass
-        return {"error": "Failed to parse HR Agent JSON response", "raw": output_str}
+        return {"error": f"Failed to parse HR Agent JSON response", "raw": output_str[:500]}
 
 
 async def handle_hr_dispatch(request: web.Request) -> web.Response:
