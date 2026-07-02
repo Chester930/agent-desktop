@@ -2488,6 +2488,14 @@
               }
             </select>
           </label>
+          <label class="editor-label">執行模式 (Execution Mode)
+            <select class="memory-project-select"
+              [value]="teamEditorData().execution_mode || 'parallel'"
+              (change)="teamEditorData.set({...teamEditorData(), execution_mode: $any($event.target).value})">
+              <option value="parallel">並行（成員同時執行，互不依賴）</option>
+              <option value="sequential">序列（依序執行，前一位產出會傳給下一位）</option>
+            </select>
+          </label>
         </div>
         <!-- 成員 -->
         <div class="editor-section">

@@ -42,7 +42,7 @@ export interface ChatMessage {
 }
 
 export interface TeamMember { agent: string; role: string; }
-export interface Team { id: string; name: string; description: string; leader?: string; members: TeamMember[]; }
+export interface Team { id: string; name: string; description: string; leader?: string; members: TeamMember[]; execution_mode?: 'parallel' | 'sequential'; }
 export interface TeamRunStep {
   agent: string;
   role: string;

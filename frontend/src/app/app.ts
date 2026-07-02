@@ -1707,7 +1707,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.teamEditorData.set({ ...team, members: team.members.map(m => ({ ...m })) });
       this.teamEditorIsNew.set(false);
     } else {
-      this.teamEditorData.set({ name: '', description: '', members: [] });
+      this.teamEditorData.set({ name: '', description: '', members: [], execution_mode: 'parallel' });
       this.teamEditorIsNew.set(true);
     }
     this.teamEditorOpen.set(true);
