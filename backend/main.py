@@ -64,7 +64,33 @@ for _k in dir(_db_mod):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-active_sessions: dict[str, str] = {}   # client_id -> claude session_id
+_SESSIONS_FILE = CLAUDE_HOME / "active_sessions.json"
+
+class _PersistentSessions(dict):
+    """dev 容器靠 watcher.py 偵測檔案變更會重啟 main.py，純記憶體 dict 一重啟就丟光所有
+    --resume session 對應，逼得每輪都重送整包 prompt。落地存檔讓重啟後仍可續接。"""
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        self._save()
+
+    def pop(self, k, default=None):
+        result = super().pop(k, default)
+        self._save()
+        return result
+
+    def _save(self):
+        try:
+            _safe_write_text(_SESSIONS_FILE, json.dumps(dict(self), ensure_ascii=False))
+        except Exception:
+            pass
+
+active_sessions: dict[str, str] = _PersistentSessions()   # client_id -> claude session_id
+if _SESSIONS_FILE.exists():
+    try:
+        active_sessions.update(json.loads(_SESSIONS_FILE.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
@@ -1057,13 +1083,13 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
 
     if execution_mode == "sequential":
         # 串行模式：前一個 agent 的產出附加到下一個 agent 的 task
-        accumulated_output = ""
+        # （只傳「前一位」，不累加全部歷史——避免 token 隨成員數量呈平方成長）
+        previous_output = ""
         for m in members:
             agent_task = task
-            if accumulated_output:
-                agent_task += f"\n\n[前一位成員的產出]\n{accumulated_output}"
-            output = await run_agent_executor(m["agent"], m["role"], agent_task)
-            accumulated_output += f"\n\n@{m['agent']} 產出：\n{output}"
+            if previous_output:
+                agent_task += f"\n\n[前一位成員的產出]\n{previous_output}"
+            previous_output = await run_agent_executor(m["agent"], m["role"], agent_task)
     else:
         # 並行模式（預設）
         exec_tasks = [run_agent_executor(m["agent"], m["role"], task) for m in members]
