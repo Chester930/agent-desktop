@@ -12,7 +12,8 @@ RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py .
+COPY main.py database.py ./
+COPY presets/ ./presets/
 
 EXPOSE 8765
 CMD ["python", "main.py"]

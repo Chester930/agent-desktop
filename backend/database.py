@@ -146,7 +146,7 @@ def _init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
         CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
             id UNINDEXED, title, search_text,
-            tokenize='unicode61 remove_diacritics 1'
+            tokenize='trigram'
         );
         -- add column if upgrading from previous schema without it
         CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
@@ -162,6 +162,29 @@ def _migrate_db() -> None:
             c.execute("ALTER TABLE sessions ADD COLUMN file_path TEXT NOT NULL DEFAULT ''")
         if "project_path" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT ''")
+
+def _migrate_fts_tokenizer() -> None:
+    """
+    unicode61 doesn't segment CJK text into searchable words, so Chinese
+    queries match inconsistently (some substrings happen to land on a
+    token boundary elsewhere in the indexed text, most don't). trigram
+    indexes overlapping 3-char n-grams instead, which works for both
+    CJK and Latin text without an external segmenter.
+    """
+    with _db() as c:
+        row = c.execute(
+            "SELECT sql FROM sqlite_master WHERE name='sessions_fts'"
+        ).fetchone()
+        if row and "trigram" not in row[0]:
+            c.executescript("""
+                DROP TABLE sessions_fts;
+                CREATE VIRTUAL TABLE sessions_fts USING fts5(
+                    id UNINDEXED, title, search_text,
+                    tokenize='trigram'
+                );
+                INSERT INTO sessions_fts(id, title, search_text)
+                    SELECT id, title, search_text FROM sessions;
+            """)
 
 def _backfill_project_paths() -> None:
     """One-time: populate project_path for sessions that still have empty value."""

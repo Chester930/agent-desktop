@@ -944,7 +944,9 @@ async def handle_sessions(request: web.Request) -> web.Response:
 
     try:
         with _db() as c:
-            if q:
+            if q and len(q) >= 3:
+                # trigram tokenizer needs >=3 chars to form any trigram, so this
+                # path only fires for queries long enough for FTS5 MATCH to work.
                 rows = c.execute("""
                     SELECT s.id, s.title, s.mtime, s.message_count, s.file_path, s.project_path,
                            snippet(sessions_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet
@@ -954,6 +956,26 @@ async def handle_sessions(request: web.Request) -> web.Response:
                       AND s.mtime >= ?
                     ORDER BY s.mtime DESC
                 """, (q, cutoff)).fetchall()
+            elif q:
+                # short (1-2 char) queries: trigram can't match these at all, so
+                # fall back to LIKE -- table is small enough that this is cheap.
+                like_rows = c.execute("""
+                    SELECT id, title, mtime, message_count, file_path, project_path, search_text
+                    FROM sessions
+                    WHERE mtime >= ? AND (title LIKE ? OR search_text LIKE ?)
+                    ORDER BY mtime DESC
+                """, (cutoff, f"%{q}%", f"%{q}%")).fetchall()
+                rows = []
+                for r in like_rows:
+                    text = r["search_text"] or ""
+                    idx = text.find(q)
+                    if idx >= 0:
+                        start = max(0, idx - 30)
+                        end = min(len(text), idx + len(q) + 30)
+                        snippet = ("…" if start > 0 else "") + text[start:idx] + "<mark>" + q + "</mark>" + text[idx + len(q):end] + ("…" if end < len(text) else "")
+                    else:
+                        snippet = text[:120]
+                    rows.append({**dict(r), "snippet": snippet})
             else:
                 rows = c.execute("""
                     SELECT id, title, mtime, message_count, file_path, project_path,
@@ -3385,6 +3407,7 @@ def _init_presets() -> None:
 def build_app() -> web.Application:
     _init_db()
     _migrate_db()
+    _migrate_fts_tokenizer()
     _backfill_project_paths()
     _init_presets()
     app = web.Application()
