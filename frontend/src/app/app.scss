@@ -4370,6 +4370,15 @@ body[style*="ns-resize"] .mcp-divider-grip {
   &:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
+.editor-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.5;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
 .editor-checklist {
   display: flex;
   flex-direction: column;

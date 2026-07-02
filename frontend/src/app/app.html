@@ -2456,10 +2456,10 @@
               placeholder="fullstack-dev">
           </label>
           <label class="editor-label">說明
-            <input class="editor-input"
+            <textarea class="editor-input editor-textarea" rows="3"
               [value]="teamEditorData().description || ''"
               (input)="teamEditorData.set({...teamEditorData(), description: $any($event.target).value})"
-              placeholder="這個 Team 的用途">
+              placeholder="這個 Team 的用途"></textarea>
           </label>
           <label class="editor-label">組長 (Leader)
             <select class="memory-project-select"
