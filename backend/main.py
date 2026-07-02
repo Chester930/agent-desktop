@@ -130,17 +130,15 @@ def migrate_soul():
             except Exception:
                 pass
 
-def get_concatenated_soul() -> str:
-    migrate_soul()
-    parts = []
-    for f in sorted(SOULS_DIR.glob("*.md")):
-        try:
-            content = f.read_text(encoding="utf-8").strip()
-            if content:
-                parts.append(f"## Section: {f.stem}\n{content}")
-        except Exception:
-            pass
-    return "\n\n".join(parts)
+def get_agent_soul(agent_id: str) -> str:
+    """Soul 與 Agent 為 1:1：只回傳該 agent 專屬的 soul 內容；沒有指定 agent 就不注入任何 soul。"""
+    if not agent_id:
+        return ""
+    f = SOULS_DIR / f"{agent_id}.md"
+    try:
+        return f.read_text(encoding="utf-8").strip() if f.exists() else ""
+    except Exception:
+        return ""
 
 
 def load_schedules() -> list:
@@ -398,7 +396,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
 
     if not has_session:
         # 首次：組裝完整靜態 context
-        soul = get_concatenated_soul()
+        soul = get_agent_soul(agent)
         full_message = f"[System Persona]\n{soul}\n\n{message}" if soul else message
 
         if team_id and team_info:
@@ -621,7 +619,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 fp = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fp}"
             fp = f"{fp}\n\n任務/討論歷史：\n{hist}"
 
-            soul = get_concatenated_soul()
+            soul = get_agent_soul(agent_id)
             if soul:
                 fp = f"[System Persona]\n{soul}\n\n{fp}"
 
@@ -932,7 +930,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             )
             if agent_body:
                 prompt = f"[你的代理人特徵與能力]\n{agent_body}\n\n---\n\n{prompt}"
-            soul = get_concatenated_soul()
+            soul = get_agent_soul(agent_id)
             if soul:
                 prompt = f"[System Persona]\n{soul}\n\n{prompt}"
             resume_sid = None
@@ -2046,7 +2044,7 @@ async def _agent_run_capture(
         except Exception:
             pass
 
-    soul = get_concatenated_soul()
+    soul = get_agent_soul(agent_id)
     full_prompt = prompt
     if agent_body:
         full_prompt = f"[代理人：{agent_id}]\n{agent_body}\n\n---\n\n{full_prompt}"
