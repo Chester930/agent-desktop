@@ -3571,6 +3571,7 @@ def _init_presets() -> None:
         AGENTS_DIR.mkdir(parents=True, exist_ok=True)
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         TEAMS_DIR.mkdir(parents=True, exist_ok=True)
+        SOULS_DIR.mkdir(parents=True, exist_ok=True)
 
         # 1. 複製 skills
         p_skills = presets_dir / "skills"
@@ -3605,7 +3606,16 @@ def _init_presets() -> None:
                     shutil.copy2(src, dest)
                     _log(f"Copied preset team: {src.name} -> {dest}")
 
-        # 4. 合併 MCP servers (claude.json)
+        # 4. 複製 souls（Soul 與 Agent 為 1:1，檔名對應 agent id）
+        p_souls = presets_dir / "souls"
+        if p_souls.exists():
+            for src in p_souls.iterdir():
+                dest = SOULS_DIR / src.name
+                if not dest.exists():
+                    shutil.copy2(src, dest)
+                    _log(f"Copied preset soul: {src.name} -> {dest}")
+
+        # 5. 合併 MCP servers (claude.json)
         p_claude_json = presets_dir / "claude.json"
         if p_claude_json.exists():
             dest_claude_json = CLAUDE_HOME / "claude.json"
