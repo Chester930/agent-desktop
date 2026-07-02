@@ -348,6 +348,8 @@ def _team_dict(f: Path) -> dict:
     except Exception:
         raw = {}
     members_raw = raw.get("members", [])
+    if not isinstance(members_raw, list):
+        members_raw = []
     members = []
     for m in members_raw:
         if isinstance(m, dict):

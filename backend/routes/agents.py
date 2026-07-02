@@ -27,20 +27,24 @@ from helpers import (
 )
 
 
-def _dirs():
-    """Return (AGENTS_DIR, SKILLS_DIR) resolved at call time from main module."""
+def _get_main_module():
     import sys
-    main = sys.modules.get("__main__", None)
-    agents_dir: Path = getattr(main, "AGENTS_DIR", Path.home() / ".claude" / "agents")
-    skills_dir: Path = getattr(main, "SKILLS_DIR", Path.home() / ".claude" / "skills")
-    return agents_dir, skills_dir
+    for name in ("main", "backend.main", "__main__"):
+        mod = sys.modules.get(name)
+        if mod and hasattr(mod, "CLAUDE_BIN"):
+            return mod
+    return None
+
+
+def _dirs():
+    import database as _db
+    return _db.AGENTS_DIR, _db.SKILLS_DIR
 
 
 def _claude_bin_and_key():
-    import sys, os as _os
-    main = sys.modules.get("__main__", None)
-    claude_bin: str = getattr(main, "CLAUDE_BIN", "claude")
-    resolve_key = getattr(main, "_resolve_api_key", lambda: "")
+    main = _get_main_module()
+    claude_bin = getattr(main, "CLAUDE_BIN", "claude") if main else "claude"
+    resolve_key = getattr(main, "_resolve_api_key", lambda: "") if main else (lambda: "")
     return claude_bin, resolve_key
 
 

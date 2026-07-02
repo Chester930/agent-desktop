@@ -29,36 +29,38 @@ from database import (
 )
 
 
-def _dirs():
-    """Return (TEAMS_DIR, AGENTS_DIR) resolved at call time from main module."""
+def _get_main_module():
     import sys
-    main = sys.modules.get("__main__", None)
-    teams_dir: Path = getattr(main, "TEAMS_DIR", Path.home() / ".claude" / "teams")
-    agents_dir: Path = getattr(main, "AGENTS_DIR", Path.home() / ".claude" / "agents")
-    return teams_dir, agents_dir
+    for name in ("main", "backend.main", "__main__"):
+        mod = sys.modules.get(name)
+        if mod and hasattr(mod, "CLAUDE_BIN"):
+            return mod
+    return None
+
+
+def _dirs():
+    import database as _db
+    return _db.TEAMS_DIR, _db.AGENTS_DIR
 
 
 def _claude_bin_and_key():
-    import sys
-    main = sys.modules.get("__main__", None)
-    claude_bin: str = getattr(main, "CLAUDE_BIN", "claude")
-    resolve_key = getattr(main, "_resolve_api_key", lambda: "")
+    main = _get_main_module()
+    claude_bin = getattr(main, "CLAUDE_BIN", "claude") if main else "claude"
+    resolve_key = getattr(main, "_resolve_api_key", lambda: "") if main else (lambda: "")
     return claude_bin, resolve_key
 
 
 def _get_agent_soul(agent_id: str) -> str:
-    import sys
-    main = sys.modules.get("__main__", None)
-    get_soul = getattr(main, "get_agent_soul", None)
+    main = _get_main_module()
+    get_soul = getattr(main, "get_agent_soul", None) if main else None
     if get_soul:
         return get_soul(agent_id)
     return ""
 
 
 def _get_build_team_memory_context():
-    import sys
-    main = sys.modules.get("__main__", None)
-    return getattr(main, "build_team_memory_context", None)
+    main = _get_main_module()
+    return getattr(main, "build_team_memory_context", None) if main else None
 
 
 # ── Team Run State ────────────────────────────────────────────────────────────
@@ -480,10 +482,19 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
 
 # ── Route registration ────────────────────────────────────────────────────────
 
+async def gc_team_runs_cleanup_ctx(app: web.Application):
+    task = asyncio.create_task(_gc_team_runs_task())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def register_team_routes(app: web.Application, cors_add) -> None:
     """Register all team + team run routes on the aiohttp app."""
-    # Start background GC task
-    asyncio.create_task(_gc_team_runs_task())
+    app.cleanup_ctx.append(gc_team_runs_cleanup_ctx)
 
     cors_add(app.router.add_get("/api/teams",            handle_teams))
     cors_add(app.router.add_get("/api/teams/{id}",       handle_team_get))
