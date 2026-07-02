@@ -66,22 +66,37 @@ for _k in dir(_db_mod):
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SESSIONS_FILE = CLAUDE_HOME / "active_sessions.json"
+_SESSIONS_META_FILE = CLAUDE_HOME / "active_sessions_meta.json"
+_SESSION_MAX_AGE = 7 * 24 * 3600
 
 class _PersistentSessions(dict):
-    """dev 容器靠 watcher.py 偵測檔案變更會重啟 main.py，純記憶體 dict 一重啟就丟光所有
-    --resume session 對應，逼得每輪都重送整包 prompt。落地存檔讓重啟後仍可續接。"""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._touched = {}
+
     def __setitem__(self, k, v):
         super().__setitem__(k, v)
+        self._touched[k] = time.time()
+        self._prune()
         self._save()
 
     def pop(self, k, default=None):
         result = super().pop(k, default)
+        self._touched.pop(k, None)
         self._save()
         return result
+
+    def _prune(self):
+        now = time.time()
+        stale = [k for k in list(self.keys()) if now - self._touched.get(k, now) > _SESSION_MAX_AGE]
+        for k in stale:
+            super().pop(k, None)
+            self._touched.pop(k, None)
 
     def _save(self):
         try:
             _safe_write_text(_SESSIONS_FILE, json.dumps(dict(self), ensure_ascii=False))
+            _safe_write_text(_SESSIONS_META_FILE, json.dumps(self._touched, ensure_ascii=False))
         except Exception:
             pass
 
@@ -91,6 +106,15 @@ if _SESSIONS_FILE.exists():
         active_sessions.update(json.loads(_SESSIONS_FILE.read_text(encoding="utf-8")))
     except Exception:
         pass
+if _SESSIONS_META_FILE.exists():
+    try:
+        active_sessions._touched.update(json.loads(_SESSIONS_META_FILE.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+_now = time.time()
+for _k in active_sessions.keys():
+    active_sessions._touched.setdefault(_k, _now)
+active_sessions._prune()
 
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
