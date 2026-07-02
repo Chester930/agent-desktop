@@ -2582,9 +2582,9 @@ async def handle_chat_provider(request: web.Request) -> web.StreamResponse:
                     return
                 async for line in upstream.content:
                     line_s = line.decode("utf-8").strip()
-                    if not line_s.startswith("data: "):
+                    if not line_s.startswith("data:"):
                         continue
-                    payload = line_s[6:]
+                    payload = line_s[5:].strip()
                     if payload == "[DONE]":
                         await send({"type": "result", "usage": {}, "total_cost_usd": 0})
                         break
