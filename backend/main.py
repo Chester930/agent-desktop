@@ -112,6 +112,12 @@ def _read_agent_body(agent_file: "Path") -> str:
     except Exception:
         return ""
 
+_CLI_NOISE_PATTERNS = ("no stdin data received",)
+
+def _is_cli_noise(raw: str) -> bool:
+    low = raw.lower()
+    return any(p in low for p in _CLI_NOISE_PATTERNS)
+
 def load_session_names() -> dict:
     if SESSION_NAMES_FILE.exists():
         try: return json.loads(SESSION_NAMES_FILE.read_text(encoding="utf-8"))
@@ -477,6 +483,8 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             raw = line.decode("utf-8", errors="replace").strip()
             if not raw:
                 continue
+            if _is_cli_noise(raw):
+                continue
             try:
                 event = json.loads(raw)
                 if event.get("type") == "result" and "session_id" in event:
@@ -670,6 +678,8 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 async for line in proc.stdout:
                     raw = line.decode("utf-8", errors="replace").strip()
                     if not raw:
+                        continue
+                    if _is_cli_noise(raw):
                         continue
                     # 偵測 session 過期 / resume 失敗
                     if resume_sid and (
@@ -981,6 +991,8 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             async for line in proc.stdout:
                 raw = line.decode("utf-8", errors="replace").strip()
                 if not raw:
+                    continue
+                if _is_cli_noise(raw):
                     continue
 
                 try:
