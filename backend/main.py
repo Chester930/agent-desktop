@@ -593,6 +593,9 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(client_id)
             try:
                 await _run_pooled(prompt_to_send, resume_target)
+            except ConnectionError:
+                # 客戶端已斷線，pool 連線已在 _run_pooled 內 evict；不重跑，避免重複副作用
+                return response
             except Exception:
                 active_sessions.pop(client_id, None)
                 await _run_legacy(_build_full_message())
@@ -850,6 +853,9 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             try:
                 collected_list, new_session_id = await _exec_pooled(prompt_to_send, resume_target)
                 return "".join(collected_list), new_session_id
+            except ConnectionError:
+                # 客戶端已斷線，pool 連線已在 _exec_pooled 內 evict；不重跑，避免重複副作用
+                return "", ""
             except Exception:
                 active_sessions.pop(session_key, None)
                 full_fallback = _build_full_prompt(prompt_text)
@@ -1302,6 +1308,9 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(exec_key)
             try:
                 return await _pooled_exec(prompt_to_send, resume_target)
+            except ConnectionError:
+                # 客戶端已斷線，pool 連線已在 _pooled_exec 內 evict；不重跑，避免重複副作用
+                return ""
             except Exception:
                 active_sessions.pop(exec_key, None)
                 return await _legacy_exec(_build_full_exec_prompt(), None)

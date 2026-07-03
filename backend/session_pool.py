@@ -17,10 +17,19 @@ class SessionPool:
         self._clients: dict[str, ClaudeSDKClient] = {}
         self._touched: dict[str, float] = {}
         self._idle_timeout = idle_timeout
-        self._lock = asyncio.Lock()
+        self._key_locks: dict[str, asyncio.Lock] = {}
+        self._key_locks_guard = asyncio.Lock()
+
+    async def _lock_for(self, key: str) -> asyncio.Lock:
+        async with self._key_locks_guard:
+            lock = self._key_locks.setdefault(key, asyncio.Lock())
+        return lock
 
     async def get_or_create(self, key: str, options: ClaudeAgentOptions) -> ClaudeSDKClient:
-        async with self._lock:
+        # 每個 key 各自的 lock，避免不同 agent/session 的 connect() 互相卡住
+        # （team parallel 模式下多個成員會同時建立各自的連線，共用一把鎖會讓「並行」退化成序列）
+        lock = await self._lock_for(key)
+        async with lock:
             client = self._clients.get(key)
             if client is None:
                 client = ClaudeSDKClient(options=options)
