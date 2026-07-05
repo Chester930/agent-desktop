@@ -47,6 +47,8 @@ class SessionPool:
     async def evict(self, key: str) -> None:
         client = self._clients.pop(key, None)
         self._touched.pop(key, None)
+        async with self._key_locks_guard:
+            self._key_locks.pop(key, None)
         if client is not None:
             try:
                 await client.disconnect()

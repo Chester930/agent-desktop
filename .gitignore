@@ -7,6 +7,8 @@ dist-electron/
 frontend/dist/
 backend/__pycache__/
 backend/*.pyc
+backend/**/__pycache__/
+backend/**/*.pyc
 backend/.venv/
 backend/build/
 backend/dist/

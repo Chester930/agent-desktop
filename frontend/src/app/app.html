@@ -84,7 +84,7 @@
               請輸入你平常使用 Claude Code CLI 時的主要專案路徑。
             </p>
             <div class="ob-dir-row">
-              <input class="ob-dir-input" [(ngModel)]="onboardingDir"
+              <input class="ob-dir-input" [ngModel]="onboardingDir()" (ngModelChange)="onboardingDir.set($event)"
                 placeholder="例：C:\Users\你的名字\Desktop\my-project">
               <button class="btn-secondary ob-pick-btn" (click)="pickOnboardingDir()">選擇…</button>
             </div>
