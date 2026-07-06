@@ -603,4 +603,18 @@ export class ClaudeService {
   authorizeTeamTask(requestId: string, decision: 'approve' | 'reject'): Observable<any> {
     return this.http.post(`${this.api}/team/authorize`, { request_id: requestId, decision });
   }
+
+  sendMcpRpc(mcpName: string, method: string, params: any, authorized?: boolean, pendingId?: string): Observable<any> {
+    return this.http.post(`${this.api}/mcp/rpc`, {
+      mcp_name: mcpName,
+      method,
+      params,
+      authorized,
+      pending_id: pendingId
+    });
+  }
+
+  getTeamRunArtifacts(runId: string): Observable<any> {
+    return this.http.get(`${this.api}/team/run/${runId}/artifacts`);
+  }
 }

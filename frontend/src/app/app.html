@@ -936,6 +936,37 @@
                                   </div>
                                 }
                               </div>
+                              
+                              <!-- Team Run 成果畫廊 (Artifacts Tracer) -->
+                              @if (msg.teamRun && (msg.teamRun.status === 'done' || msg.teamRun.status === 'cancelled')) {
+                                <div class="tr-artifacts-gallery" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06); text-align: left;">
+                                  <button class="btn-artifacts-toggle" (click)="loadRunArtifacts(msg.teamRun.id); activeRunId = msg.teamRun.id" style="background: rgba(110, 231, 183, 0.08); border: 1px solid rgba(110, 231, 183, 0.15); color: #6ee7b7; font-size: 11px; padding: 4px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; outline: none; transition: background 0.2s;">
+                                    <span>📁 檢視執行成果 (Artifacts)</span>
+                                  </button>
+                                  
+                                  @if (activeRunId === msg.teamRun.id && runArtifacts().length > 0) {
+                                    <div class="artifacts-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 8px;">
+                                      @for (art of runArtifacts(); track art.relative_path) {
+                                        <div class="artifact-card" style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; position: relative;">
+                                          <div class="art-preview" style="height: 40px; background: rgba(0,0,0,0.2); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 16px;">
+                                            @if (art.preview_type === 'image') { 🖼️ }
+                                            @else if (art.preview_type === 'pdf') { 📄 }
+                                            @else if (art.preview_type === 'data') { 📊 }
+                                            @else { 📝 }
+                                          </div>
+                                          <div class="art-filename" style="font-size: 10px; font-weight: 600; color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;" [title]="art.filename">{{ art.filename }}</div>
+                                          <div class="art-size" style="font-size: 9px; color: #718096; text-align: left;">{{ (art.size_bytes / 1024).toFixed(1) }} KB</div>
+                                          <div class="art-actions" style="margin-top: 4px;">
+                                            <input readonly type="text" [value]="art.relative_path" style="width: 100%; font-size: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); color: #a0aec0; padding: 2px; border-radius: 3px; box-sizing: border-box; text-align: center; cursor: pointer; font-family: monospace;" onclick="this.select(); document.execCommand('copy');" title="點擊複製相對路徑">
+                                          </div>
+                                        </div>
+                                      }
+                                    </div>
+                                  } @else if (activeRunId === msg.teamRun.id) {
+                                    <div style="font-size: 10px; color: #718096; margin-top: 6px; padding-left: 6px; text-align: left;">本次運行無新增或修改成果檔案。</div>
+                                  }
+                                </div>
+                              }
                             }
 
                             @if (msg.isStreaming && !msg.text) {
@@ -1766,6 +1797,32 @@
                             <div class="mcp-log-line">{{ line }}</div>
                           } @empty {
                             <div class="mcp-log-empty">尚無日誌</div>
+                          }
+                        </div>
+                        
+                        <!-- MCP RPC 調試控制台 -->
+                        <div class="mcp-rpc-console" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+                          <div class="mcp-rpc-title" style="font-size: 11px; font-weight: 600; color: #ffad33; margin-bottom: 6px; display: flex; align-items: center; gap: 4px;">
+                            <span>⚡ MCP JSON-RPC Debugger</span>
+                          </div>
+                          <div class="mcp-rpc-inputs" style="display: flex; gap: 6px; margin-bottom: 6px;">
+                            <input class="mcp-rpc-input-method" [(ngModel)]="mcpRpcMethod" placeholder="Method (例: tools/list)" style="flex: 1; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 4px; font-family: monospace;">
+                            <button class="mcp-rpc-btn" [disabled]="isMcpRpcSending" (click)="mcpRpcName = m.name; sendMcpRpcDebug()" style="background: #ff9900; color: #000; border: none; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                              {{ isMcpRpcSending ? '...' : 'Send' }}
+                            </button>
+                          </div>
+                          <textarea class="mcp-rpc-textarea" [(ngModel)]="mcpRpcParamsText" placeholder="Params JSON (e.g. {})" style="width: 100%; height: 40px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 4px; resize: none; font-family: monospace; box-sizing: border-box; margin-bottom: 6px;"></textarea>
+                          
+                          @if (mcpRpcResult) {
+                            <div class="mcp-rpc-res-title" style="font-size: 10px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">Response:</div>
+                            <pre class="mcp-rpc-result" style="margin: 0; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 6px; max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 10px; color: #a3e635; white-space: pre-wrap; word-break: break-all;"><code>{{ mcpRpcResult }}</code></pre>
+                          }
+
+                          @if (mcpPendingAuth()) {
+                            <div class="mcp-rpc-auth-actions" style="margin-top: 6px; display: flex; gap: 6px; justify-content: flex-end;">
+                              <button (click)="authorizeMcpRpc(false)" style="background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;">拒絕 Reject</button>
+                              <button (click)="authorizeMcpRpc(true)" style="background: #a3e635; border: none; color: #000; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; cursor: pointer;">授權放行 Authorize</button>
+                            </div>
                           }
                         </div>
                       </div>

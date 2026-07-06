@@ -141,6 +141,7 @@ async def _agent_run_capture(
     output_parts: list[str] = []
     proc = None
     try:
+        cmd = wrap_cmd(cmd[0], cmd[1:])
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -184,84 +185,404 @@ async def _agent_run_capture(
     return "".join(output_parts)
 
 
+def _take_workspace_snapshot(cwd: str) -> dict[str, float]:
+    snapshot = {}
+    if not cwd or not Path(cwd).is_dir():
+        return snapshot
+    
+    base = Path(cwd).resolve()
+    exclude_dirs = {".git", ".venv", "__pycache__", "node_modules", ".gemini", "dist", "build"}
+    
+    count = 0
+    try:
+        for root, dirs, files in os.walk(base, topdown=True):
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            for file in files:
+                full_path = Path(root) / file
+                try:
+                    rel_path = str(full_path.relative_to(base)).replace("\\", "/")
+                    snapshot[rel_path] = full_path.stat().st_mtime
+                except Exception:
+                    pass
+                count += 1
+                if count > 2000:
+                    return snapshot
+    except Exception:
+        pass
+    return snapshot
+
+
+def _diff_workspace_snapshot(old_snap: dict, new_snap: dict) -> list[str]:
+    changed = []
+    for k, v in new_snap.items():
+        if k not in old_snap:
+            changed.append(k)
+        elif v > old_snap[k] + 0.5:
+            changed.append(k)
+    return changed
+
+
+def _kill_team_run_processes(run_id: str) -> None:
+    proc = _team_run_processes.pop(run_id, None)
+    if proc:
+        try:
+            safe_kill_process(proc)
+        except Exception:
+            pass
+
+
 async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> None:
+    TIMEOUT = 300
+    run = _team_runs.get(run_id, {})
+    custom_timeout = run.get("_test_timeout")
+    timeout_val = custom_timeout if custom_timeout is not None else TIMEOUT
+    
+    try:
+        await asyncio.wait_for(_execute_team_run_core(run_id, task, model, cwd), timeout=timeout_val)
+    except asyncio.TimeoutError:
+        run = _team_runs.get(run_id)
+        if run and run.get("status") == "running":
+            run["status"] = "cancelled"
+            run["_finished_at"] = time.time()
+            run["summary"] = f"### [系統熔斷] 執行時間超過 {timeout_val} 秒，已自動超時中斷以保護系統資源。"
+            _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+            from message_bus import global_bus
+            global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
+            _kill_team_run_processes(run_id)
+    except Exception:
+        pass
+
+
+async def _get_agent_memory_prompt(team_id: str, all_member_ids: list[str], agent_id: str, cwd: str, build_team_mem) -> str:
     _, AGENTS_DIR = _dirs()
+    agent_info = {}
+    try:
+        f_agent = AGENTS_DIR / f"{agent_id}.md"
+        if f_agent.exists():
+            agent_info = _agent_dict(f_agent)
+    except Exception:
+        pass
+
+    # 1. 分層 team memory 注入
+    mem_ctx = ""
+    if build_team_mem:
+        try:
+            mem_ctx = build_team_mem(team_id, all_member_ids, agent_id, cwd)
+        except Exception:
+            pass
+
+    # 2. 讀取 legacy input_memory
+    mem_dir = _memory_dir()
+    step_input_keys = agent_info.get("memory", [])
+    legacy_memory = []
+    for key in step_input_keys:
+        key_file = mem_dir / f"{key}.md"
+        if key_file.exists():
+            try:
+                content = key_file.read_text(encoding="utf-8")
+                legacy_memory.append(f"### {key}\n\n{content}")
+            except Exception:
+                pass
+
+    prompt_parts = []
+    if mem_ctx:
+        prompt_parts.append(f"[Memory Context]\n{mem_ctx}")
+    if legacy_memory:
+        prompt_parts.append("---\n## 相關 Memory 上下文\n\n" + "\n\n".join(legacy_memory))
+        
+    return "\n\n".join(prompt_parts)
+
+
+async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -> None:
+    from message_bus import global_bus
+    global_bus.publish("team:run_start", {"run_id": run_id, "task": task})
+    
+    old_snap = _take_workspace_snapshot(cwd)
+    TEAMS_DIR, AGENTS_DIR = _dirs()
     run = _team_runs[run_id]
     steps = run["steps"]
+    
+    if len(steps) > 15:
+        run["status"] = "cancelled"
+        run["summary"] = "### [系統熔斷] 步驟數超過最大極限 15 步，已自動中斷以防止死循環。"
+        _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+        global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
+        return
     team_id = run.get("team_id", "")
     all_member_ids = [s["agent"] for s in steps]
     prev_output = ""
 
-    build_team_mem = _get_build_team_memory_context()
+    build_team_mem = None
+    try:
+        build_team_mem = _get_build_team_memory_context()
+    except Exception:
+        pass
 
-    for i, step in enumerate(steps):
-        if run.get("status") == "cancelled":
-            break
-        step["status"] = "running"
-        _tr_emit(run_id, {"type": "step_start", "step": i,
-                           "agent": step["agent"], "role": step["role"]})
-
-        agent_id = step["agent"]
-        agent_info = {}
+    team_info = {}
+    if team_id:
         try:
-            f_agent = AGENTS_DIR / f"{agent_id}.md"
-            if f_agent.exists():
-                agent_info = _agent_dict(f_agent)
+            f_team = TEAMS_DIR / f"{team_id}.yaml"
+            if f_team.exists():
+                team_info = _team_dict(f_team)
         except Exception:
             pass
 
-        # 分層 team memory 注入
-        if build_team_mem:
-            mem_ctx = build_team_mem(team_id, all_member_ids, agent_id, cwd)
-        else:
-            mem_ctx = ""
+    mode = team_info.get("execution_mode", "parallel") if team_info else "parallel"
 
-        # P2-B2: per-member input_memory keys (from team YAML) take precedence;
-        # fallback to agent-level memory keys (from agent frontmatter)
-        mem_dir = _memory_dir()
-        step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
-        step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
+    if mode == "consensus" and len(steps) >= 2:
+        agent_a = steps[0]["agent"]
+        agent_b = steps[1]["agent"]
+        
+        # 1. Initial Draft (Agent A)
+        _tr_emit(run_id, {"type": "step_start", "step": 0, "agent": agent_a, "role": "Coder (Initial Draft)"})
+        mem_a = await _get_agent_memory_prompt(team_id, all_member_ids, agent_a, cwd, build_team_mem)
+        prompt_1_parts = []
+        if mem_a:
+            prompt_1_parts.append(mem_a)
+        prompt_1_parts.append(f"[任務]\n{task}\n\n請根據任務，產出你的初始設計方案（Initial Draft）。")
+        prompt_1 = "\n\n".join(prompt_1_parts)
+        
+        draft = await _agent_run_capture(run_id, 0, agent_a, prompt_1, model, cwd)
+        steps[0]["output"] = draft
+        steps[0]["status"] = "done"
+        _tr_emit(run_id, {"type": "step_done", "step": 0})
+        global_bus.publish("team:step_done", {"run_id": run_id, "step": 0, "agent": agent_a, "output": draft})
+        
+        if run.get("status") == "cancelled":
+            return
+            
+        # 2. Review / Auditing (Agent B)
+        _tr_emit(run_id, {"type": "step_start", "step": 1, "agent": agent_b, "role": "Auditor (Review)"})
+        mem_b = await _get_agent_memory_prompt(team_id, all_member_ids, agent_b, cwd, build_team_mem)
+        prompt_2_parts = []
+        if mem_b:
+            prompt_2_parts.append(mem_b)
+        prompt_2_parts.append(
+            f"[任務]\n{task}\n\n"
+            f"[前置 Coder 產出的初始草案]\n{draft}\n\n"
+            "你現在是審查與安全稽核專員。請對前置 Coder 產出的草案進行嚴格的漏洞審查，"
+            "指出潛在的安全性漏洞或 Bugs，並提供詳細的修改意見。"
+        )
+        prompt_2 = "\n\n".join(prompt_2_parts)
+        
+        feedback = await _agent_run_capture(run_id, 1, agent_b, prompt_2, model, cwd)
+        steps[1]["output"] = feedback
+        steps[1]["status"] = "done"
+        _tr_emit(run_id, {"type": "step_done", "step": 1})
+        global_bus.publish("team:step_done", {"run_id": run_id, "step": 1, "agent": agent_b, "output": feedback})
 
-        legacy_memory: list[str] = []
-        for key in step_input_keys:
-            key_file = mem_dir / f"{key}.md"
-            if key_file.exists():
-                try:
-                    content = key_file.read_text(encoding="utf-8")
-                    legacy_memory.append(f"### {key}\n\n{content}")
-                except Exception:
-                    pass
+        if run.get("status") == "cancelled":
+            return
 
-        prompt_parts = []
-        if mem_ctx:
-            prompt_parts.append(f"[Memory Context]\n{mem_ctx}")
-        if legacy_memory:
-            prompt_parts.append("---\n## 相關 Memory 上下文\n\n" + "\n\n".join(legacy_memory))
+        # 3. Revision (Agent A)
+        if len(steps) < 3:
+            steps.append({"agent": agent_a, "role": "Coder (Revision)", "status": "pending", "output": ""})
+        
+        _tr_emit(run_id, {"type": "step_start", "step": 2, "agent": agent_a, "role": "Coder (Revision)"})
+        prompt_3_parts = []
+        if mem_a:
+            prompt_3_parts.append(mem_a)
+        prompt_3_parts.append(
+            f"[任務]\n{task}\n\n"
+            f"[你原先的初始草案]\n{draft}\n\n"
+            f"[審查專員的修改意見]\n{feedback}\n\n"
+            "請針對審查專員的意見進行深度的修正與答辯，提供最終的優化代碼與設計方案（Revised Draft）。"
+        )
+        prompt_3 = "\n\n".join(prompt_3_parts)
+        
+        revised = await _agent_run_capture(run_id, 2, agent_a, prompt_3, model, cwd)
+        steps[2]["output"] = revised
+        steps[2]["status"] = "done"
+        _tr_emit(run_id, {"type": "step_done", "step": 2})
+        global_bus.publish("team:step_done", {"run_id": run_id, "step": 2, "agent": agent_a, "output": revised})
 
-        if i == 0:
-            prompt_parts.append(f"---\n## 任務\n\n{task}")
-        else:
-            prompt_parts.append(
-                f"---\n## 任務\n\n{task}\n\n"
-                f"---\n## 前置 Agent（{steps[i-1]['agent']}）的輸出\n\n{prev_output}"
+        if run.get("status") == "cancelled":
+            return
+
+        # 4. Consensus Summary (Leader)
+        leader = team_info.get("leader") or agent_a
+        if len(steps) < 4:
+            steps.append({"agent": leader, "role": "Team Leader (Consensus Summary)", "status": "pending", "output": ""})
+            
+        _tr_emit(run_id, {"type": "step_start", "step": 3, "agent": leader, "role": "Team Leader (Consensus Summary)"})
+        mem_leader = await _get_agent_memory_prompt(team_id, all_member_ids, leader, cwd, build_team_mem)
+        prompt_4_parts = []
+        if mem_leader:
+            prompt_4_parts.append(mem_leader)
+        prompt_4_parts.append(
+            f"[任務]\n{task}\n\n"
+            f"[初始草案]\n{draft}\n\n"
+            f"[審查意見]\n{feedback}\n\n"
+            f"[最終修正草案]\n{revised}\n\n"
+            "你現在是團隊 Leader。請總結 Coder 與 Auditor 之間的這場技術辯論與修改歷程，"
+            "並給出一份完美的最終共識決策與代碼匯總（Consensus Summary）。"
+        )
+        prompt_4 = "\n\n".join(prompt_4_parts)
+        
+        summary = await _agent_run_capture(run_id, 3, leader, prompt_4, model, cwd)
+        steps[3]["output"] = summary
+        steps[3]["status"] = "done"
+        _tr_emit(run_id, {"type": "step_done", "step": 3})
+        global_bus.publish("team:step_done", {"run_id": run_id, "step": 3, "agent": leader, "output": summary})
+
+        run["status"] = "done"
+        run["_finished_at"] = time.time()
+        run["summary"] = summary
+        
+        new_snap = _take_workspace_snapshot(cwd)
+        run["artifacts"] = _diff_workspace_snapshot(old_snap, new_snap)
+
+        _tr_emit(run_id, {"type": "done", "summary": summary})
+        global_bus.publish("team:run_done", {"run_id": run_id, "summary": summary})
+        
+        if team_id and cwd:
+            slug = _encode_slug(cwd)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            proj_summary = (
+                f"# Team Consensus Run 記錄 — {timestamp}\n\n"
+                f"## 任務\n\n{task}\n\n"
+                f"## 辯論成員\n\n- Coder: {agent_a}\n- Auditor: {agent_b}\n- Leader: {leader}\n\n"
+                f"## 共識摘要\n\n{summary[:1800]}"
             )
+            _write_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md", proj_summary)
+        
+        _cleanup_old_runs()
+        return
 
-        prompt = "\n\n".join(prompt_parts)
+    if mode == "parallel":
+        async def run_parallel_step(i, step):
+            if run.get("status") == "cancelled":
+                return
+            step["status"] = "running"
+            _tr_emit(run_id, {"type": "step_start", "step": i,
+                               "agent": step["agent"], "role": step["role"]})
+            
+            agent_id = step["agent"]
+            agent_info = {}
+            try:
+                f_agent = AGENTS_DIR / f"{agent_id}.md"
+                if f_agent.exists():
+                    agent_info = _agent_dict(f_agent)
+            except Exception:
+                pass
 
-        output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd)
-        step["output"] = output
-        step["status"] = "done"
-        prev_output = output
-        _tr_emit(run_id, {"type": "step_done", "step": i})
-
-        # P2-B2: write output to per-member output_memory keys
-        if step_output_keys:
-            mem_dir.mkdir(parents=True, exist_ok=True)
-            for key in step_output_keys:
+            # 分層 team memory 注入
+            mem_ctx = ""
+            if build_team_mem:
                 try:
-                    (mem_dir / f"{key}.md").write_text(output, encoding="utf-8")
+                    mem_ctx = build_team_mem(team_id, all_member_ids, agent_id, cwd)
                 except Exception:
                     pass
+
+            mem_dir = _memory_dir()
+            step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
+            step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
+
+            legacy_memory: list[str] = []
+            for key in step_input_keys:
+                key_file = mem_dir / f"{key}.md"
+                if key_file.exists():
+                    try:
+                        content = key_file.read_text(encoding="utf-8")
+                        legacy_memory.append(f"### {key}\n\n{content}")
+                    except Exception:
+                        pass
+
+            prompt_parts = []
+            if mem_ctx:
+                prompt_parts.append(f"[Memory Context]\n{mem_ctx}")
+            if legacy_memory:
+                prompt_parts.append("---\n## 相關 Memory 上下文\n\n" + "\n\n".join(legacy_memory))
+
+            prompt_parts.append(f"---\n## 任務\n\n{task}")
+            prompt = "\n\n".join(prompt_parts)
+
+            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd)
+            step["output"] = output
+            step["status"] = "done"
+            _tr_emit(run_id, {"type": "step_done", "step": i})
+            global_bus.publish("team:step_done", {"run_id": run_id, "step": i, "agent": agent_id, "output": output})
+
+            if step_output_keys:
+                mem_dir.mkdir(parents=True, exist_ok=True)
+                for key in step_output_keys:
+                    try:
+                        (mem_dir / f"{key}.md").write_text(output, encoding="utf-8")
+                    except Exception:
+                        pass
+
+        await asyncio.gather(*(run_parallel_step(i, step) for i, step in enumerate(steps)))
+
+    else:
+        for i, step in enumerate(steps):
+            if run.get("status") == "cancelled":
+                break
+            step["status"] = "running"
+            _tr_emit(run_id, {"type": "step_start", "step": i,
+                               "agent": step["agent"], "role": step["role"]})
+
+            agent_id = step["agent"]
+            agent_info = {}
+            try:
+                f_agent = AGENTS_DIR / f"{agent_id}.md"
+                if f_agent.exists():
+                    agent_info = _agent_dict(f_agent)
+            except Exception:
+                pass
+
+            # 分層 team memory 注入
+            if build_team_mem:
+                mem_ctx = build_team_mem(team_id, all_member_ids, agent_id, cwd)
+            else:
+                mem_ctx = ""
+
+            # P2-B2: per-member input_memory keys (from team YAML) take precedence;
+            # fallback to agent-level memory keys (from agent frontmatter)
+            mem_dir = _memory_dir()
+            step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
+            step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
+
+            legacy_memory: list[str] = []
+            for key in step_input_keys:
+                key_file = mem_dir / f"{key}.md"
+                if key_file.exists():
+                    try:
+                        content = key_file.read_text(encoding="utf-8")
+                        legacy_memory.append(f"### {key}\n\n{content}")
+                    except Exception:
+                        pass
+
+            prompt_parts = []
+            if mem_ctx:
+                prompt_parts.append(f"[Memory Context]\n{mem_ctx}")
+            if legacy_memory:
+                prompt_parts.append("---\n## 相關 Memory 上下文\n\n" + "\n\n".join(legacy_memory))
+
+            if i == 0:
+                prompt_parts.append(f"---\n## 任務\n\n{task}")
+            else:
+                prompt_parts.append(
+                    f"---\n## 任務\n\n{task}\n\n"
+                    f"---\n## 前置 Agent（{steps[i-1]['agent']}）的輸出\n\n{prev_output}"
+                )
+
+            prompt = "\n\n".join(prompt_parts)
+
+            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd)
+            step["output"] = output
+            step["status"] = "done"
+            prev_output = output
+            _tr_emit(run_id, {"type": "step_done", "step": i})
+            global_bus.publish("team:step_done", {"run_id": run_id, "step": i, "agent": agent_id, "output": output})
+
+            # P2-B2: write output to per-member output_memory keys
+            if step_output_keys:
+                mem_dir.mkdir(parents=True, exist_ok=True)
+                for key in step_output_keys:
+                    try:
+                        (mem_dir / f"{key}.md").write_text(output, encoding="utf-8")
+                    except Exception:
+                        pass
 
     if run.get("status") != "cancelled":
         run["status"] = "done"
@@ -270,7 +591,12 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
             f"### {s['agent']}（{s['role']}）\n\n{s['output']}" for s in steps
         ]
         run["summary"] = "\n\n---\n\n".join(summary_parts)
+        
+        new_snap = _take_workspace_snapshot(cwd)
+        run["artifacts"] = _diff_workspace_snapshot(old_snap, new_snap)
+
         _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+        global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
 
         # Team Run 完成後自動更新 team project memory
         if team_id and cwd:
@@ -308,6 +634,8 @@ async def handle_teams(request: web.Request) -> web.Response:
 async def handle_team_get(request: web.Request) -> web.Response:
     TEAMS_DIR, _ = _dirs()
     tid = request.match_info["id"]
+    if not tid or "/" in tid or "\\" in tid or ".." in tid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = TEAMS_DIR / f"{tid}.yaml"
     if not f.exists():
         return web.json_response({"error": "not found"}, status=404)
@@ -337,6 +665,8 @@ async def handle_team_post(request: web.Request) -> web.Response:
 async def handle_team_put(request: web.Request) -> web.Response:
     TEAMS_DIR, _ = _dirs()
     tid = request.match_info["id"]
+    if not tid or "/" in tid or "\\" in tid or ".." in tid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = TEAMS_DIR / f"{tid}.yaml"
     if not f.exists():
         return web.json_response({"error": "not found"}, status=404)
@@ -356,6 +686,8 @@ async def handle_team_put(request: web.Request) -> web.Response:
 async def handle_team_delete(request: web.Request) -> web.Response:
     TEAMS_DIR, _ = _dirs()
     tid = request.match_info["id"]
+    if not tid or "/" in tid or "\\" in tid or ".." in tid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = TEAMS_DIR / f"{tid}.yaml"
     if f.exists():
         f.unlink()
@@ -393,6 +725,7 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         "team_id": team.get("id", team_id),
         "name":    team.get("name", "Auto Team"),
         "task":    task,
+        "cwd":     cwd,
         "status":  "running",
         "steps": [
             {
@@ -467,6 +800,7 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
     run = _team_runs.get(run_id)
     if run:
         run["status"] = "cancelled"
+        run["_finished_at"] = time.time()
         _tr_emit(run_id, {"type": "cancelled", "text": "cancelled"})
         proc = _team_run_processes.get(run_id)
         if proc:

@@ -141,6 +141,49 @@ _usage_cache: dict = {"data": None, "expires": 0.0}
 
 from helpers import _read_agent_body, _team_dict, safe_kill_process, wrap_cmd
 
+import atexit
+import signal
+
+def cleanup_subprocesses():
+    print("[cleanup] Python backend exiting... cleaning up all child processes", flush=True)
+    for k in list(active_procs.keys()):
+        proc = active_procs.pop(k, None)
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
+    for k in list(_mcp_procs.keys()):
+        proc = _mcp_procs.pop(k, None)
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
+    try:
+        import routes.teams
+        for k in list(routes.teams._team_run_processes.keys()):
+            proc = routes.teams._team_run_processes.pop(k, None)
+            if proc:
+                try:
+                    safe_kill_process(proc)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+atexit.register(cleanup_subprocesses)
+
+def signal_handler(signum, frame):
+    cleanup_subprocesses()
+    sys.exit(0)
+
+try:
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+except Exception:
+    pass
+
 _CLI_NOISE_PATTERNS = ("no stdin data received",)
 
 def _is_cli_noise(raw: str) -> bool:
@@ -301,45 +344,20 @@ def _resolve_api_key() -> str:
         return ""
 
 
-def build_memory_context(agent_id: str, cwd: str) -> str:
+def build_memory_context(agent_id: str, cwd: str, query: str = "") -> str:
     """
-    依序組裝五層記憶並回傳注入字串。
-    注入順序：User → System → Agent Identity → Agent Project → Project Internal
-    缺少的層自動跳過，全部為空時回傳空字串。
+    使用 MemoryAgent 進行動態分層加載與智能 Context 裁剪與 RAG 召回。
     """
+    from memory_agent import MemoryAgent
     slug = _encode_slug(cwd) if cwd else ""
-    sections: list[str] = []
-
-    user = _read_md(_global_memory_dir() / "user" / "profile.md")
-    if user:
-        sections.append(f"[User Memory]\n{user}")
-
-    system = _read_md(_global_memory_dir() / "system" / "state.md")
-    if system:
-        sections.append(f"[System Memory]\n{system}")
-
-    if agent_id:
-        identity = _read_md(_agent_memory_dir(agent_id) / "identity.md")
-        if identity:
-            sections.append(f"[Agent Identity — {agent_id}]\n{identity}")
-
-        if slug:
-            proj = _read_md(_agent_memory_dir(agent_id) / "projects" / f"{slug}.md")
-            if proj:
-                sections.append(f"[Agent Experience — {agent_id} / {slug}]\n{proj}")
-
-    if slug:
-        proj_mem_dir = CLAUDE_HOME / "projects" / slug / "memory"
-        if proj_mem_dir.exists():
-            parts = []
-            for f in sorted(proj_mem_dir.glob("*.md")):
-                content = _read_md(f)
-                if content:
-                    parts.append(f"### {f.stem}\n{content}")
-            if parts:
-                sections.append(f"[Project Internal Memory — {slug}]\n" + "\n\n".join(parts))
-
-    return "\n\n---\n\n".join(sections) if sections else ""
+    agent_dir = _agent_memory_dir(agent_id) if agent_id else None
+    
+    agent = MemoryAgent(
+        global_mem_dir=_global_memory_dir(),
+        agent_mem_dir=agent_dir,
+        cwd_slug=slug
+    )
+    return agent.build_smart_context(agent_id=agent_id, max_chars=16000, query=query)
 
 
 def build_team_memory_context(
@@ -348,26 +366,31 @@ def build_team_memory_context(
     current_agent_id: str,
     cwd: str,
     members_meta: "list[dict] | None" = None,
+    query: str = "",
 ) -> str:
     """
-    組裝 Team Run 的記憶 context（每位成員各自收到）。
-    注入順序：
-      User → Team Shared → Team Project
-      → 當前成員完整 Identity（只注入自己）
-      → 其他成員摘要（名稱+職責，不載入 identity.md）
-      → 當前成員 Agent Project
-
-    優化：原本注入「所有成員 identity.md」（多人 × ~2K token），
-    改為只注入當前 agent 的完整 identity，其他人僅列名稱與職責，
-    降低每次呼叫的 context 大小。
+    組裝 Team Run 的記憶 context。
+    使用 MemoryAgent 來對當前成員的 Identity 與 Project 內部日誌進行智能 Paging 與 RAG 相似度檢索！
     """
+    from memory_agent import MemoryAgent
     slug = _encode_slug(cwd) if cwd else ""
-    sections: list[str] = []
-
-    user = _read_md(_global_memory_dir() / "user" / "profile.md")
-    if user:
-        sections.append(f"[User Memory]\n{user}")
-
+    agent_dir = _agent_memory_dir(current_agent_id) if current_agent_id else None
+    
+    agent_mem = MemoryAgent(
+        global_mem_dir=_global_memory_dir(),
+        agent_mem_dir=agent_dir,
+        team_mem_dir=_team_memory_dir(team_id) if team_id else None,
+        cwd_slug=slug
+    )
+    
+    # 1. 取得 MemoryAgent 對此 agent 構建的智能記憶上下文 (包含 RAG 檢索)
+    agent_ctx = agent_mem.build_smart_context(agent_id=current_agent_id, max_chars=12000, query=query)
+    
+    sections = []
+    if agent_ctx:
+        sections.append(agent_ctx)
+        
+    # 2. 注入 Team 層級的記憶 (Team Shared + Team Project)
     team_shared = _read_md(_team_memory_dir(team_id) / "shared.md")
     if team_shared:
         sections.append(f"[Team Memory — {team_id}]\n{team_shared}")
@@ -377,13 +400,7 @@ def build_team_memory_context(
         if team_proj:
             sections.append(f"[Team Project Memory — {team_id} / {slug}]\n{team_proj}")
 
-    # 當前 agent 的完整 identity
-    if current_agent_id:
-        self_identity = _read_md(_agent_memory_dir(current_agent_id) / "identity.md")
-        if self_identity:
-            sections.append(f"[你的背景與身分 — {current_agent_id}]\n{self_identity}")
-
-    # 其他成員：只列名稱+職責（不讀 identity.md，大幅降低 token）
+    # 3. 成員角色清單
     peer_lines: list[str] = []
     if members_meta:
         for m in members_meta:
@@ -397,14 +414,6 @@ def build_team_memory_context(
                 peer_lines.append(f"- @{mid}")
     if peer_lines:
         sections.append("[Team 成員]\n" + "\n".join(peer_lines))
-
-    if current_agent_id and slug:
-        agent_proj = _read_md(_agent_memory_dir(current_agent_id) / "projects" / f"{slug}.md")
-        if agent_proj:
-            sections.append(f"[Agent Experience — {current_agent_id} / {slug}]\n{agent_proj}")
-
-    # 專案內部記憶（詳細進度）不預載入 Team context。
-    # 需要細節時由 Agent 主動查詢，保持 Team 共享的是智慧與經驗而非行程表。
 
     return "\n\n---\n\n".join(sections) if sections else ""
 
@@ -441,7 +450,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
 
         if team_id and team_info:
             all_members = [m["agent"] for m in team_info.get("members", [])]
-            mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd, members_meta=team_info.get("members", []))
+            mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd, members_meta=team_info.get("members", []), query=message)
             team_name = team_info.get("name", team_id)
             members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
             team_prompt = (
@@ -452,7 +461,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             )
             fm = team_prompt + fm
         else:
-            mem_ctx = build_memory_context(agent, cwd)
+            mem_ctx = build_memory_context(agent, cwd, query=message)
 
         if mem_ctx:
             fm = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fm}"
@@ -691,14 +700,16 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         呼叫單一 agent。優先透過 session_pool 重用長駐連線（不重開 subprocess）；
         沒有 SDK 或帶附件時退回舊的一次性 subprocess + --resume 模式。
         """
-        session_key = f"{client_id}_{agent_id}"
+        import hashlib
+        cwd_hash = hashlib.md5(cwd.encode("utf-8")).hexdigest()[:8] if cwd else "default"
+        session_key = f"{client_id}_{agent_id}_{cwd_hash}"
 
         def _build_full_prompt(hist: str) -> str:
             """組裝首 Turn 用的完整 prompt。"""
-            all_members_list = [m["agent"] for m in members]
             mem_ctx = build_team_memory_context(
                 team_id, all_members_list, agent_id, cwd,
                 members_meta=members,
+                query=prompt_text
             )
             team_name   = team_info.get("name", team_id)
             members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in members])
@@ -895,7 +906,9 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
 
         for loop_idx in range(10):
             is_first    = loop_idx == 0
-            session_key = f"{client_id}_{current_agent}"
+            import hashlib
+            cwd_hash = hashlib.md5(cwd.encode("utf-8")).hexdigest()[:8] if cwd else "default"
+            session_key = f"{client_id}_{current_agent}_{cwd_hash}"
             has_session = session_key in active_sessions
 
             # 後續 Turn 且有 session：只傳最新增量；否則傳完整 history
@@ -1789,6 +1802,8 @@ async def handle_memory_put(request: web.Request) -> web.Response:
 
 async def handle_memory_delete(request: web.Request) -> web.Response:
     key = request.match_info["key"]
+    if not key.replace("-", "").replace("_", "").isalnum():
+        return web.json_response({"error": "invalid key"}, status=400)
     f = _memory_dir() / f"{key}.md"
     if f.exists():
         f.unlink()
@@ -1831,17 +1846,23 @@ async def handle_mem_agents_list(request: web.Request) -> web.Response:
 
 async def handle_mem_agent_get(request: web.Request) -> web.Response:
     agent_id = request.match_info["id"]
+    if not agent_id or "/" in agent_id or "\\" in agent_id or ".." in agent_id:
+        return web.json_response({"error": "invalid agent_id"}, status=400)
     content = _read_md(_agent_memory_dir(agent_id) / "identity.md")
     return web.json_response({"agent_id": agent_id, "content": content or ""})
 
 async def handle_mem_agent_put(request: web.Request) -> web.Response:
     agent_id = request.match_info["id"]
+    if not agent_id or "/" in agent_id or "\\" in agent_id or ".." in agent_id:
+        return web.json_response({"error": "invalid agent_id"}, status=400)
     data = await request.json()
     _write_md(_agent_memory_dir(agent_id) / "identity.md", data.get("content", ""))
     return web.json_response({"ok": True})
 
 async def handle_mem_agent_projects_list(request: web.Request) -> web.Response:
     agent_id = request.match_info["id"]
+    if not agent_id or "/" in agent_id or "\\" in agent_id or ".." in agent_id:
+        return web.json_response({"error": "invalid agent_id"}, status=400)
     proj_dir = _agent_memory_dir(agent_id) / "projects"
     projects = []
     if proj_dir.exists():
@@ -1855,12 +1876,20 @@ async def handle_mem_agent_projects_list(request: web.Request) -> web.Response:
 async def handle_mem_agent_project_get(request: web.Request) -> web.Response:
     agent_id = request.match_info["id"]
     slug     = request.match_info["slug"]
+    if not agent_id or "/" in agent_id or "\\" in agent_id or ".." in agent_id:
+        return web.json_response({"error": "invalid agent_id"}, status=400)
+    if not slug or "/" in slug or "\\" in slug or ".." in slug:
+        return web.json_response({"error": "invalid slug"}, status=400)
     content  = _read_md(_agent_memory_dir(agent_id) / "projects" / f"{slug}.md")
     return web.json_response({"agent_id": agent_id, "slug": slug, "content": content or ""})
 
 async def handle_mem_agent_project_put(request: web.Request) -> web.Response:
     agent_id = request.match_info["id"]
     slug     = request.match_info["slug"]
+    if not agent_id or "/" in agent_id or "\\" in agent_id or ".." in agent_id:
+        return web.json_response({"error": "invalid agent_id"}, status=400)
+    if not slug or "/" in slug or "\\" in slug or ".." in slug:
+        return web.json_response({"error": "invalid slug"}, status=400)
     data     = await request.json()
     _write_md(_agent_memory_dir(agent_id) / "projects" / f"{slug}.md", data.get("content", ""))
     return web.json_response({"ok": True})
@@ -1880,17 +1909,23 @@ async def handle_mem_teams_list(request: web.Request) -> web.Response:
 
 async def handle_mem_team_get(request: web.Request) -> web.Response:
     team_id = request.match_info["id"]
+    if not team_id or "/" in team_id or "\\" in team_id or ".." in team_id:
+        return web.json_response({"error": "invalid team_id"}, status=400)
     content = _read_md(_team_memory_dir(team_id) / "shared.md")
     return web.json_response({"team_id": team_id, "content": content or ""})
 
 async def handle_mem_team_put(request: web.Request) -> web.Response:
     team_id = request.match_info["id"]
+    if not team_id or "/" in team_id or "\\" in team_id or ".." in team_id:
+        return web.json_response({"error": "invalid team_id"}, status=400)
     data    = await request.json()
     _write_md(_team_memory_dir(team_id) / "shared.md", data.get("content", ""))
     return web.json_response({"ok": True})
 
 async def handle_mem_team_projects_list(request: web.Request) -> web.Response:
     team_id  = request.match_info["id"]
+    if not team_id or "/" in team_id or "\\" in team_id or ".." in team_id:
+        return web.json_response({"error": "invalid team_id"}, status=400)
     proj_dir = _team_memory_dir(team_id) / "projects"
     projects = []
     if proj_dir.exists():
@@ -1904,12 +1939,20 @@ async def handle_mem_team_projects_list(request: web.Request) -> web.Response:
 async def handle_mem_team_project_get(request: web.Request) -> web.Response:
     team_id = request.match_info["id"]
     slug    = request.match_info["slug"]
+    if not team_id or "/" in team_id or "\\" in team_id or ".." in team_id:
+        return web.json_response({"error": "invalid team_id"}, status=400)
+    if not slug or "/" in slug or "\\" in slug or ".." in slug:
+        return web.json_response({"error": "invalid slug"}, status=400)
     content = _read_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md")
     return web.json_response({"team_id": team_id, "slug": slug, "content": content or ""})
 
 async def handle_mem_team_project_put(request: web.Request) -> web.Response:
     team_id = request.match_info["id"]
     slug    = request.match_info["slug"]
+    if not team_id or "/" in team_id or "\\" in team_id or ".." in team_id:
+        return web.json_response({"error": "invalid team_id"}, status=400)
+    if not slug or "/" in slug or "\\" in slug or ".." in slug:
+        return web.json_response({"error": "invalid slug"}, status=400)
     data    = await request.json()
     _write_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md", data.get("content", ""))
     return web.json_response({"ok": True})
@@ -2047,6 +2090,10 @@ async def handle_soul_rename(request: web.Request) -> web.Response:
     new_id = new_id.strip()
     if not new_id:
         return web.json_response({"error": "empty name"}, status=400)
+    if ".." in old_id or "/" in old_id or "\\" in old_id or not old_id.strip() or any(c in old_id for c in '<>:"/\\|?*'):
+        return web.json_response({"error": "invalid old name"}, status=400)
+    if ".." in new_id or "/" in new_id or "\\" in new_id or not new_id.strip() or any(c in new_id for c in '<>:"/\\|?*'):
+        return web.json_response({"error": "invalid new name"}, status=400)
     old_file = SOULS_DIR / f"{old_id}.md"
     new_file = SOULS_DIR / f"{new_id}.md"
     if not old_file.exists():
@@ -2060,6 +2107,8 @@ async def handle_soul_delete(request: web.Request) -> web.Response:
     sid = request.match_info["id"]
     if sid.lower().endswith(".md"):
         sid = sid[:-3]
+    if ".." in sid or "/" in sid or "\\" in sid or not sid.strip() or any(c in sid for c in '<>:"/\\|?*'):
+        return web.json_response({"error": "invalid name"}, status=400)
     f = SOULS_DIR / f"{sid}.md"
     if f.exists():
         f.unlink()
@@ -3123,8 +3172,13 @@ def build_app() -> web.Application:
     })
 
     # Routes grouped by resource path to avoid double-CORS registration
+    from routes.mcp_debugger import handle_mcp_rpc
+    from routes.run_artifacts import handle_run_artifacts
+
     route_groups: dict[str, list[tuple[str, any]]] = {}
     for method, path, handler in [
+        ("GET",    "/api/team/run/{run_id}/artifacts", handle_run_artifacts),
+        ("POST",   "/api/mcp/rpc",         handle_mcp_rpc),
         ("GET",    "/api/usage",           handle_usage),
         ("POST",   "/api/chat",           handle_chat),
         ("POST",   "/api/team/chat",      handle_team_chat),

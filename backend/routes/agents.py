@@ -83,6 +83,8 @@ async def handle_agents_registry(request: web.Request) -> web.Response:
 async def handle_agent_get(request: web.Request) -> web.Response:
     AGENTS_DIR, _ = _dirs()
     aid = request.match_info["id"]
+    if not aid or "/" in aid or "\\" in aid or ".." in aid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = AGENTS_DIR / f"{aid}.md"
     if not f.exists():
         return web.json_response({"error": "not found"}, status=404)
@@ -92,6 +94,8 @@ async def handle_agent_get(request: web.Request) -> web.Response:
 async def handle_agent_put(request: web.Request) -> web.Response:
     AGENTS_DIR, _ = _dirs()
     aid = request.match_info["id"]
+    if not aid or "/" in aid or "\\" in aid or ".." in aid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = AGENTS_DIR / f"{aid}.md"
     if not f.exists():
         return web.json_response({"error": "not found"}, status=404)
@@ -127,6 +131,8 @@ async def handle_agent_post(request: web.Request) -> web.Response:
 async def handle_agent_delete(request: web.Request) -> web.Response:
     AGENTS_DIR, _ = _dirs()
     aid = request.match_info["id"]
+    if not aid or "/" in aid or "\\" in aid or ".." in aid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = AGENTS_DIR / f"{aid}.md"
     if f.exists():
         f.unlink()
@@ -258,6 +264,8 @@ async def handle_skills(request: web.Request) -> web.Response:
 async def handle_skill_get(request: web.Request) -> web.Response:
     _, SKILLS_DIR = _dirs()
     sid = request.match_info["id"]
+    if not sid or "/" in sid or "\\" in sid or ".." in sid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = SKILLS_DIR / f"{sid}.md"
     if f.exists():
         return web.json_response(_skill_dict_from_file(f))
@@ -270,6 +278,8 @@ async def handle_skill_get(request: web.Request) -> web.Response:
 async def handle_skill_put(request: web.Request) -> web.Response:
     _, SKILLS_DIR = _dirs()
     sid = request.match_info["id"]
+    if not sid or "/" in sid or "\\" in sid or ".." in sid:
+        return web.json_response({"error": "invalid id"}, status=400)
     f = SKILLS_DIR / f"{sid}.md"
     if not f.exists():
         d = SKILLS_DIR / sid

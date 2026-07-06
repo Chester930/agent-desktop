@@ -67,6 +67,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
     return list;
   });
+  // MCP Live Debugger state
+  mcpRpcName = '';
+  mcpRpcMethod = 'tools/list';
+  mcpRpcParamsText = '{}';
+  mcpRpcResult = '';
+  isMcpRpcSending = false;
+  activeRunId = '';
+
+  // Team Run Artifacts Tracer
+  runArtifacts = signal<any[]>([]);
+  mcpPendingAuth = signal<any>(null);
+
   skills = signal<Skill[]>([]);
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
@@ -639,6 +651,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   private doCloseTab(tabId: string) {
     const tabs = this.chatTabs();
     const idx = tabs.findIndex(t => t.id === tabId);
+    if (idx === -1) return;
+    const tabToClose = tabs[idx];
+    if (tabToClose && tabToClose.clientId) {
+      this.claude.stopChat(tabToClose.clientId).subscribe();
+    }
     const isActive = tabId === this.activeChatId();
     const next = tabs[idx > 0 ? idx - 1 : 1];
     if (isActive && this.isRecording()) {
@@ -1367,6 +1384,88 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.renamingId.set(null);
   }
 
+  sendMcpRpcDebug() {
+    if (!this.mcpRpcName || !this.mcpRpcMethod) {
+      this.mcpRpcResult = '錯誤: 必須填寫 MCP 名稱與 Method';
+      return;
+    }
+    let paramsObj = {};
+    try {
+      paramsObj = JSON.parse(this.mcpRpcParamsText || '{}');
+    } catch (e: any) {
+      this.mcpRpcResult = `錯誤: Params 不是有效的 JSON - ${e.message}`;
+      return;
+    }
+    this.isMcpRpcSending = true;
+    this.mcpRpcResult = '發送中...';
+    this.mcpPendingAuth.set(null); // 每次全新調送前清空掛起狀態
+    
+    this.claude.sendMcpRpc(this.mcpRpcName, this.mcpRpcMethod, paramsObj).subscribe({
+      next: (res) => {
+        this.mcpRpcResult = JSON.stringify(res, null, 2);
+        this.isMcpRpcSending = false;
+      },
+      error: (err) => {
+        // 當遇到後端敏感關鍵字安全閘口攔截 (403 pending_authorization)
+        if (err.status === 403 && (err.error?.status === 'pending_authorization' || err.error?.error?.includes('敏感操作'))) {
+          const errMsg = err.error?.error || '敏感操作已被掛起';
+          const pId = 'mcp-pending-debug';
+          this.mcpPendingAuth.set({
+            pendingId: pId,
+            name: this.mcpRpcName,
+            method: this.mcpRpcMethod,
+            params: paramsObj
+          });
+          this.mcpRpcResult = `⚠️ ${errMsg}`;
+          this.isMcpRpcSending = false;
+          return;
+        }
+        
+        this.mcpRpcResult = `請求失敗: ${err.error?.error || err.message || JSON.stringify(err)}`;
+        this.isMcpRpcSending = false;
+      }
+    });
+  }
+
+  authorizeMcpRpc(authorized: boolean) {
+    const auth = this.mcpPendingAuth();
+    if (!auth) return;
+
+    if (!authorized) {
+      this.mcpRpcResult = '授權拒絕。敏感操作已取消。';
+      this.mcpPendingAuth.set(null);
+      return;
+    }
+
+    this.isMcpRpcSending = true;
+    this.mcpRpcResult = '授權通過，發送中...';
+
+    this.claude.sendMcpRpc(auth.name, auth.method, auth.params, true, auth.pendingId).subscribe({
+      next: (res) => {
+        this.mcpRpcResult = JSON.stringify(res, null, 2);
+        this.isMcpRpcSending = false;
+        this.mcpPendingAuth.set(null);
+      },
+      error: (err) => {
+        this.mcpRpcResult = `授權執行失敗: ${err.error?.error || err.message || JSON.stringify(err)}`;
+        this.isMcpRpcSending = false;
+        this.mcpPendingAuth.set(null);
+      }
+    });
+  }
+
+  loadRunArtifacts(runId: string) {
+    if (!runId) return;
+    this.claude.getTeamRunArtifacts(runId).subscribe({
+      next: (data) => {
+        this.runArtifacts.set(data?.artifacts || []);
+      },
+      error: (err) => {
+        console.error('加載成果失敗:', err);
+      }
+    });
+  }
+
   loadMemoryOverview() {
     this.claude.getMemoryOverview().subscribe(data => {
       this.memoryOverview.set(data);
@@ -1944,6 +2043,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.teamRunLoading.set(true);
     this.expandedOutputs.set([]);
 
+    this.runArtifacts.set([]); // 🚀 啟動前主動清空舊成果，防止舊資料殘留污染
     this.teamRunState.set({
       id: '', team_id: team.id, name: team.name, task,
       status: 'running',
@@ -1956,15 +2056,27 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       next: (r) => {
         this.teamRunLoading.set(false);
         const runId = r.run_id;
+        this.activeRunId = runId; // 🚀 記錄當前運行 ID
         this.teamRunState.update(st => st ? { ...st, id: runId } : st);
         this._teamRunStopFn = this.claude.streamTeamRun(
           runId,
           (ev) => this._handleTeamRunEvent(ev),
-          () => { this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s); },
-          (e) => { console.error('team run error', e); this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s); }
+          () => {
+            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s);
+            this.loadRunArtifacts(runId);
+            this.activeRunId = ''; // 🚀 結束清空
+          },
+          (e) => {
+            console.error('team run error', e);
+            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s);
+            this.activeRunId = ''; // 🚀 出錯清空
+          }
         );
       },
-      error: () => this.teamRunLoading.set(false),
+      error: () => {
+        this.teamRunLoading.set(false);
+        this.activeRunId = '';
+      },
     });
   }
 
@@ -1992,10 +2104,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   cancelTeamRun() {
     const st = this.teamRunState();
-    if (st?.id) this.claude.cancelTeamRun(st.id).subscribe();
+    const runId = st?.id || this.activeRunId;
+    if (runId) {
+      this.claude.cancelTeamRun(runId).subscribe();
+      this.activeRunId = '';
+    }
     if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
     // 立即更新 UI 狀態，不等 SSE 回應
     this.teamRunState.update(s => s ? { ...s, status: 'cancelled' } : s);
+    if (runId) this.loadRunArtifacts(runId);
   }
 
   closeTeamRun() {
@@ -2107,6 +2224,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.teamRunOpen.set(true);
     this.expandedOutputs.set([]);
 
+    this.runArtifacts.set([]); // 🚀 啟動前主動清空舊成果，防止舊資料殘留污染
     this.teamRunState.set({
       id: '', team_id: '', name: plan.name || '自動組隊任務', task,
       status: 'running',
@@ -2119,16 +2237,26 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       next: (r) => {
         this.teamRunLoading.set(false);
         const runId = r.run_id;
+        this.activeRunId = runId; // 🚀 記錄當前運行 ID
         this.teamRunState.update(st => st ? { ...st, id: runId } : st);
         this._teamRunStopFn = this.claude.streamTeamRun(
           runId,
           (ev) => this._handleTeamRunEvent(ev),
-          () => { this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s); },
-          (e) => { console.error('team run error', e); this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s); }
+          () => {
+            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s);
+            this.loadRunArtifacts(runId); // 🚀 補齊成果加載，確保自動組隊成果畫廊能成功顯現！
+            this.activeRunId = ''; // 🚀 結束清空
+          },
+          (e) => {
+            console.error('team run error', e);
+            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s);
+            this.activeRunId = ''; // 🚀 出錯清空
+          }
         );
       },
       error: (err) => {
         this.teamRunLoading.set(false);
+        this.activeRunId = '';
         const errMsg = err.error?.error || err.message || '執行失敗';
         this.showToast(errMsg, 'error');
       }
@@ -2302,7 +2430,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }, 2500);
   }
   refreshMcpLog(name: string) {
-    this.claude.getMcpLogs(name).subscribe(r => this.mcpLogLines.set(r.lines));
+    this.claude.getMcpLogs(name).subscribe(r => {
+      this.mcpLogLines.set(r.lines);
+      setTimeout(() => {
+        const el = document.querySelector('.mcp-log-body');
+        if (el) {
+          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+        }
+      }, 50);
+    });
   }
 
   // Auto session title (#10)

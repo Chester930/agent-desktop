@@ -31,7 +31,7 @@ SOUL_FILE          = CLAUDE_HOME / "soul.md"
 SOULS_DIR          = CLAUDE_HOME / "souls"
 
 def update_paths(value: Path):
-    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR, LOCAL_MCP_CONFIG_FILE
+    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR, LOCAL_MCP_CONFIG_FILE, _INDEX_DB
     CLAUDE_HOME = value
     AGENTS_DIR = value / "agents"
     SKILLS_DIR = value / "skills"
@@ -42,6 +42,7 @@ def update_paths(value: Path):
     SOUL_FILE = value / "soul.md"
     SOULS_DIR = value / "souls"
     LOCAL_MCP_CONFIG_FILE = value / "claude-desktop-local-mcps.json"
+    _INDEX_DB = value / "claude-desktop-index.db"
 
 def _safe_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
     """原子寫入檔案，避免寫入中途崩潰時造成設定檔損毀"""
@@ -151,26 +152,53 @@ def _db() -> sqlite3.Connection:
     return conn
 
 def _init_db() -> None:
-    with _db() as c:
-        c.executescript("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id            TEXT PRIMARY KEY,
-            title         TEXT NOT NULL DEFAULT '',
-            mtime         REAL NOT NULL DEFAULT 0,
-            search_text   TEXT NOT NULL DEFAULT '',
-            input_tokens  INTEGER NOT NULL DEFAULT 0,
-            output_tokens INTEGER NOT NULL DEFAULT 0,
-            message_count INTEGER NOT NULL DEFAULT 0,
-            file_path     TEXT NOT NULL DEFAULT ''
-        );
-        CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
-        CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-            id UNINDEXED, title, search_text,
-            tokenize='trigram'
-        );
-        -- add column if upgrading from previous schema without it
-        CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
-        """)
+    try:
+        with _db() as c:
+            c.executescript("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id            TEXT PRIMARY KEY,
+                title         TEXT NOT NULL DEFAULT '',
+                mtime         REAL NOT NULL DEFAULT 0,
+                search_text   TEXT NOT NULL DEFAULT '',
+                input_tokens  INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                file_path     TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
+            CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+                id UNINDEXED, title, search_text,
+                tokenize='trigram'
+            );
+            -- add column if upgrading from previous schema without it
+            CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
+            """)
+    except sqlite3.Error as e:
+        print(f"[sqlite] database init error (malformed?): {e}. Rebuilding brand new database...", flush=True)
+        try:
+            _INDEX_DB.unlink(missing_ok=True)
+        except Exception:
+            pass
+        with _db() as c:
+            c.executescript("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id            TEXT PRIMARY KEY,
+                title         TEXT NOT NULL DEFAULT '',
+                mtime         REAL NOT NULL DEFAULT 0,
+                search_text   TEXT NOT NULL DEFAULT '',
+                input_tokens  INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                file_path     TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
+            CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+                id UNINDEXED, title, search_text,
+                tokenize='trigram'
+            );
+            -- add column if upgrading from previous schema without it
+            CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
+            """)
 
 def _migrate_db() -> None:
     """Add missing columns introduced in newer schema versions."""
