@@ -211,3 +211,40 @@ npm install
 
 > [!TIP]
 > 後端已就緒，接下來的工作幾乎全在前端 Angular。換機後直接開 `frontend/src/app/` 就可以開始。
+
+---
+
+## 九、2026-07-06 全面健檢 — 待修復任務清單
+
+> **背景**：對 `8c986bf..HEAD`（`90d505f` onboarding/usage/command palette + `8015063` MCP debugging/agent 管理/system messaging，共 2103 行變更）做的全面健檢。所有項目皆已直接讀原始碼／跑測試驗證。依優先順序修，勾掉再往下。
+
+### 🔴 P0 — 資安 / 阻斷性
+
+- [x] **T1｜MCP 敏感操作授權閘門形同虛設** — `backend/routes/mcp_debugger.py` 原本只信任呼叫方自報的 `authorized: true`，疊加既有 CORS（`allow_credentials=True` + origin `"*"`）可被任意網頁繞過確認流程觸發破壞性 MCP 呼叫。已改為伺服器核發、單次使用、TTL 120 秒的 `pending_id`，`frontend/app.ts` 同步改讀後端回傳的 `pending_id`（原本寫死成固定字串）。CORS 白名單化仍待評估，未變更。
+- [ ] **T2｜`docker-compose.yml` 新增 docker.sock 掛載，配合 T1 構成提權鏈** — 需與使用者確認是否真的需要掛整個 socket，或改用受限中介方案（如 docker-socket-proxy）。**需要產品決策，尚未處理。**
+- [x] **T3｜Electron dev 模式後端啟動靜默失敗** — `electron/main.js` 用未 import 的 `execSync`，改用已 import 的 `execFileSync`。
+
+### 🟠 P1 — 既有測試 / CI
+
+- [x] **T4｜main.py 重構造成既有測試回歸** — 補回 `_agent_dict`、`_parse_yaml_simple` 的 import。
+- [x] **T5｜新功能測試從未真正進 CI** — `backend/test_upgrade.py` 搬進 `tests/`，並把其中驗證「假授權會放行」的過時測試改成驗證新安全流程（含重放防護）。`pytest tests/` 現在 98 個測試全過。
+
+### 🟡 P2 — 中等
+
+- [x] **T6｜`run_artifacts.py` 路徑檢查可被同層目錄繞過** — 改用 `resolved_full.is_relative_to(base_dir)`。
+- [ ] **T7｜`message_bus.py` async 訂閱者例外被靜默吃掉** — `publish()` 對 async callback 用 `create_task` 發送後不接錯誤、不留參照。待修。
+- [ ] **T8｜`memory_agent.py` 同步阻塞呼叫卡住 event loop** — `build_memory_context`/`build_team_memory_context` 在 `main.py` 熱路徑同步呼叫，待改成 `await asyncio.to_thread(...)`。
+- [ ] **T9｜`database.py` 自我修復邏輯過猛** — `_init_db()` 捕到任何 `sqlite3.Error` 就刪除重建整個索引 DB，重建呼叫沒有二次 try/except。待修。
+- [ ] **T10｜前端：設定說明彈窗變孤兒功能** — 觸發按鈕被移除但 signal/modal/ESC 邏輯還留著。待修。
+- [ ] **T11｜前端：訊息截斷失敗時畫面與後端歷史會分岔** — `confirmEditMsg()` 呼叫 `truncateSession` 沒有錯誤處理。待修。
+- [ ] **T12｜前端：語音輸入結果覆蓋手動編輯內容** — `toggleMic()` 的 `onresult` 永遠用 `startText` 覆寫，且 `SpeechRecognition` 沒在 `ngOnDestroy` 強制停止。待修。
+
+### 🟢 P3 — 低
+
+- [ ] **T13｜前端兩套不一致的複製到剪貼簿實作**。
+- [ ] **T14｜MCP RPC pending authorization 送出新請求時被靜默清空**。
+- [ ] **T15｜（既有問題，非本次新增）Electron `shell.openExternal` IPC 沒有 protocol allowlist**。
+
+### 已驗證沒問題
+
+前端 `ng build`/`tsc --noEmit` 全過；Electron `contextIsolation: true`、`nodeIntegration: false` 設定正確；所有變更的 backend 檔案 `py_compile` 全過；前端沒有 RxJS 訂閱洩漏或 XSS 風險。
