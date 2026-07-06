@@ -1409,7 +1409,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         // 當遇到後端敏感關鍵字安全閘口攔截 (403 pending_authorization)
         if (err.status === 403 && (err.error?.status === 'pending_authorization' || err.error?.error?.includes('敏感操作'))) {
           const errMsg = err.error?.error || '敏感操作已被掛起';
-          const pId = 'mcp-pending-debug';
+          const pId = err.error?.pending_id;
           this.mcpPendingAuth.set({
             pendingId: pId,
             name: this.mcpRpcName,

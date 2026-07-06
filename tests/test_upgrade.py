@@ -286,32 +286,49 @@ class TestSensitiveToolGatekeeper(unittest.IsolatedAsyncioTestCase):
     async def test_sensitive_tool_intercept_and_bypass(self, mock_analyze):
         mock_analyze.return_value = {"command": "sqlite3", "args": []}
         from routes.mcp_debugger import handle_mcp_rpc
-        
-        # 1. 測試無授權調用敏感工具 (write_file) -> 應該攔截 (403)
+
+        params = {"name": "write_file", "arguments": {"path": "a.txt", "content": "123"}}
+
+        # 1. 測試無授權調用敏感工具 (write_file) -> 應該攔截 (403)，並取得伺服器核發的 pending_id
         req_data_unauth = {
             "mcp_name": "mock-sqlite",
             "method": "tools/call",
-            "params": {"name": "write_file", "arguments": {"path": "a.txt", "content": "123"}}
+            "params": params
         }
         request = make_mocked_request("POST", "/api/mcp/rpc")
         request.json = AsyncMock(return_value=req_data_unauth)
-        
+
         response = await handle_mcp_rpc(request)
         self.assertEqual(response.status, 403)
         resp_json = json.loads(response.body.decode("utf-8"))
         self.assertEqual(resp_json["status"], "pending_authorization")
         self.assertIn("敏感操作攔截", resp_json["error"])
+        pending_id = resp_json["pending_id"]
+        self.assertTrue(pending_id)
 
-        # 2. 測試有授權調用敏感工具 (write_file) -> 應該放行 (因無實際進程改為測試放行後的 spawn)
+        # 2. 光靠呼叫方自報 authorized=True（沒有伺服器核發的 pending_id）不應該放行
+        req_data_fake_auth = {
+            "mcp_name": "mock-sqlite",
+            "method": "tools/call",
+            "params": params,
+            "authorized": True
+        }
+        request_fake_auth = make_mocked_request("POST", "/api/mcp/rpc")
+        request_fake_auth.json = AsyncMock(return_value=req_data_fake_auth)
+
+        response_fake_auth = await handle_mcp_rpc(request_fake_auth)
+        self.assertEqual(response_fake_auth.status, 403)
+
+        # 3. 帶上伺服器核發、且對應同一筆請求內容的 pending_id -> 應該放行
         req_data_auth = {
             "mcp_name": "mock-sqlite",
             "method": "tools/call",
-            "params": {"name": "write_file", "arguments": {"path": "a.txt", "content": "123"}},
-            "authorized": True
+            "params": params,
+            "pending_id": pending_id
         }
         request_auth = make_mocked_request("POST", "/api/mcp/rpc")
         request_auth.json = AsyncMock(return_value=req_data_auth)
-        
+
         # 為了不真正啟動子進程，我們 patch asyncio.create_subprocess_exec
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_spawn:
             mock_proc = MagicMock()
@@ -319,10 +336,16 @@ class TestSensitiveToolGatekeeper(unittest.IsolatedAsyncioTestCase):
             mock_proc.stdin.drain = AsyncMock()
             mock_proc.stdout.readline = AsyncMock(return_value=b'{"jsonrpc":"2.0","result":{}}\n')
             mock_spawn.return_value = mock_proc
-            
+
             response_auth = await handle_mcp_rpc(request_auth)
             self.assertEqual(response_auth.status, 200)
             mock_spawn.assert_called_once()
+
+        # 4. 同一個 pending_id 用過一次即失效（單次使用），重放應再次被攔截
+        request_replay = make_mocked_request("POST", "/api/mcp/rpc")
+        request_replay.json = AsyncMock(return_value=req_data_auth)
+        response_replay = await handle_mcp_rpc(request_replay)
+        self.assertEqual(response_replay.status, 403)
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,7 +50,7 @@ function startBackend() {
     let pythonCmd = null;
     for (const py of candidates) {
       try {
-        execSync(`${py} --version`, { stdio: 'ignore' });
+        execFileSync(py, ['--version'], { stdio: 'ignore', windowsHide: true, shell: false, timeout: 5000 });
         pythonCmd = py;
         break;
       } catch {}

@@ -26,8 +26,9 @@ async def handle_run_artifacts(request: web.Request) -> web.Response:
         full_path = base_dir / rel_path
         try:
             # 確保檔案路徑確實位於專案根目錄下，杜絕 Directory Traversal 目錄逃逸漏洞
+            # （用 is_relative_to 而非字串前綴比對，避免 /proj-evil 這種同層兄弟目錄誤判通過）
             resolved_full = full_path.resolve()
-            if not str(resolved_full).startswith(str(base_dir)):
+            if not resolved_full.is_relative_to(base_dir):
                 continue
         except Exception:
             continue

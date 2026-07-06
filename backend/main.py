@@ -139,7 +139,7 @@ _usage_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
-from helpers import _read_agent_body, _team_dict, safe_kill_process, wrap_cmd
+from helpers import _read_agent_body, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
 
 import atexit
 import signal
