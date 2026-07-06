@@ -13,6 +13,18 @@ let backendProcess;
 let tray;
 let isQuitting = false;
 
+// shell.openExternal 會把 URL 交給作業系統的預設 handler 開啟；若不限制協定，
+// 惡意頁面／MCP 回應可以塞入 file:/javascript: 或自訂協定 URI 觸發非預期行為。
+// 只允許一般網頁連結與 mailto。
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['https:', 'http:', 'mailto:']);
+function isAllowedExternalUrl(url) {
+  try {
+    return ALLOWED_EXTERNAL_PROTOCOLS.has(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
 // ── 路徑決策：打包版用 app.isPackaged 判斷，開發版相對 __dirname ──
 const ROOT_DIR     = path.join(__dirname, '..');          // electron/../  = project root
 const srcFrontend  = path.join(ROOT_DIR, 'frontend', 'dist', 'frontend', 'browser', 'index.html');
@@ -260,7 +272,8 @@ function showNoClaudePage() {
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url); return { action: 'deny' };
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
+    return { action: 'deny' };
   });
 }
 
@@ -271,7 +284,7 @@ ipcMain.handle('dialog:openDirectory', async () => {
 });
 
 ipcMain.handle('shell:openExternal', (_, url) => {
-  shell.openExternal(url);
+  if (isAllowedExternalUrl(url)) shell.openExternal(url);
 });
 
 ipcMain.handle('notify', (_, { title, body }) => {
@@ -321,7 +334,8 @@ function createWindow() {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url); return { action: 'deny' };
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
+    return { action: 'deny' };
   });
 }
 

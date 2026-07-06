@@ -1402,6 +1402,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.mcpRpcResult = '錯誤: 必須填寫 MCP 名稱與 Method';
       return;
     }
+    if (this.mcpPendingAuth()) {
+      // 上一筆敏感操作還在等待使用者核准/拒絕，直接送出新請求會讓那筆掛起狀態
+      // 從畫面上悄悄消失（後端 pending_id 仍存在，只是 UI 不再追蹤），
+      // 因此在此擋下，要求使用者先處理完再繼續。
+      this.mcpRpcResult = '⚠️ 尚有一筆敏感操作正在等待授權，請先核准或拒絕後再送出新請求。';
+      return;
+    }
     let paramsObj = {};
     try {
       paramsObj = JSON.parse(this.mcpRpcParamsText || '{}');
@@ -1411,8 +1418,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
     this.isMcpRpcSending = true;
     this.mcpRpcResult = '發送中...';
-    this.mcpPendingAuth.set(null); // 每次全新調送前清空掛起狀態
-    
+
     this.claude.sendMcpRpc(this.mcpRpcName, this.mcpRpcMethod, paramsObj).subscribe({
       next: (res) => {
         this.mcpRpcResult = JSON.stringify(res, null, 2);
@@ -1565,28 +1571,53 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     );
   }
 
-  ctxCopyId(s: Session) {
-    navigator.clipboard.writeText(s.id).then(() => this.showToast('Session ID 已複製', 'success', 1500));
-    this.closeContextMenu();
+  // Single clipboard-copy implementation shared by every copy button: tries the
+  // async Clipboard API first, falls back to execCommand('copy') via a temp
+  // textarea when it's unavailable (e.g. insecure context), and always surfaces
+  // failure instead of silently doing nothing.
+  private copyToClipboard(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise<void>((resolve, reject) => {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    });
   }
 
-  copyMessage(text: string) {
-    navigator.clipboard.writeText(text).then(() => this.showToast('已複製到剪貼簿', 'success', 1500));
+  ctxCopyId(s: Session) {
+    this.copyToClipboard(s.id).then(
+      () => this.showToast('Session ID 已複製', 'success', 1500),
+      (err) => { console.error('Copy failed', err); this.showToast('複製失敗', 'error'); }
+    );
+    this.closeContextMenu();
   }
 
   copyMessageWithFeedback(event: MouseEvent, text: string) {
     const btn = event.currentTarget as HTMLButtonElement;
-    navigator.clipboard.writeText(text).then(() => {
-      const orig = btn.textContent ?? '';
-      btn.textContent = '✓ 已複製';
-      btn.classList.add('copied');
-      setTimeout(() => {
-        btn.textContent = orig;
-        btn.classList.remove('copied');
-      }, 2000);
-    });
+    this.copyToClipboard(text).then(
+      () => {
+        const orig = btn.textContent ?? '';
+        btn.textContent = '✓ 已複製';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.classList.remove('copied');
+        }, 2000);
+      },
+      (err) => { console.error('Copy failed', err); this.showToast('複製失敗', 'error'); }
+    );
   }
-
 
   // Code block copy (event delegation from chat container)
   onChatClick(e: MouseEvent) {
@@ -1595,28 +1626,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const code = btn.closest('.code-block-wrap')?.querySelector('code') as HTMLElement | null;
     if (!code) return;
     const textToCopy = code.innerText;
-    const onSuccess = () => {
-      const orig = btn.textContent;
-      btn.textContent = '✓ 已複製';
-      btn.classList.add('copied');
-      setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
-    };
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(textToCopy).then(onSuccess);
-    } else {
-      try {
-        const textarea = document.createElement('textarea');
-        textarea.value = textToCopy;
-        textarea.style.position = 'fixed';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        onSuccess();
-      } catch (err) {
-        console.error('Fallback copy failed', err);
-      }
-    }
+    this.copyToClipboard(textToCopy).then(
+      () => {
+        const orig = btn.textContent;
+        btn.textContent = '✓ 已複製';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+      },
+      (err) => console.error('Fallback copy failed', err)
+    );
   }
 
   // Message edit + regenerate (#11)
@@ -2155,10 +2173,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.expandedOutputs.update(list =>
       list.includes(idx) ? list.filter(i => i !== idx) : [...list, idx]
     );
-  }
-
-  copyText(text: string) {
-    navigator.clipboard.writeText(text).then(() => this.showToast('已複製到剪貼簿', 'success', 1500));
   }
 
   // ── HR Agent (Phase 4) ────────────────────────────────────────────────────
