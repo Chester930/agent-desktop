@@ -871,7 +871,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   model = signal('sonnet');
   effort = signal<'low' | 'medium' | 'high' | 'xhigh' | 'max'>('medium');
   permissionMode = signal<'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto'>('acceptEdits');
-  showSettingsHelp = signal(false);
   bannerDismissed = signal(false);
   outOfQuota = signal(false);
   usageOpen  = signal(false);
@@ -929,21 +928,36 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.showToast('🎙️ 語音輸入已結束', 'info');
       };
 
-      const startText = this.inputText;
+      // `baseText` anchors whatever was in the box before/independent of this
+      // recognition session; `finalSoFar`/`lastRecognizedText` track what WE
+      // last wrote so we can tell manual edits apart from our own writes.
+      let baseText = this.inputText;
+      let finalSoFar = '';
+      let lastRecognizedText = '';
 
       this.recognition.onresult = (event: any) => {
+        // If the textarea no longer matches what we last wrote, the user
+        // edited it manually mid-recording — adopt the current text as the
+        // new anchor instead of clobbering their edit on the next update.
+        if (this.inputText !== baseText + lastRecognizedText) {
+          baseText = this.inputText;
+          finalSoFar = '';
+          lastRecognizedText = '';
+        }
+
         let interimTranscript = '';
-        let finalTranscript = '';
 
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
+            finalSoFar += event.results[i][0].transcript;
           } else {
             interimTranscript += event.results[i][0].transcript;
           }
         }
 
-        this.inputText = startText + finalTranscript + interimTranscript;
+        const recognizedText = finalSoFar + interimTranscript;
+        this.inputText = baseText + recognizedText;
+        lastRecognizedText = recognizedText;
 
         setTimeout(() => {
           if (this.inputRef?.nativeElement) {
@@ -1344,7 +1358,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.expandedMcpId.set('');
         this.expandedTranslation.set(null);
       }
-      else if (this.showSettingsHelp()) this.showSettingsHelp.set(false);
       else if (this.renamingId()) this.renamingId.set(null);
     }
   }
@@ -1622,16 +1635,29 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const newText = this.editingMsgText().trim();
     if (!newText) { this.cancelEditMsg(); return; }
     const sid = this.activeChatId();
+
+    const applyEditAndResend = () => {
+      // slice off from this user message onward
+      this.messages.set(this.messages().slice(0, idx));
+      this.editingMsgIdx.set(null);
+      this.editingMsgText.set('');
+      this.inputText = newText;
+      // slight delay so DOM settles before send
+      setTimeout(() => this.send(), 50);
+    };
+
     if (sid) {
-      this.claude.truncateSession(sid, idx).subscribe();
+      // Only mutate the displayed history / resend once the backend session
+      // history is actually truncated — otherwise the UI would show a shorter
+      // conversation than what's persisted, and the next resume would replay
+      // the "deleted" messages.
+      this.claude.truncateSession(sid, idx).subscribe({
+        next: () => applyEditAndResend(),
+        error: (e) => this.showToast(`編輯訊息失敗，後端歷史未截斷: ${e.message ?? e}`, 'error'),
+      });
+    } else {
+      applyEditAndResend();
     }
-    // slice off from this user message onward
-    this.messages.set(this.messages().slice(0, idx));
-    this.editingMsgIdx.set(null);
-    this.editingMsgText.set('');
-    this.inputText = newText;
-    // slight delay so DOM settles before send
-    setTimeout(() => this.send(), 50);
   }
 
   // ── #17 Profile switching ─────────────────────────────────────────────────
@@ -2873,6 +2899,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
     if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
     this.stopFn?.(); this._teamRunStopFn?.();
+    if (this.recognition) {
+      // Detach handlers first so onend/onerror can't fire after the component is gone.
+      this.recognition.onstart = null;
+      this.recognition.onresult = null;
+      this.recognition.onerror = null;
+      this.recognition.onend = null;
+      try { this.recognition.stop(); } catch { /* already stopped */ }
+      this.recognition = null;
+    }
   }
 
   // T03 — Ctrl+V 截圖貼上
