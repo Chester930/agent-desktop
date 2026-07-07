@@ -2946,9 +2946,15 @@ def _load_pi_soul() -> str:
     return "You are Pi, a professional and efficient AI butler."
 
 def _verify_line_signature(body: bytes, signature: str) -> bool:
+    # 健檢第二輪修復：LINE webhook 本質上就是要能被 LINE 伺服器從公開網際網路
+    # 打進來（跟其他端點「同機/同網段可信任」的假設不同），簽章驗證是唯一的
+    # 身分驗證機制。原本 lineChannelSecret 未設定時直接放行（fail-open），
+    # 代表設定到一半、還沒填 secret 的期間，任何人都能偽造 webhook payload
+    # 觸發 _line_run_claude（實際執行 Claude CLI）。改成 fail-closed：
+    # 沒設定 secret 就一律拒絕，直到使用者完成設定為止。
     secret = _load_config().get("lineChannelSecret", "").strip()
     if not secret:
-        return True  # skip verification if not configured
+        return False
     import hmac, hashlib, base64
     expected = base64.b64encode(
         hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
