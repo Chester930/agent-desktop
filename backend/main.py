@@ -1482,6 +1482,9 @@ async def handle_sessions(request: web.Request) -> web.Response:
     })
 
 
+_RESTORE_MAX_ENTRY_BYTES = 20 * 1024 * 1024   # 單一項目解壓後上限 20MB
+_RESTORE_MAX_TOTAL_BYTES = 50 * 1024 * 1024   # 整包解壓後上限 50MB
+
 async def handle_restore(request: web.Request) -> web.Response:
     reader = await request.multipart()
     field  = await reader.next()
@@ -1489,6 +1492,19 @@ async def handle_restore(request: web.Request) -> web.Response:
     buf    = io.BytesIO(data)
     try:
         with zipfile.ZipFile(buf) as zf:
+            # T30 健檢修復：zf.read() 會把整個項目解壓進記憶體，原本沒有任何
+            # 大小檢查 —— 上傳的 zip 本身雖被 client_max_size（~20MB）限制，
+            # 但壓縮比可以很誇張（zip bomb），解壓後可能是好幾 GB。用
+            # ZipInfo.file_size（來自 zip 中央目錄的 metadata，讀取不需要
+            # 真的解壓）先檢查每個項目與總計大小，超過上限就整包拒絕。
+            total_size = 0
+            for info in zf.infolist():
+                if info.file_size > _RESTORE_MAX_ENTRY_BYTES:
+                    return web.json_response({'error': f'{info.filename} 解壓後過大'}, status=400)
+                total_size += info.file_size
+            if total_size > _RESTORE_MAX_TOTAL_BYTES:
+                return web.json_response({'error': '備份檔解壓後總大小超過上限'}, status=400)
+
             mapping = {
                 'soul.md':          SOUL_FILE,
                 'schedules.json':   SCHEDULES_FILE,
