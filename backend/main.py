@@ -3247,6 +3247,13 @@ def _allowed_cors_origins() -> list[str]:
 
 
 def build_app() -> web.Application:
+    # _init_db() needs CLAUDE_HOME to already exist (sqlite3 won't create the
+    # parent directory for its .db file). _init_presets() creates it further
+    # below as a side effect of mkdir(parents=True) on its subdirectories, but
+    # that runs AFTER _init_db() — on a genuinely fresh CLAUDE_HOME (new
+    # install, or a docker volume mount pointing at an empty host directory)
+    # this crashed at startup before ever reaching _init_presets().
+    CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
     _init_db()
     _migrate_db()
     _migrate_fts_tokenizer()

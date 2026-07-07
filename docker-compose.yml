@@ -64,9 +64,11 @@ services:
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
+      # backend/Dockerfile 現在用非 root 的 appuser 執行（家目錄
+      # /home/appuser），掛載目標要跟著改，不然還是 /root/.claude 沒人會用。
       - type: bind
         source: ${CLAUDE_HOME}
-        target: /root/.claude
+        target: /home/appuser/.claude
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
