@@ -39,11 +39,19 @@ def fetch_text(url: str) -> str:
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.read().decode('utf-8', errors='replace')
 
+def _is_safe_id(name: str) -> bool:
+    """div_key 會被拿去拼 team_id/team_file 檔名（見下方 run_import）。這個值
+    來自釘死版本的上游 GitHub repo，正常情況下受信任，但如果上游 repo 或
+    這支 script 之後改成接受使用者提供的來源，一個惡意的 divisions.json key
+    （例如 "../../../../etc"）就能造成路徑穿越寫入。防禦深度：擋掉。"""
+    return bool(name) and "/" not in name and "\\" not in name and ".." not in name
+
+
 def run_import(dry_run=False) -> dict:
     # 1. Fetch divisions.json
     print("Fetching divisions...")
     divisions_data = fetch_json("https://raw.githubusercontent.com/msitarzewski/agency-agents/main/divisions.json")
-    divisions = divisions_data.get("divisions", {})
+    divisions = {k: v for k, v in divisions_data.get("divisions", {}).items() if _is_safe_id(k)}
     
     # 2. Fetch repo file list (recursive tree)
     print("Fetching file list from GitHub repository...")
