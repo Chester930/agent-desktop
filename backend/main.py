@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import io
 import json
 import os
@@ -139,7 +140,7 @@ _usage_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
-from helpers import _read_agent_body, _team_dict, safe_kill_process, wrap_cmd
+from helpers import _read_agent_body, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
 
 import atexit
 import signal
@@ -443,14 +444,17 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             except Exception:
                 pass
 
-    def _build_full_message() -> str:
+    async def _build_full_message() -> str:
         """組裝首 Turn 用的完整 prompt（soul + team + memory + agent def）。"""
         soul = get_agent_soul(agent)
         fm = f"[System Persona]\n{soul}\n\n{message}" if soul else message
 
         if team_id and team_info:
             all_members = [m["agent"] for m in team_info.get("members", [])]
-            mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd, members_meta=team_info.get("members", []), query=message)
+            mem_ctx = await asyncio.to_thread(
+                build_team_memory_context, team_id, all_members, agent, cwd,
+                members_meta=team_info.get("members", []), query=message
+            )
             team_name = team_info.get("name", team_id)
             members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
             team_prompt = (
@@ -461,7 +465,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             )
             fm = team_prompt + fm
         else:
-            mem_ctx = build_memory_context(agent, cwd, query=message)
+            mem_ctx = await asyncio.to_thread(build_memory_context, agent, cwd, query=message)
 
         if mem_ctx:
             fm = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fm}"
@@ -548,8 +552,13 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                     }
                     await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
         except Exception:
-            await _team_pool.evict(client_id)
+            # force=True：這是已知壞掉的連線要立刻清掉，不是機會性的 idle 回收，
+            # 不該被「還在使用中」的 busy 檢查擋下（此時 busy 尚未被下面的
+            # finally release）。
+            await _team_pool.evict(client_id, force=True)
             raise
+        finally:
+            _team_pool.release(client_id)
 
     async def _run_legacy(full_message: str) -> None:
         cmd = [claude_bin, "-p", full_message, "--output-format", "stream-json", "--verbose"]
@@ -606,7 +615,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     try:
         if use_pool:
             needs_full_rebuild = not (in_pool_now or has_persisted)
-            prompt_to_send = _build_full_message() if needs_full_rebuild else message
+            prompt_to_send = await _build_full_message() if needs_full_rebuild else message
             resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(client_id)
             try:
                 await _run_pooled(prompt_to_send, resume_target)
@@ -615,9 +624,9 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 return response
             except Exception:
                 active_sessions.pop(client_id, None)
-                await _run_legacy(_build_full_message())
+                await _run_legacy(await _build_full_message())
         else:
-            full_message = message if client_id in active_sessions else _build_full_message()
+            full_message = message if client_id in active_sessions else await _build_full_message()
             await _run_legacy(full_message)
         await response.write(b'data: {"type":"done"}\n\n')
     except Exception as e:
@@ -704,10 +713,10 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         cwd_hash = hashlib.md5(cwd.encode("utf-8")).hexdigest()[:8] if cwd else "default"
         session_key = f"{client_id}_{agent_id}_{cwd_hash}"
 
-        def _build_full_prompt(hist: str) -> str:
+        async def _build_full_prompt(hist: str) -> str:
             """組裝首 Turn 用的完整 prompt。"""
-            mem_ctx = build_team_memory_context(
-                team_id, all_members_list, agent_id, cwd,
+            mem_ctx = await asyncio.to_thread(
+                build_team_memory_context, team_id, all_members_list, agent_id, cwd,
                 members_meta=members,
                 query=prompt_text
             )
@@ -856,8 +865,10 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                         new_sid = message.session_id
                         active_sessions[session_key] = new_sid
             except Exception:
-                await _team_pool.evict(session_key)
+                await _team_pool.evict(session_key, force=True)
                 raise
+            finally:
+                _team_pool.release(session_key)
 
             await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
             return collected, new_sid
@@ -868,7 +879,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
 
         if use_pool:
             needs_full_rebuild = not (in_pool_now or has_persisted)
-            prompt_to_send = _build_full_prompt(prompt_text) if needs_full_rebuild else prompt_text
+            prompt_to_send = await _build_full_prompt(prompt_text) if needs_full_rebuild else prompt_text
             resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(session_key)
             try:
                 collected_list, new_session_id = await _exec_pooled(prompt_to_send, resume_target)
@@ -878,12 +889,12 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 return "", ""
             except Exception:
                 active_sessions.pop(session_key, None)
-                full_fallback = _build_full_prompt(prompt_text)
+                full_fallback = await _build_full_prompt(prompt_text)
                 collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
                 return "".join(collected_list), new_session_id
 
         if not has_persisted or is_first_turn:
-            full_prompt = _build_full_prompt(prompt_text)
+            full_prompt = await _build_full_prompt(prompt_text)
             resume_sid  = None
         else:
             full_prompt = prompt_text
@@ -892,7 +903,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         collected_list, new_session_id, resume_failed = await _exec_cmd(full_prompt, resume_sid)
         if resume_failed:
             active_sessions.pop(session_key, None)
-            full_fallback = _build_full_prompt(prompt_text)
+            full_fallback = await _build_full_prompt(prompt_text)
             collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
         return "".join(collected_list), new_session_id
 
@@ -1312,8 +1323,10 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                     elif isinstance(message, ResultMessage):
                         active_sessions[exec_key] = message.session_id
             except Exception:
-                await _team_pool.evict(proc_key)
+                await _team_pool.evict(proc_key, force=True)
                 raise
+            finally:
+                _team_pool.release(proc_key)
 
             await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
             return "".join(collected)
@@ -1392,7 +1405,7 @@ async def handle_sessions(request: web.Request) -> web.Response:
     q      = request.rel_url.query.get("q", "").strip()
     offset = int(request.rel_url.query.get("offset", "0"))
     PAGE   = 30
-    _sync_index()
+    await asyncio.to_thread(_sync_index)
     custom_names = load_session_names()
 
     # 只保留最近 30 天的對話
@@ -1405,19 +1418,29 @@ async def handle_sessions(request: web.Request) -> web.Response:
         return parts[-1] if parts else ""
 
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             if q and len(q) >= 3:
                 # trigram tokenizer needs >=3 chars to form any trigram, so this
                 # path only fires for queries long enough for FTS5 MATCH to work.
-                rows = c.execute("""
+                # T44 健檢修復：snippet 會經前端 [innerHTML] 直接渲染，FTS5 的
+                # snippet() 回傳的是 search_text 原始子字串（未跳脫），若對話
+                # 內容剛好含有 <script> 之類字元就會被當成真的 HTML 執行。
+                # 用不可能出現在一般文字裡的控制字元當標記，取回後先整段
+                # html.escape() 再把標記換回真正的 <mark> 標籤，確保只有
+                # 「刻意插入的」標記會被當成 HTML，其餘內容一律跳脫。
+                raw_rows = c.execute("""
                     SELECT s.id, s.title, s.mtime, s.message_count, s.file_path, s.project_path,
-                           snippet(sessions_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet
+                           snippet(sessions_fts, 2, ?, ?, '…', 12) AS snippet
                     FROM sessions_fts f
                     JOIN sessions s ON s.id = f.id
                     WHERE sessions_fts MATCH ?
                       AND s.mtime >= ?
                     ORDER BY s.mtime DESC
-                """, (q, cutoff)).fetchall()
+                """, ("\x01", "\x02", q, cutoff)).fetchall()
+                rows = []
+                for r in raw_rows:
+                    safe_snippet = html.escape(r["snippet"] or "").replace("\x01", "<mark>").replace("\x02", "</mark>")
+                    rows.append({**dict(r), "snippet": safe_snippet})
             elif q:
                 # short (1-2 char) queries: trigram can't match these at all, so
                 # fall back to LIKE -- table is small enough that this is cheap.
@@ -1434,18 +1457,25 @@ async def handle_sessions(request: web.Request) -> web.Response:
                     if idx >= 0:
                         start = max(0, idx - 30)
                         end = min(len(text), idx + len(q) + 30)
-                        snippet = ("…" if start > 0 else "") + text[start:idx] + "<mark>" + q + "</mark>" + text[idx + len(q):end] + ("…" if end < len(text) else "")
+                        snippet = (
+                            ("…" if start > 0 else "")
+                            + html.escape(text[start:idx])
+                            + "<mark>" + html.escape(q) + "</mark>"
+                            + html.escape(text[idx + len(q):end])
+                            + ("…" if end < len(text) else "")
+                        )
                     else:
-                        snippet = text[:120]
+                        snippet = html.escape(text[:120])
                     rows.append({**dict(r), "snippet": snippet})
             else:
-                rows = c.execute("""
+                raw_rows = c.execute("""
                     SELECT id, title, mtime, message_count, file_path, project_path,
                            substr(search_text, 1, 120) AS snippet
                     FROM sessions
                     WHERE mtime >= ?
                     ORDER BY mtime DESC
                 """, (cutoff,)).fetchall()
+                rows = [{**dict(r), "snippet": html.escape(r["snippet"] or "")} for r in raw_rows]
         total = len(rows)
         items = [
             {
@@ -1470,6 +1500,9 @@ async def handle_sessions(request: web.Request) -> web.Response:
     })
 
 
+_RESTORE_MAX_ENTRY_BYTES = 20 * 1024 * 1024   # 單一項目解壓後上限 20MB
+_RESTORE_MAX_TOTAL_BYTES = 50 * 1024 * 1024   # 整包解壓後上限 50MB
+
 async def handle_restore(request: web.Request) -> web.Response:
     reader = await request.multipart()
     field  = await reader.next()
@@ -1477,6 +1510,19 @@ async def handle_restore(request: web.Request) -> web.Response:
     buf    = io.BytesIO(data)
     try:
         with zipfile.ZipFile(buf) as zf:
+            # T30 健檢修復：zf.read() 會把整個項目解壓進記憶體，原本沒有任何
+            # 大小檢查 —— 上傳的 zip 本身雖被 client_max_size（~20MB）限制，
+            # 但壓縮比可以很誇張（zip bomb），解壓後可能是好幾 GB。用
+            # ZipInfo.file_size（來自 zip 中央目錄的 metadata，讀取不需要
+            # 真的解壓）先檢查每個項目與總計大小，超過上限就整包拒絕。
+            total_size = 0
+            for info in zf.infolist():
+                if info.file_size > _RESTORE_MAX_ENTRY_BYTES:
+                    return web.json_response({'error': f'{info.filename} 解壓後過大'}, status=400)
+                total_size += info.file_size
+            if total_size > _RESTORE_MAX_TOTAL_BYTES:
+                return web.json_response({'error': '備份檔解壓後總大小超過上限'}, status=400)
+
             mapping = {
                 'soul.md':          SOUL_FILE,
                 'schedules.json':   SCHEDULES_FILE,
@@ -1505,7 +1551,7 @@ async def handle_soul_reset(request: web.Request) -> web.Response:
             try: f.unlink()
             except Exception: pass
     # 重新寫入預設 presets 靈魂（例如 Pi），防止重設後列表空白
-    _init_presets()
+    await asyncio.to_thread(_init_presets)
     return web.json_response({'ok': True})
 
 
@@ -1602,7 +1648,7 @@ async def handle_session_delete(request: web.Request) -> web.Response:
 
     # 主動從 SQLite 數據庫中清除該 Session 索引，保持即時一致
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             c.execute("DELETE FROM sessions WHERE id=?", (sid,))
             c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
     except Exception as e:
@@ -2025,9 +2071,9 @@ async def handle_mem_preview(request: web.Request) -> web.Response:
     members  = [m.strip() for m in request.rel_url.query.get("members", "").split(",") if m.strip()]
 
     if mode == "team":
-        ctx = build_team_memory_context(team_id, members or [agent_id], agent_id, cwd)
+        ctx = await asyncio.to_thread(build_team_memory_context, team_id, members or [agent_id], agent_id, cwd)
     else:
-        ctx = build_memory_context(agent_id, cwd)
+        ctx = await asyncio.to_thread(build_memory_context, agent_id, cwd)
 
     sections = [s.split("\n")[0] for s in ctx.split("\n\n---\n\n")] if ctx else []
     return web.json_response({
@@ -2253,7 +2299,7 @@ async def handle_stats(request: web.Request) -> web.Response:
     """Dashboard 統計 — 用 SQLite index 計算，不重新掃描 JSONL。"""
     from datetime import timedelta
     today = datetime.now().date()
-    _sync_index()
+    await asyncio.to_thread(_sync_index)
 
     sessions_count = 0
     total_tokens   = 0
@@ -2261,7 +2307,7 @@ async def handle_stats(request: web.Request) -> web.Response:
     active_days_set: set[str] = set()
 
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             row = c.execute(
                 "SELECT COUNT(*) as cnt, SUM(input_tokens+output_tokens) as tok, SUM(message_count) as msgs FROM sessions"
             ).fetchone()
@@ -2479,15 +2525,41 @@ async def handle_local_mcp_config_get(request: web.Request) -> web.Response:
     return web.json_response(_load_local_mcp_cfg())
 
 
+def _is_safe_docker_ident(name: str) -> bool:
+    """
+    T2 加固：containerName/composeService 會被當成 `docker stop/start <name>`、
+    `docker compose ... <service>` 的位置參數傳給 subprocess_exec（非 shell，
+    無 shell injection 風險），但仍需擋掉會被 docker CLI 誤判成旗標的字串
+    （如開頭 `-`）與路徑分隔符/`..`，避免打錯目標或被用來探測非預期容器。
+    空字串代表未設定，視為合法。
+    """
+    if not name:
+        return True
+    import re
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name))
+
+
 async def handle_local_mcp_config_put(request: web.Request) -> web.Response:
     """Save Docker/compose metadata for one MCP server."""
     name = request.match_info["name"]
     data = await request.json()
+
+    container_name  = data.get("containerName", "")
+    compose_service = data.get("composeService", "")
+    compose_file    = data.get("composeFile", "")
+
+    if not _is_safe_docker_ident(container_name):
+        return web.json_response({"error": "Invalid containerName"}, status=400)
+    if not _is_safe_docker_ident(compose_service):
+        return web.json_response({"error": "Invalid composeService"}, status=400)
+    if compose_file and not Path(compose_file).is_file():
+        return web.json_response({"error": "composeFile does not exist"}, status=400)
+
     cfg  = _load_local_mcp_cfg()
     cfg[name] = {
-        "containerName":  data.get("containerName", ""),
-        "composeFile":    data.get("composeFile", ""),
-        "composeService": data.get("composeService", ""),
+        "containerName":  container_name,
+        "composeFile":    compose_file,
+        "composeService": compose_service,
         "port":           data.get("port", ""),
         "notes":          data.get("notes", ""),
     }
@@ -2577,7 +2649,7 @@ async def handle_session_auto_title(request: web.Request) -> web.Response:
 
     # Also update SQLite
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             c.execute("UPDATE sessions SET title=? WHERE id=?", (title, sid))
             c.execute("UPDATE sessions_fts SET title=? WHERE id=?", (title, sid))
     except Exception:
@@ -2596,6 +2668,14 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
     compose_f   = local_cfg.get("composeFile", "")
     compose_svc = local_cfg.get("composeService", "")
     is_docker   = mcp_info["mcpType"] == "docker" or bool(container) or bool(compose_f)
+
+    # T2 加固：即使 config 是透過已驗證的 PUT 端點寫入，這裡對即將傳給
+    # docker/docker compose subprocess 的值再檢查一次（防禦深度：涵蓋手動編輯
+    # config 檔或舊版資料殘留的情況）。
+    if not _is_safe_docker_ident(container) or not _is_safe_docker_ident(compose_svc):
+        return web.json_response({"error": "Invalid containerName/composeService in local MCP config"}, status=400)
+    if compose_f and not Path(compose_f).is_file():
+        return web.json_response({"error": "composeFile does not exist"}, status=400)
 
     # ── STOP / RESTART phase 1: shut down ────────────────────────────────────
     if action in ("stop", "restart"):
@@ -2884,9 +2964,15 @@ def _load_pi_soul() -> str:
     return "You are Pi, a professional and efficient AI butler."
 
 def _verify_line_signature(body: bytes, signature: str) -> bool:
+    # 健檢第二輪修復：LINE webhook 本質上就是要能被 LINE 伺服器從公開網際網路
+    # 打進來（跟其他端點「同機/同網段可信任」的假設不同），簽章驗證是唯一的
+    # 身分驗證機制。原本 lineChannelSecret 未設定時直接放行（fail-open），
+    # 代表設定到一半、還沒填 secret 的期間，任何人都能偽造 webhook payload
+    # 觸發 _line_run_claude（實際執行 Claude CLI）。改成 fail-closed：
+    # 沒設定 secret 就一律拒絕，直到使用者完成設定為止。
     secret = _load_config().get("lineChannelSecret", "").strip()
     if not secret:
-        return True  # skip verification if not configured
+        return False
     import hmac, hashlib, base64
     expected = base64.b64encode(
         hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
@@ -2980,10 +3066,11 @@ async def handle_debug_dump(request: web.Request) -> web.Response:
     import platform, sys
     cfg      = _load_config()
     safe_cfg = {k: v for k, v in cfg.items()
-                if "key" not in k.lower() and "token" not in k.lower() and "password" not in k.lower()}
+                if "key" not in k.lower() and "token" not in k.lower()
+                and "password" not in k.lower() and "secret" not in k.lower()}
     sqlite_stats: dict = {}
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             row = c.execute("SELECT COUNT(*) as n, SUM(message_count) as m FROM sessions").fetchone()
             sqlite_stats = {"sessions": row["n"] or 0, "messages": row["m"] or 0}
     except Exception:
@@ -3018,6 +3105,10 @@ async def handle_config_get(request: web.Request) -> web.Response:
     cfg.setdefault("projectDir", "")
     cfg.setdefault("claudeHome", "")
     cfg["_resolvedClaudeHome"] = str(CLAUDE_HOME)   # read-only info for UI
+    # 健檢第二輪修復：這是驗證 LINE webhook 簽章的 HMAC secret，外洩等於能
+    # 偽造合法 webhook 請求繞過簽章驗證。前端 settings 表單目前不會讀回這個
+    # 欄位（只有 apiKeyCmd 會被讀回填入表單），拿掉不影響既有功能。
+    cfg.pop("lineChannelSecret", None)
     return web.json_response(cfg)
 
 
@@ -3045,8 +3136,8 @@ async def handle_config_put(request: web.Request) -> web.Response:
     database.update_paths(CLAUDE_HOME)
     
     # 確保新目錄複製了預設的 presets (Pi, HR 等)，防止切換目錄後介面空白
-    _init_presets()
-    
+    await asyncio.to_thread(_init_presets)
+
     _log(f"Config updated: claudeHome={CLAUDE_HOME}  projectDir={cfg.get('projectDir','')!r}")
     return web.json_response({"ok": True, "slug": cfg.get("projectDir", "")})
 
@@ -3154,7 +3245,33 @@ def _init_presets() -> None:
         _log(f"Error initializing presets: {e}")
 
 
+def _allowed_cors_origins() -> list[str]:
+    """
+    T2 加固：原本用 `"*"` 當 aiohttp_cors 的 defaults key，疊加 allow_credentials=True，
+    等於對任意呼叫來源（含惡意網頁）都核發帶憑證的 CORS 許可，讓瀏覽器能對
+    /api/mcp/{name}/{action}、/api/mcp-local-config/{name} 等會實際啟動/停止 Docker
+    容器（透過掛載的 docker.sock）的端點發出跨站請求。改為明確白名單：
+    只有前端實際會被載入的來源才給 CORS 許可，其餘來源一律不核發
+    Access-Control-Allow-Origin，瀏覽器就會擋下 preflight，跨站請求送不出去。
+    """
+    origins = [
+        "http://localhost:4200", "http://127.0.0.1:4200",  # ng serve / docker-compose 前端
+        "null",  # 封裝後 Electron 從 file:// 載入頁面時的 Origin
+    ]
+    extra = os.environ.get("CLAUDE_DESKTOP_EXTRA_ORIGINS", "").strip()
+    if extra:
+        origins.extend(o.strip() for o in extra.split(",") if o.strip())
+    return origins
+
+
 def build_app() -> web.Application:
+    # _init_db() needs CLAUDE_HOME to already exist (sqlite3 won't create the
+    # parent directory for its .db file). _init_presets() creates it further
+    # below as a side effect of mkdir(parents=True) on its subdirectories, but
+    # that runs AFTER _init_db() — on a genuinely fresh CLAUDE_HOME (new
+    # install, or a docker volume mount pointing at an empty host directory)
+    # this crashed at startup before ever reaching _init_presets().
+    CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
     _init_db()
     _migrate_db()
     _migrate_fts_tokenizer()
@@ -3162,13 +3279,14 @@ def build_app() -> web.Application:
     _init_presets()
     app = web.Application(client_max_size=_UPLOAD_MAX_BYTES + 1024)
 
+    _cors_options = aiohttp_cors.ResourceOptions(
+        allow_credentials=True,
+        expose_headers="*",
+        allow_headers="*",
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
     cors = aiohttp_cors.setup(app, defaults={
-        "*": aiohttp_cors.ResourceOptions(
-            allow_credentials=True,
-            expose_headers="*",
-            allow_headers="*",
-            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        )
+        origin: _cors_options for origin in _allowed_cors_origins()
     })
 
     # Routes grouped by resource path to avoid double-CORS registration
@@ -3422,7 +3540,14 @@ async def on_startup(app: web.Application) -> None:
 
 
 if __name__ == "__main__":
-    print("Claude Desktop backend starting on http://localhost:8765")
+    # 健檢第二輪修復：這支後端沒有任何身分驗證層（所有 state-changing 端點
+    # 都只靠 CORS + 「同機信任」假設），綁 0.0.0.0 等於讓同一個 LAN/VPN 上的
+    # 任何主機都能直接 curl 到（CORS 只擋瀏覽器，不擋直接發送 HTTP 請求的用戶端）。
+    # Electron 桌面版本身跑在 host 上，只需要 loopback 就夠；docker-compose
+    # 部署下的容器需要接受同網段其他容器（frontend/ngrok）連線，透過
+    # BACKEND_BIND_HOST=0.0.0.0（docker-compose.yml 已設定）明確選擇放寬。
+    bind_host = os.environ.get("BACKEND_BIND_HOST", "127.0.0.1")
+    print(f"Claude Desktop backend starting on http://{bind_host}:8765")
     app = build_app()
     app.on_startup.append(on_startup)
-    web.run_app(app, host="0.0.0.0", port=8765)
+    web.run_app(app, host=bind_host, port=8765)

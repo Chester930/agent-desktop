@@ -1,5 +1,12 @@
 # 開發環境: docker-compose --profile dev up --build
 # 正式環境: docker-compose --profile prod up  (需先 cd frontend && ng build)
+# 對外網路通道（選用，需自行承擔曝險）: docker-compose --profile prod --profile tunnel up
+#
+# 健檢第二輪修復：backend 完全沒有身分驗證層，只靠「同機/同網段可信任」的假設。
+# 以下三個服務的埠對外一律綁定到 127.0.0.1，避免同一區網的其他主機能直接
+# curl 到（container 之間透過 compose 內部網路溝通不受影響，只有『host 對外
+# 發布的埠』受限）。ngrok 對外網路通道也拆成獨立的 tunnel profile，
+# 不再隨 prod profile 自動啟動 —— 想要對外曝露必須額外明確指定。
 
 services:
 
@@ -11,7 +18,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: claude-desktop-backend-dev
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     volumes:
       - ./backend:/app
       - type: bind
@@ -20,6 +27,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
+      # container 需要接受 frontend-dev 透過 compose 內部網路連線，
+      # 明確放寬成 0.0.0.0（僅限 container 內部，host 端仍只綁 127.0.0.1，見上）
+      - BACKEND_BIND_HOST=0.0.0.0
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status')"]
       interval: 10s
@@ -34,13 +49,18 @@ services:
       dockerfile: Dockerfile.dev
     container_name: claude-desktop-frontend-dev
     ports:
-      - "4200:4200"
+      - "127.0.0.1:4200:4200"
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=2000
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
     depends_on:
       backend-dev:
         condition: service_healthy
@@ -52,14 +72,22 @@ services:
     build: ./backend
     container_name: claude-desktop-backend
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     volumes:
+      # backend/Dockerfile 現在用非 root 的 appuser 執行（家目錄
+      # /home/appuser），掛載目標要跟著改，不然還是 /root/.claude 沒人會用。
       - type: bind
         source: ${CLAUDE_HOME}
-        target: /root/.claude
+        target: /home/appuser/.claude
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
+      - BACKEND_BIND_HOST=0.0.0.0
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status')"]
       interval: 10s
@@ -72,24 +100,36 @@ services:
     image: nginx:alpine
     container_name: claude-desktop-frontend
     ports:
-      - "4200:80"
+      - "127.0.0.1:4200:80"
     volumes:
       - ./frontend/dist/frontend/browser:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
 
+  # 對外網路通道 —— 獨立 profile，不隨 prod 自動啟動。這會把完全沒有身分
+  # 驗證的 backend API 曝露到公開網際網路，務必自行評估風險再啟用。
   ngrok:
-    profiles: [prod]
+    profiles: [tunnel]
     image: ngrok/ngrok:latest
     container_name: claude-desktop-ngrok
     ports:
-      - "4040:4040"
+      - "127.0.0.1:4040:4040"
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:-}
     command: http backend:8765 --log stdout
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
     depends_on:
       backend:
         condition: service_healthy

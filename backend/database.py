@@ -76,7 +76,7 @@ def _all_session_files() -> list[Path]:
 def _find_session_file(sid: str) -> Path | None:
     """Find a session .jsonl file by ID; check DB path first, then scan."""
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             row = c.execute("SELECT file_path FROM sessions WHERE id=?", (sid,)).fetchone()
             if row and row["file_path"]:
                 p = Path(row["file_path"])
@@ -146,63 +146,99 @@ _INDEX_DB = CLAUDE_HOME / "claude-desktop-index.db"
 
 def _db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_INDEX_DB))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+    except Exception:
+        # Don't leak the handle if setup fails (e.g. corrupted/non-sqlite file) —
+        # an open handle can block a subsequent unlink()+rebuild, especially on Windows.
+        conn.close()
+        raise
+
+
+import contextlib as _contextlib
+
+@_contextlib.contextmanager
+def _db_ctx():
+    """
+    健檢第二輪修復：原本各處都直接對 _db() 的回傳值開 with 區塊，用的是
+    sqlite3.Connection 自己的 context manager —— 那個只會 commit/rollback，
+    不會 close()。每個呼叫點都會洩漏一個 WAL 連線 handle，長期執行下來
+    handle 數量會持續增加；在 Windows 上洩漏的 handle 還可能擋住之後的
+    檔案操作（例如 _init_db 損毀重建時的 unlink）。用法完全相同，只是額外
+    保證離開時一定 close()。
+    """
+    conn = _db()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL DEFAULT '',
+    mtime         REAL NOT NULL DEFAULT 0,
+    search_text   TEXT NOT NULL DEFAULT '',
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    file_path     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
+CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+    id UNINDEXED, title, search_text,
+    tokenize='trigram'
+);
+-- add column if upgrading from previous schema without it
+CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
+"""
+
+# Substrings that reliably indicate the DB file itself is corrupted (as opposed
+# to a transient OperationalError like "database is locked"/"disk I/O error").
+# sqlite3.OperationalError is a subclass of sqlite3.DatabaseError, so we can't
+# rely on the exception class alone to tell corruption apart from transient
+# failures — a locked/busy DB should surface the error, not get deleted.
+_CORRUPTION_MARKERS = ("not a database", "malformed", "corrupt")
 
 def _init_db() -> None:
+    def _apply_schema() -> None:
+        # Explicitly close the connection (the `with conn:` context manager only
+        # commits/rolls back, it does not close) so the file handle is released
+        # before a caller-side unlink+rebuild attempt (matters on Windows, where
+        # an open handle blocks file deletion).
+        conn = _db()
+        try:
+            with conn:
+                conn.executescript(_SCHEMA_SQL)
+        finally:
+            conn.close()
+
     try:
-        with _db() as c:
-            c.executescript("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id            TEXT PRIMARY KEY,
-                title         TEXT NOT NULL DEFAULT '',
-                mtime         REAL NOT NULL DEFAULT 0,
-                search_text   TEXT NOT NULL DEFAULT '',
-                input_tokens  INTEGER NOT NULL DEFAULT 0,
-                output_tokens INTEGER NOT NULL DEFAULT 0,
-                message_count INTEGER NOT NULL DEFAULT 0,
-                file_path     TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
-            CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-                id UNINDEXED, title, search_text,
-                tokenize='trigram'
-            );
-            -- add column if upgrading from previous schema without it
-            CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
-            """)
-    except sqlite3.Error as e:
-        print(f"[sqlite] database init error (malformed?): {e}. Rebuilding brand new database...", flush=True)
+        _apply_schema()
+    except sqlite3.DatabaseError as e:
+        if not any(marker in str(e).lower() for marker in _CORRUPTION_MARKERS):
+            # Transient error (locked, busy, I/O) — don't destroy the user's
+            # session index over it, let the caller see the real failure.
+            print(f"[sqlite] database init error (non-corruption, not rebuilding): {e}", flush=True)
+            raise
+        print(f"[sqlite] database appears corrupted: {e}. Rebuilding brand new database...", flush=True)
         try:
             _INDEX_DB.unlink(missing_ok=True)
         except Exception:
             pass
-        with _db() as c:
-            c.executescript("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id            TEXT PRIMARY KEY,
-                title         TEXT NOT NULL DEFAULT '',
-                mtime         REAL NOT NULL DEFAULT 0,
-                search_text   TEXT NOT NULL DEFAULT '',
-                input_tokens  INTEGER NOT NULL DEFAULT 0,
-                output_tokens INTEGER NOT NULL DEFAULT 0,
-                message_count INTEGER NOT NULL DEFAULT 0,
-                file_path     TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
-            CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-                id UNINDEXED, title, search_text,
-                tokenize='trigram'
-            );
-            -- add column if upgrading from previous schema without it
-            CREATE TABLE IF NOT EXISTS _schema_ver (ver INTEGER PRIMARY KEY);
-            """)
+        try:
+            _apply_schema()
+        except Exception as rebuild_err:
+            print(f"[sqlite] rebuild failed: {rebuild_err}", flush=True)
+            raise
 
 def _migrate_db() -> None:
     """Add missing columns introduced in newer schema versions."""
-    with _db() as c:
+    with _db_ctx() as c:
         cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
         if "message_count" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0")
@@ -219,7 +255,7 @@ def _migrate_fts_tokenizer() -> None:
     indexes overlapping 3-char n-grams instead, which works for both
     CJK and Latin text without an external segmenter.
     """
-    with _db() as c:
+    with _db_ctx() as c:
         row = c.execute(
             "SELECT sql FROM sqlite_master WHERE name='sessions_fts'"
         ).fetchone()
@@ -237,7 +273,7 @@ def _migrate_fts_tokenizer() -> None:
 def _backfill_project_paths() -> None:
     """One-time: populate project_path for sessions that still have empty value."""
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             rows = c.execute(
                 "SELECT id, file_path FROM sessions WHERE project_path = '' AND file_path != ''"
             ).fetchall()
@@ -313,7 +349,7 @@ def _sync_index() -> None:
     if not all_files:
         return
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             indexed = {r["id"]: (r["mtime"], r["project_path"]) for r in c.execute("SELECT id, mtime, project_path FROM sessions")}
             existing_ids: set[str] = set()
             for f in all_files:

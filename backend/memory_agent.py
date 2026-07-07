@@ -1,6 +1,7 @@
 import os
 import re
 import math
+import time
 from pathlib import Path
 
 class MemoryAgent:
@@ -17,6 +18,16 @@ class MemoryAgent:
             except Exception:
                 pass
         return ""
+
+    def _safe_mtime(self, path: Path) -> float:
+        """path.stat() after an exists()/read_text() check is a TOCTOU race —
+        a concurrent team run can delete/rewrite a memory file in between.
+        Fall back to now() rather than letting a vanished file blow up the
+        whole context build (we already have the content in hand by then)."""
+        try:
+            return path.stat().st_mtime
+        except Exception:
+            return time.time()
 
     def _chunk_text(self, text: str, max_chunk_len: int = 500) -> list[str]:
         """Split text into smaller chunks for semantic retrieval, e.g., by headers or lines."""
@@ -99,7 +110,7 @@ class MemoryAgent:
                 archival.append({
                     "title": f"Agent Experience ({agent_id} / {self.cwd_slug})",
                     "content": proj,
-                    "mtime": f.stat().st_mtime
+                    "mtime": self._safe_mtime(f)
                 })
         
         if self.cwd_slug:
@@ -112,7 +123,7 @@ class MemoryAgent:
                         archival.append({
                             "title": f"Project Internal ({self.cwd_slug} / {f.stem})",
                             "content": content,
-                            "mtime": f.stat().st_mtime
+                            "mtime": self._safe_mtime(f)
                         })
         return archival
 

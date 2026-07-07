@@ -15,6 +15,7 @@ class MessageBus:
 
     def _init_bus(self):
         self.subscribers: Dict[str, List[Callable]] = {}
+        self._pending_tasks: set = set()
 
     def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], Any]):
         """Subscribe to a specific topic with a callback."""
@@ -30,15 +31,30 @@ class MessageBus:
             self.subscribers[topic].remove(callback)
             logger.info(f"Unsubscribed callback from topic: {topic}")
 
+    def _on_task_done(self, topic: str, task: "asyncio.Task"):
+        self._pending_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"Error in async subscriber for topic {topic}: {exc}", exc_info=exc)
+
     def publish(self, topic: str, message: Dict[str, Any]):
         """Publish a message to all subscribers of a topic asynchronously."""
         if topic not in self.subscribers:
             return
-        
+
         logger.info(f"Publishing message to topic '{topic}': {message}")
         for callback in self.subscribers[topic]:
             if asyncio.iscoroutinefunction(callback):
-                asyncio.create_task(callback(message))
+                try:
+                    task = asyncio.create_task(callback(message))
+                except RuntimeError as e:
+                    # No running event loop (e.g. called from sync/test context)
+                    logger.error(f"Cannot schedule async callback for topic {topic}: {e}")
+                    continue
+                self._pending_tasks.add(task)
+                task.add_done_callback(lambda t, _topic=topic: self._on_task_done(_topic, t))
             else:
                 try:
                     callback(message)

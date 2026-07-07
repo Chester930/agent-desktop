@@ -1,11 +1,38 @@
 import json
 import asyncio
+import secrets
+import time
 from aiohttp import web
 from pathlib import Path
 from database import CLAUDE_HOME, _analyze_mcp_entry
 
 def _is_safe_name(name: str) -> bool:
     return name and "/" not in name and "\\" not in name and ".." not in name
+
+# 敏感操作授權：pending_id 由伺服器產生並保存，不再信任呼叫方自報的 `authorized` 布林值。
+# 單次使用（驗證通過即 pop），並設 TTL 避免無人領取的請求無限累積。
+_PENDING_AUTH: dict[str, dict] = {}
+_PENDING_AUTH_TTL_SECONDS = 120
+
+def _cleanup_pending_auth() -> None:
+    now = time.time()
+    expired = [pid for pid, entry in _PENDING_AUTH.items() if entry["expires_at"] < now]
+    for pid in expired:
+        _PENDING_AUTH.pop(pid, None)
+
+def _consume_pending_auth(pending_id: str, mcp_name: str, method: str, tool_name: str, params: dict) -> bool:
+    """驗證並消耗一次 pending 授權。必須是伺服器先前核發、且對應同一筆請求內容。"""
+    if not pending_id:
+        return False
+    entry = _PENDING_AUTH.pop(pending_id, None)
+    if not entry or entry["expires_at"] < time.time():
+        return False
+    return (
+        entry["mcp_name"] == mcp_name
+        and entry["method"] == method
+        and entry["tool_name"] == tool_name
+        and entry["params"] == params
+    )
 
 async def handle_mcp_rpc(request: web.Request) -> web.Response:
     try:
@@ -28,9 +55,22 @@ async def handle_mcp_rpc(request: web.Request) -> web.Response:
         tool_name = params.get("name", "").lower()
         SENSITIVE_KEYWORDS = {"execute", "write", "delete", "remove", "install"}
         if any(kw in tool_name for kw in SENSITIVE_KEYWORDS):
-            if not data.get("authorized"):
+            _cleanup_pending_auth()
+            authorized = _consume_pending_auth(
+                data.get("pending_id", ""), mcp_name, method, tool_name, params
+            )
+            if not authorized:
+                new_pending_id = secrets.token_urlsafe(24)
+                _PENDING_AUTH[new_pending_id] = {
+                    "mcp_name": mcp_name,
+                    "method": method,
+                    "tool_name": tool_name,
+                    "params": params,
+                    "expires_at": time.time() + _PENDING_AUTH_TTL_SECONDS,
+                }
                 return web.json_response({
                     "status": "pending_authorization",
+                    "pending_id": new_pending_id,
                     "error": f"敏感操作攔截：Agent 試圖呼叫具破壞性的敏感工具 '{params.get('name')}'。此操作已被系統自動掛起，請確認是否授權放行？"
                 }, status=403)
 

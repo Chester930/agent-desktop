@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Tray, Menu, nativeImage, dialog, ipcMain, Notification } = require('electron');
+const { app, BrowserWindow, shell, Tray, Menu, nativeImage, dialog, ipcMain, Notification, safeStorage } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const { spawn, execFileSync } = require('child_process');
@@ -12,6 +12,18 @@ let mainWindow;
 let backendProcess;
 let tray;
 let isQuitting = false;
+
+// shell.openExternal 會把 URL 交給作業系統的預設 handler 開啟；若不限制協定，
+// 惡意頁面／MCP 回應可以塞入 file:/javascript: 或自訂協定 URI 觸發非預期行為。
+// 只允許一般網頁連結與 mailto。
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['https:', 'http:', 'mailto:']);
+function isAllowedExternalUrl(url) {
+  try {
+    return ALLOWED_EXTERNAL_PROTOCOLS.has(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
 
 // ── 路徑決策：打包版用 app.isPackaged 判斷，開發版相對 __dirname ──
 const ROOT_DIR     = path.join(__dirname, '..');          // electron/../  = project root
@@ -50,7 +62,7 @@ function startBackend() {
     let pythonCmd = null;
     for (const py of candidates) {
       try {
-        execSync(`${py} --version`, { stdio: 'ignore' });
+        execFileSync(py, ['--version'], { stdio: 'ignore', windowsHide: true, shell: false, timeout: 5000 });
         pythonCmd = py;
         break;
       } catch {}
@@ -260,7 +272,8 @@ function showNoClaudePage() {
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url); return { action: 'deny' };
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
+    return { action: 'deny' };
   });
 }
 
@@ -271,7 +284,7 @@ ipcMain.handle('dialog:openDirectory', async () => {
 });
 
 ipcMain.handle('shell:openExternal', (_, url) => {
-  shell.openExternal(url);
+  if (isAllowedExternalUrl(url)) shell.openExternal(url);
 });
 
 ipcMain.handle('notify', (_, { title, body }) => {
@@ -286,6 +299,42 @@ ipcMain.handle('loginItem:set', (_, enabled) => {
   const args = enabled ? (isDocker ? ['--docker', '--hidden'] : ['--hidden']) : [];
   app.setLoginItemSettings({ openAtLogin: enabled, args });
 });
+
+// 健檢第二輪修復：providerApiKey（第三方 OpenAI/OpenRouter/Gemini API key）
+// 原本明碼存在 renderer 的 localStorage（未加密的 LevelDB 檔案，任何本機
+// 程序、備份/同步工具，或未來的 renderer XSS 都能直接讀到）。改用 Electron
+// safeStorage（背後是 Windows DPAPI／macOS Keychain／Linux libsecret 加密），
+// 加密後的內容存成使用者專屬的檔案，renderer 只透過這幾個 IPC 存取，
+// 不再落地到 localStorage。
+const SECURE_STORAGE_FILE = path.join(app.getPath('userData'), 'secure-settings.enc');
+
+function readSecureValue() {
+  if (!safeStorage.isEncryptionAvailable()) return '';
+  try {
+    const encrypted = fs.readFileSync(SECURE_STORAGE_FILE);
+    return safeStorage.decryptString(encrypted);
+  } catch {
+    return '';
+  }
+}
+
+function writeSecureValue(value) {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  try {
+    if (!value) {
+      if (fs.existsSync(SECURE_STORAGE_FILE)) fs.unlinkSync(SECURE_STORAGE_FILE);
+      return true;
+    }
+    fs.writeFileSync(SECURE_STORAGE_FILE, safeStorage.encryptString(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle('secureStorage:isAvailable', () => safeStorage.isEncryptionAvailable());
+ipcMain.handle('secureStorage:get', () => readSecureValue());
+ipcMain.handle('secureStorage:set', (_, value) => writeSecureValue(typeof value === 'string' ? value : ''));
 
 // ── 建立主視窗 ────────────────────────────────────────────
 function createWindow() {
@@ -308,8 +357,22 @@ function createWindow() {
   const startHidden = process.argv.includes('--hidden');
   mainWindow.once('ready-to-show', () => { if (!startHidden) mainWindow.show(); });
   mainWindow.webContents.on('did-fail-load', (_e, code, _desc, failedUrl) => {
+    // 健檢第二輪修復：這個 fallback 原本沒有限制 isDev，封裝後的正式版
+    // 如果 bundled frontend 載入失敗，會無條件改載入 http://localhost:4200 ——
+    // 這個視窗掛了 preload（暴露 window.electronAPI：openDirectory/
+    // openExternal/notify/loginItem），萬一本機剛好有其他程式（甚至惡意
+    // 程式）占用 4200 port，它的內容就會被載進這個有特權的視窗。只在開發
+    // 模式這樣做才合理（開發時 file:// 載入失敗通常代表建置產物還沒生成，
+    // 退回 ng serve 是預期行為）；正式版失敗就顯示錯誤畫面，不要嘗試連
+    // 任意本機 port。
     if (failedUrl && failedUrl.startsWith('file://')) {
-      mainWindow.loadURL('http://localhost:4200');
+      if (isDev) {
+        mainWindow.loadURL('http://localhost:4200');
+      } else {
+        const errorHtml = `<!doctype html><html><body style="background:#0d0d0d;color:#eee;font-family:sans-serif;padding:40px;">
+          <h2>載入失敗</h2><p>前端資源載入失敗，請重新安裝或重啟應用程式。</p></body></html>`;
+        mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorHtml)}`);
+      }
     }
   });
 
@@ -321,7 +384,8 @@ function createWindow() {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url); return { action: 'deny' };
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
+    return { action: 'deny' };
   });
 }
 

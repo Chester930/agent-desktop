@@ -9,4 +9,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateReady: (cb) => ipcRenderer.on('update-ready', () => cb()),
   getLoginItem: () => ipcRenderer.invoke('loginItem:get'),
   setLoginItem: (enabled) => ipcRenderer.invoke('loginItem:set', enabled),
+  secureStorage: {
+    isAvailable: () => ipcRenderer.invoke('secureStorage:isAvailable'),
+    get: () => ipcRenderer.invoke('secureStorage:get'),
+    set: (value) => ipcRenderer.invoke('secureStorage:set', value),
+  },
 });
