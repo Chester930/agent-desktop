@@ -19,7 +19,7 @@ from pathlib import Path
 from aiohttp import web
 
 # Helpers and DB imports
-from helpers import _team_dict, _write_team_yaml, _agent_dict, safe_kill_process
+from helpers import _team_dict, _write_team_yaml, _agent_dict, safe_kill_process, wrap_cmd
 from database import (
     _memory_dir,
     _team_memory_dir,
@@ -41,6 +41,18 @@ def _get_main_module():
 def _dirs():
     import database as _db
     return _db.TEAMS_DIR, _db.AGENTS_DIR
+
+
+def _is_safe_id(name: str) -> bool:
+    """
+    健檢後修復：agent id 與 memory key 會被直接拼進檔案路徑
+    （AGENTS_DIR/f"{agent_id}.md"、mem_dir/f"{key}.md"）。當 team run 走
+    inline team payload（POST /api/team/run 的 `team` 欄位，繞過已儲存、
+    受信任的 team YAML）時，這些值完全來自請求本體，未經任何驗證就能做
+    路徑穿越讀寫任意 .md 檔。比照 routes/agents.py CRUD handler 既有的
+    id 驗證慣例（拒絕 `/`、`\\`、`..`）。
+    """
+    return bool(name) and "/" not in name and "\\" not in name and ".." not in name
 
 
 def _claude_bin_and_key():
@@ -107,7 +119,7 @@ async def _agent_run_capture(
     claude_bin, resolve_key = _claude_bin_and_key()
     agent_file = AGENTS_DIR / f"{agent_id}.md"
     agent_body = ""
-    if agent_file.exists():
+    if _is_safe_id(agent_id) and agent_file.exists():
         try:
             raw_text = agent_file.read_text(encoding="utf-8")
             if raw_text.startswith("---"):
@@ -258,7 +270,7 @@ async def _get_agent_memory_prompt(team_id: str, all_member_ids: list[str], agen
     agent_info = {}
     try:
         f_agent = AGENTS_DIR / f"{agent_id}.md"
-        if f_agent.exists():
+        if _is_safe_id(agent_id) and f_agent.exists():
             agent_info = _agent_dict(f_agent)
     except Exception:
         pass
@@ -276,6 +288,8 @@ async def _get_agent_memory_prompt(team_id: str, all_member_ids: list[str], agen
     step_input_keys = agent_info.get("memory", [])
     legacy_memory = []
     for key in step_input_keys:
+        if not _is_safe_id(key):
+            continue
         key_file = mem_dir / f"{key}.md"
         if key_file.exists():
             try:
@@ -461,7 +475,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             agent_info = {}
             try:
                 f_agent = AGENTS_DIR / f"{agent_id}.md"
-                if f_agent.exists():
+                if _is_safe_id(agent_id) and f_agent.exists():
                     agent_info = _agent_dict(f_agent)
             except Exception:
                 pass
@@ -475,8 +489,8 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
                     pass
 
             mem_dir = _memory_dir()
-            step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
-            step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
+            step_input_keys  = [k for k in (step.get("input_memory",  []) or agent_info.get("memory", [])) if _is_safe_id(k)]
+            step_output_keys = [k for k in (step.get("output_memory", []) or agent_info.get("output_memory", [])) if _is_safe_id(k)]
 
             legacy_memory: list[str] = []
             for key in step_input_keys:
@@ -525,7 +539,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             agent_info = {}
             try:
                 f_agent = AGENTS_DIR / f"{agent_id}.md"
-                if f_agent.exists():
+                if _is_safe_id(agent_id) and f_agent.exists():
                     agent_info = _agent_dict(f_agent)
             except Exception:
                 pass
@@ -539,8 +553,8 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             # P2-B2: per-member input_memory keys (from team YAML) take precedence;
             # fallback to agent-level memory keys (from agent frontmatter)
             mem_dir = _memory_dir()
-            step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
-            step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
+            step_input_keys  = [k for k in (step.get("input_memory",  []) or agent_info.get("memory", [])) if _is_safe_id(k)]
+            step_output_keys = [k for k in (step.get("output_memory", []) or agent_info.get("output_memory", [])) if _is_safe_id(k)]
 
             legacy_memory: list[str] = []
             for key in step_input_keys:
@@ -718,6 +732,16 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
 
     if not team.get("members"):
         return web.json_response({"error": "team has no members"}, status=400)
+
+    # 健檢修復：inline team payload 完全來自請求本體，agent id 與
+    # input_memory/output_memory key 會被拿去拼檔案路徑，必須在此擋下
+    # path traversal（見 _is_safe_id 的說明）。
+    for m in team["members"]:
+        if not isinstance(m, dict) or not _is_safe_id(m.get("agent", "")):
+            return web.json_response({"error": "invalid member agent id"}, status=400)
+        for key in list(m.get("input_memory") or []) + list(m.get("output_memory") or []):
+            if not _is_safe_id(key):
+                return web.json_response({"error": "invalid memory key"}, status=400)
 
     run_id = uuid.uuid4().hex[:8]
     _team_runs[run_id] = {
