@@ -551,8 +551,13 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                     }
                     await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
         except Exception:
-            await _team_pool.evict(client_id)
+            # force=True：這是已知壞掉的連線要立刻清掉，不是機會性的 idle 回收，
+            # 不該被「還在使用中」的 busy 檢查擋下（此時 busy 尚未被下面的
+            # finally release）。
+            await _team_pool.evict(client_id, force=True)
             raise
+        finally:
+            _team_pool.release(client_id)
 
     async def _run_legacy(full_message: str) -> None:
         cmd = [claude_bin, "-p", full_message, "--output-format", "stream-json", "--verbose"]
@@ -859,8 +864,10 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                         new_sid = message.session_id
                         active_sessions[session_key] = new_sid
             except Exception:
-                await _team_pool.evict(session_key)
+                await _team_pool.evict(session_key, force=True)
                 raise
+            finally:
+                _team_pool.release(session_key)
 
             await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
             return collected, new_sid
@@ -1315,8 +1322,10 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                     elif isinstance(message, ResultMessage):
                         active_sessions[exec_key] = message.session_id
             except Exception:
-                await _team_pool.evict(proc_key)
+                await _team_pool.evict(proc_key, force=True)
                 raise
+            finally:
+                _team_pool.release(proc_key)
 
             await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
             return "".join(collected)

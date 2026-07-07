@@ -80,7 +80,23 @@ def _get_build_team_memory_context():
 _team_runs:   dict[str, dict] = {}
 _team_events: dict[str, list] = {}
 _team_queues: dict[str, list] = {}
-_team_run_processes: dict[str, asyncio.subprocess.Process] = {}
+# 健檢修復：parallel 模式下同一個 run_id 底下的多個 step 會並行各自 spawn 一個
+# process；原本用單一 dict[run_id]=proc 只能記住最後一個，後啟動的會覆蓋先前
+# 的，導致 cancel/timeout 只能殺掉其中一個，其餘變成孤兒 process 繼續跑、繼續
+# 燒 API 額度。改成每個 run_id 對應一個 process 集合。
+_team_run_processes: dict[str, set] = {}
+
+
+def _register_team_proc(run_id: str, proc) -> None:
+    _team_run_processes.setdefault(run_id, set()).add(proc)
+
+
+def _unregister_team_proc(run_id: str, proc) -> None:
+    procs = _team_run_processes.get(run_id)
+    if procs is not None:
+        procs.discard(proc)
+        if not procs:
+            _team_run_processes.pop(run_id, None)
 
 
 def _cleanup_old_runs(max_age: float = 7200.0) -> None:
@@ -162,7 +178,7 @@ async def _agent_run_capture(
             cwd=safe_cwd,
             env=env,
         )
-        _team_run_processes[run_id] = proc
+        _register_team_proc(run_id, proc)
 
         async for line in proc.stdout:
             if _team_runs.get(run_id, {}).get("status") == "cancelled":
@@ -192,7 +208,8 @@ async def _agent_run_capture(
         output_parts.append(err)
         _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": err})
     finally:
-        _team_run_processes.pop(run_id, None)
+        if proc is not None:
+            _unregister_team_proc(run_id, proc)
 
     return "".join(output_parts)
 
@@ -235,8 +252,8 @@ def _diff_workspace_snapshot(old_snap: dict, new_snap: dict) -> list[str]:
 
 
 def _kill_team_run_processes(run_id: str) -> None:
-    proc = _team_run_processes.pop(run_id, None)
-    if proc:
+    """Kill every process still tracked for this run (parallel mode can have several)."""
+    for proc in list(_team_run_processes.get(run_id, ())):
         try:
             safe_kill_process(proc)
         except Exception:
@@ -826,9 +843,7 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
         run["status"] = "cancelled"
         run["_finished_at"] = time.time()
         _tr_emit(run_id, {"type": "cancelled", "text": "cancelled"})
-        proc = _team_run_processes.get(run_id)
-        if proc:
-            safe_kill_process(proc)
+        _kill_team_run_processes(run_id)
     return web.json_response({"ok": True})
 
 

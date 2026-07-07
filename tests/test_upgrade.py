@@ -266,7 +266,9 @@ class TestTeamFailsafe(unittest.IsolatedAsyncioTestCase):
         import routes.teams
         run_id = "test-failsafe-2"
         mock_proc = MagicMock()
-        routes.teams._team_run_processes[run_id] = mock_proc
+        # 健檢第二輪修復：_team_run_processes 現在是 dict[str, set]（同一個
+        # run_id 底下可同時追蹤多個 process，parallel 模式不再互相覆蓋）。
+        routes.teams._register_team_proc(run_id, mock_proc)
         routes.teams._team_runs[run_id] = {
             "id": run_id,
             "status": "running",
