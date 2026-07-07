@@ -76,7 +76,7 @@ def _all_session_files() -> list[Path]:
 def _find_session_file(sid: str) -> Path | None:
     """Find a session .jsonl file by ID; check DB path first, then scan."""
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             row = c.execute("SELECT file_path FROM sessions WHERE id=?", (sid,)).fetchone()
             if row and row["file_path"]:
                 p = Path(row["file_path"])
@@ -157,6 +157,26 @@ def _db() -> sqlite3.Connection:
         conn.close()
         raise
 
+
+import contextlib as _contextlib
+
+@_contextlib.contextmanager
+def _db_ctx():
+    """
+    健檢第二輪修復：原本各處都直接對 _db() 的回傳值開 with 區塊，用的是
+    sqlite3.Connection 自己的 context manager —— 那個只會 commit/rollback，
+    不會 close()。每個呼叫點都會洩漏一個 WAL 連線 handle，長期執行下來
+    handle 數量會持續增加；在 Windows 上洩漏的 handle 還可能擋住之後的
+    檔案操作（例如 _init_db 損毀重建時的 unlink）。用法完全相同，只是額外
+    保證離開時一定 close()。
+    """
+    conn = _db()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
@@ -218,7 +238,7 @@ def _init_db() -> None:
 
 def _migrate_db() -> None:
     """Add missing columns introduced in newer schema versions."""
-    with _db() as c:
+    with _db_ctx() as c:
         cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
         if "message_count" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0")
@@ -235,7 +255,7 @@ def _migrate_fts_tokenizer() -> None:
     indexes overlapping 3-char n-grams instead, which works for both
     CJK and Latin text without an external segmenter.
     """
-    with _db() as c:
+    with _db_ctx() as c:
         row = c.execute(
             "SELECT sql FROM sqlite_master WHERE name='sessions_fts'"
         ).fetchone()
@@ -253,7 +273,7 @@ def _migrate_fts_tokenizer() -> None:
 def _backfill_project_paths() -> None:
     """One-time: populate project_path for sessions that still have empty value."""
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             rows = c.execute(
                 "SELECT id, file_path FROM sessions WHERE project_path = '' AND file_path != ''"
             ).fetchall()
@@ -329,7 +349,7 @@ def _sync_index() -> None:
     if not all_files:
         return
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             indexed = {r["id"]: (r["mtime"], r["project_path"]) for r in c.execute("SELECT id, mtime, project_path FROM sessions")}
             existing_ids: set[str] = set()
             for f in all_files:

@@ -1417,7 +1417,7 @@ async def handle_sessions(request: web.Request) -> web.Response:
         return parts[-1] if parts else ""
 
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             if q and len(q) >= 3:
                 # trigram tokenizer needs >=3 chars to form any trigram, so this
                 # path only fires for queries long enough for FTS5 MATCH to work.
@@ -1614,7 +1614,7 @@ async def handle_session_delete(request: web.Request) -> web.Response:
 
     # 主動從 SQLite 數據庫中清除該 Session 索引，保持即時一致
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             c.execute("DELETE FROM sessions WHERE id=?", (sid,))
             c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
     except Exception as e:
@@ -2273,7 +2273,7 @@ async def handle_stats(request: web.Request) -> web.Response:
     active_days_set: set[str] = set()
 
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             row = c.execute(
                 "SELECT COUNT(*) as cnt, SUM(input_tokens+output_tokens) as tok, SUM(message_count) as msgs FROM sessions"
             ).fetchone()
@@ -2615,7 +2615,7 @@ async def handle_session_auto_title(request: web.Request) -> web.Response:
 
     # Also update SQLite
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             c.execute("UPDATE sessions SET title=? WHERE id=?", (title, sid))
             c.execute("UPDATE sessions_fts SET title=? WHERE id=?", (title, sid))
     except Exception:
@@ -3030,7 +3030,7 @@ async def handle_debug_dump(request: web.Request) -> web.Response:
                 and "password" not in k.lower() and "secret" not in k.lower()}
     sqlite_stats: dict = {}
     try:
-        with _db() as c:
+        with _db_ctx() as c:
             row = c.execute("SELECT COUNT(*) as n, SUM(message_count) as m FROM sessions").fetchone()
             sqlite_stats = {"sessions": row["n"] or 0, "messages": row["m"] or 0}
     except Exception:
