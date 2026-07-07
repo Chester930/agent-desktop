@@ -656,6 +656,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (tabToClose && tabToClose.clientId) {
       this.claude.stopChat(tabToClose.clientId).subscribe();
     }
+    this.tabStopFns.delete(tabId);
     const isActive = tabId === this.activeChatId();
     const next = tabs[idx > 0 ? idx - 1 : 1];
     if (isActive && this.isRecording()) {
@@ -1363,10 +1364,46 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // Stop streaming
-  private stopFn: (() => void) | null = null;
+  // T38 健檢修復：原本用單一 this.stopFn 記錄「目前這一個」串流的中止函式，
+  // 但 send()/submitTeamMessage()/executeTeamCodePhase() 的事件 callback 都
+  // 直接寫入共用的 this.messages/this.isStreaming/this.tokenUsage，完全沒
+  // 檢查「觸發這次事件的串流，是不是還對應著目前作用中的分頁」。切分頁不會
+  // 中止背景中的串流，於是背景分頁後續收到的 token 會被寫進「現在正在看」
+  // 的另一個分頁裡，且切換走的分頁狀態直接被凍結在切換當下那一刻，收不到
+  // 後續進度。改成每個分頁各自的 stop 函式，且事件 callback 一律透過
+  // tabMessages()/tabStreaming()/tabTokenUsage() 依「事件所屬的 tabId」
+  // 決定要寫進 live signal（該分頁仍是作用中）還是 chatTabs 裡儲存的狀態
+  // （該分頁已經不是作用中，之後切回去時才看得到完整進度）。
+  private tabStopFns = new Map<string, () => void>();
+
+  private tabMessages(tabId: string, updater: (msgs: ChatMessage[]) => ChatMessage[]) {
+    if (tabId === this.activeChatId()) {
+      this.messages.update(updater);
+    } else {
+      this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, messages: updater(t.messages) } : t));
+    }
+  }
+
+  private tabStreaming(tabId: string, streaming: boolean) {
+    if (tabId === this.activeChatId()) {
+      this.isStreaming.set(streaming);
+    } else {
+      this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, isStreaming: streaming } : t));
+    }
+  }
+
+  private tabTokenUsage(tabId: string, usage: { input: number; output: number; cost: number } | null) {
+    if (tabId === this.activeChatId()) {
+      this.tokenUsage.set(usage);
+    } else {
+      this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, tokenUsage: usage } : t));
+    }
+  }
 
   stopStreaming() {
-    if (this.stopFn) { this.stopFn(); this.stopFn = null; }
+    const tabId = this.activeChatId();
+    const fn = this.tabStopFns.get(tabId);
+    if (fn) { fn(); this.tabStopFns.delete(tabId); }
     this.claude.stopChat(this.activeChat?.clientId).subscribe();
     this.isStreaming.set(false);
     this.messages.update(msgs => {
@@ -2912,7 +2949,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ngOnDestroy() {
     clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
     if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
-    this.stopFn?.(); this._teamRunStopFn?.();
+    for (const fn of this.tabStopFns.values()) fn();
+    this.tabStopFns.clear();
+    this._teamRunStopFn?.();
     if (this.recognition) {
       // Detach handlers first so onend/onerror can't fire after the component is gone.
       this.recognition.onstart = null;
@@ -3209,6 +3248,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.attachedFiles.set([]);
 
     const curTab = this.activeChat;
+    const tabId = this.activeChatId();
     if (curTab && curTab.teamId) {
       this.submitTeamMessage(text, attachments);
       return;
@@ -3216,58 +3256,57 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     // T11 — 若 tab 還是預設名稱，用第一條訊息更新
     if (curTab && curTab.label === '新對話') {
-      const id = this.activeChatId();
-      this.chatTabs.update(tabs => tabs.map(t => t.id === id ? { ...t, label: text.slice(0, 20) } : t));
+      this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, label: text.slice(0, 20) } : t));
     }
     const displayText = text + (attachments.length ? ` 📎×${attachments.length}` : '');
     const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
-    this.messages.update(m => [...m, { role: 'user', text: displayText, time: now }]);
+    this.tabMessages(tabId, m => [...m, { role: 'user', text: displayText, time: now }]);
     const assistantMsg: ChatMessage = { role: 'assistant', text: '', isStreaming: true, time: now };
-    this.messages.update(m => [...m, assistantMsg]);
+    this.tabMessages(tabId, m => [...m, assistantMsg]);
     this.shouldScroll = true;
 
     // Build event handler (shared between Claude and provider mode)
     const onEvent = (ev: any) => {
       if (ev.type === 'assistant' && ev.message?.content) {
         // tool is done once assistant starts replying
-        this.messages.update(msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
+        this.tabMessages(tabId, msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
         for (const block of ev.message.content) {
           if (block.type === 'text') {
-            this.messages.update(msgs => {
+            this.tabMessages(tabId, msgs => {
               const copy = [...msgs];
               copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + block.text };
               return copy;
             });
-            this.shouldScroll = true;
+            if (tabId === this.activeChatId()) this.shouldScroll = true;
             if (block.text && (block.text.toLowerCase().includes('session limit') || block.text.toLowerCase().includes('rate limit') || block.text.toLowerCase().includes('limit · resets') || block.text.toLowerCase().includes('quota'))) {
               this.outOfQuota.set(true);
             }
           }
         }
       } else if (ev.type === 'text') {
-        this.messages.update(msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
-        this.messages.update(msgs => {
+        this.tabMessages(tabId, msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
+        this.tabMessages(tabId, msgs => {
           const copy = [...msgs];
           copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + ev.text };
           return copy;
         });
-        this.shouldScroll = true;
+        if (tabId === this.activeChatId()) this.shouldScroll = true;
         if (ev.text && (ev.text.toLowerCase().includes('session limit') || ev.text.toLowerCase().includes('rate limit') || ev.text.toLowerCase().includes('limit · resets') || ev.text.toLowerCase().includes('quota'))) {
           this.outOfQuota.set(true);
         }
       } else if (ev.type === 'tool_use') {
-        this.messages.update(m => [...m, {
+        this.tabMessages(tabId, m => [...m, {
           role: 'tool', text: JSON.stringify(ev.input ?? {}, null, 2),
           toolName: ev.name, toolUseId: ev.id, isRunning: true, startTime: Date.now()
         }]);
-        this.shouldScroll = true;
+        if (tabId === this.activeChatId()) this.shouldScroll = true;
       } else if (ev.type === 'user' && ev.message?.content) {
         for (const block of ev.message.content) {
           if (block.type === 'tool_result') {
             const res = typeof block.content === 'string'
               ? block.content
               : JSON.stringify(block.content);
-            this.messages.update(msgs => msgs.map(m =>
+            this.tabMessages(tabId, msgs => msgs.map(m =>
               m.toolUseId === block.tool_use_id
                 ? { ...m, isRunning: false, result: res.slice(0, 3000) }
                 : m
@@ -3278,14 +3317,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         const totalCost = ev.total_cost_usd ?? 0;
         const msgCost = Math.max(0, totalCost - this._prevCostUsd);
         this._prevCostUsd = totalCost;
-        this.tokenUsage.set({
+        this.tabTokenUsage(tabId, {
           input: ev.usage?.input_tokens ?? 0,
           output: ev.usage?.output_tokens ?? 0,
           cost: totalCost,
         });
         // 標記本次訊息費用
         if (msgCost > 0) {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             for (let i = copy.length - 1; i >= 0; i--) {
               if (copy[i].role === 'assistant') {
@@ -3300,27 +3339,30 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     };
 
     const onDone = () => {
-      this.stopFn = null;
-      this.messages.update(msgs =>
+      this.tabStopFns.delete(tabId);
+      this.tabMessages(tabId, msgs =>
         msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m)
       );
-      this.messages.update(msgs => {
+      this.tabMessages(tabId, msgs => {
         const copy = [...msgs];
         copy[copy.length - 1] = { ...copy[copy.length - 1], isStreaming: false };
         return copy;
       });
-      this.isStreaming.set(false);
+      this.tabStreaming(tabId, false);
       this.reload();
       this.triggerAutoTitle();
-      this.shouldScroll = true;
-      this.inputRef?.nativeElement?.focus();
+      if (tabId === this.activeChatId()) {
+        this.shouldScroll = true;
+        this.inputRef?.nativeElement?.focus();
+      }
       (window as any).electronAPI?.notify('Claude 完成', text.slice(0, 60));
     };
 
     const onError = (err: any) => {
       const errStr = String(err);
-      this.messages.update(m => [...m, { role: 'error', text: errStr }]);
-      this.isStreaming.set(false);
+      this.tabMessages(tabId, m => [...m, { role: 'error', text: errStr }]);
+      this.tabStreaming(tabId, false);
+      this.tabStopFns.delete(tabId);
       if (errStr.toLowerCase().includes('session limit') || errStr.toLowerCase().includes('rate limit') || errStr.toLowerCase().includes('limit · resets') || errStr.toLowerCase().includes('quota')) {
         this.outOfQuota.set(true);
       }
@@ -3333,20 +3375,21 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         .slice(0, -1) // exclude the empty placeholder we just pushed
         .map(m => ({ role: m.role as 'user' | 'assistant', content: m.text }));
       history.push({ role: 'user', content: text });
-      this.stopFn = this.claude.streamProviderChat(history, onEvent, onDone, onError);
+      this.tabStopFns.set(tabId, this.claude.streamProviderChat(history, onEvent, onDone, onError));
     } else {
-      this.stopFn = this.claude.streamChat(
+      this.tabStopFns.set(tabId, this.claude.streamChat(
         text, this.selectedAgent(), onEvent, onDone, onError, attachments,
         this.activeChat?.projectDir,  // 對話欄鎖定的目錄
         this.activeChat?.teamId,      // 綁定的團隊 ID
         this.activeChat?.clientId     // 傳遞 Tab 的 clientId，解決多 Tab 衝突
-      );
+      ));
     }
   }
 
   submitTeamMessage(text: string, attachments: string[]) {
     const curTab = this.activeChat;
     if (!curTab || !curTab.teamId) return;
+    const tabId = curTab.id;
 
     const team = this.teams().find(t => t.id === curTab.teamId);
     const teamName = team ? team.name : 'Auto Team';
@@ -3354,12 +3397,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     // 1. 新增 User 訊息
     const displayText = text + (attachments.length ? ` 📎×${attachments.length}` : '');
-    this.messages.update(m => [...m, { role: 'user', text: displayText, time: now }]);
+    this.tabMessages(tabId, m => [...m, { role: 'user', text: displayText, time: now }]);
     this.shouldScroll = true;
 
     // 2. 啟動團隊討論
     let createdProjectMeta: any = null;
-    
+
     const abortFn = this.claude.streamTeamChat(
       text,
       curTab.teamId,
@@ -3373,10 +3416,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             isStreaming: true,
             time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
           };
-          this.messages.update(m => [...m, msg]);
-          this.shouldScroll = true;
+          this.tabMessages(tabId, m => [...m, msg]);
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
         } else if (ev.type === 'text') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             for (let i = copy.length - 1; i >= 0; i--) {
               if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
@@ -3386,9 +3429,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-          this.shouldScroll = true;
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
         } else if (ev.type === 'agent_done') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             for (let i = copy.length - 1; i >= 0; i--) {
               if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
@@ -3398,7 +3441,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-          this.shouldScroll = true;
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
         } else if (ev.type === 'project_created') {
           createdProjectMeta = {
             teamId: curTab.teamId!,
@@ -3406,53 +3449,54 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             projectPath: ev.project_path,
             task: text
           };
-          this.messages.update(m => [...m, {
+          this.tabMessages(tabId, m => [...m, {
             role: 'system',
             text: `📁 專案資料夾 "${ev.project_name}" 建立成功。路徑: ${ev.project_path}`,
             time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
           }]);
-          const activeId = this.activeChatId();
-          this.chatTabs.update(tabs => tabs.map(t => t.id === activeId ? { ...t, projectDir: ev.project_path } : t));
-          this.shouldScroll = true;
+          this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, projectDir: ev.project_path } : t));
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
         } else if (ev.type === 'error') {
-          this.messages.update(m => [...m, { role: 'error', text: ev.text }]);
-          this.isStreaming.set(false);
-          this.shouldScroll = true;
+          this.tabMessages(tabId, m => [...m, { role: 'error', text: ev.text }]);
+          this.tabStreaming(tabId, false);
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
         }
       },
       () => {
-        this.stopFn = null;
-        this.isStreaming.set(false);
+        this.tabStopFns.delete(tabId);
+        this.tabStreaming(tabId, false);
         this.reload();
-        
+
         if (createdProjectMeta) {
-          this.messages.update(m => [...m, {
+          this.tabMessages(tabId, m => [...m, {
             role: 'system',
             text: `📋 專案計畫已就緒，資料夾："${createdProjectMeta.projectName}"，是否同意並啟動團隊執行？`,
             time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
             pendingExec: createdProjectMeta
           }]);
         }
-        this.inputRef?.nativeElement?.focus();
-        this.shouldScroll = true;
+        if (tabId === this.activeChatId()) {
+          this.inputRef?.nativeElement?.focus();
+          this.shouldScroll = true;
+        }
       },
       (err) => {
         console.error('team chat error', err);
-        this.isStreaming.set(false);
-        this.stopFn = null;
-        this.messages.update(m => [...m, { role: 'error', text: `團隊討論異常斷開: ${err}` }]);
+        this.tabStreaming(tabId, false);
+        this.tabStopFns.delete(tabId);
+        this.tabMessages(tabId, m => [...m, { role: 'error', text: `團隊討論異常斷開: ${err}` }]);
       },
       attachments,
       curTab.projectDir,
       curTab.clientId
     );
 
-    this.stopFn = () => {
+    this.tabStopFns.set(tabId, () => {
       abortFn();
-      this.isStreaming.set(false);
-      this.stopFn = null;
-      this.messages.update(msgs => msgs.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
-    };
+      this.tabStreaming(tabId, false);
+      this.tabStopFns.delete(tabId);
+      this.tabMessages(tabId, msgs => msgs.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
+    });
   }
 
   approveAndExecuteTeam(msg: ChatMessage, index: number) {
@@ -3463,6 +3507,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   executeTeamCodePhase(teamId: string, projectPath: string, task: string) {
+    const tabId = this.activeChatId();
     const team = this.teams().find(t => t.id === teamId);
     const teamName = team ? team.name : 'Auto Team';
     const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
@@ -3484,9 +3529,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       time: now,
       teamRun
     };
-    this.messages.update(m => [...m, execMsg]);
+    this.tabMessages(tabId, m => [...m, execMsg]);
     this.shouldScroll = true;
-    this.isStreaming.set(true);
+    this.tabStreaming(tabId, true);
 
     const abortExec = this.claude.executeTeamTask(
       teamId,
@@ -3494,7 +3539,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       task,
       (ev) => {
         if (ev.type === 'exec_start') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
             const lastMsg = copy[lastIdx];
@@ -3506,7 +3551,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             return copy;
           });
         } else if (ev.type === 'exec_text') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
             const lastMsg = copy[lastIdx];
@@ -3517,9 +3562,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-          this.shouldScroll = true;
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
         } else if (ev.type === 'exec_done') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
             const lastMsg = copy[lastIdx];
@@ -3531,7 +3576,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             return copy;
           });
         } else if (ev.type === 'permission_request') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
             const lastMsg = copy[lastIdx];
@@ -3547,9 +3592,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-          this.shouldScroll = true;
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
         } else if (ev.type === 'done') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
             const lastMsg = copy[lastIdx];
@@ -3563,12 +3608,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-          this.isStreaming.set(false);
-          this.stopFn = null;
+          this.tabStreaming(tabId, false);
+          this.tabStopFns.delete(tabId);
           this.reload();
-          setTimeout(() => this.scrollToBottom(), 100);
+          if (tabId === this.activeChatId()) setTimeout(() => this.scrollToBottom(), 100);
         } else if (ev.type === 'error') {
-          this.messages.update(msgs => {
+          this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
             const lastMsg = copy[lastIdx];
@@ -3582,19 +3627,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-          this.isStreaming.set(false);
-          this.stopFn = null;
+          this.tabStreaming(tabId, false);
+          this.tabStopFns.delete(tabId);
         }
       },
       () => {
-        this.isStreaming.set(false);
-        this.stopFn = null;
+        this.tabStreaming(tabId, false);
+        this.tabStopFns.delete(tabId);
       },
       (err) => {
         console.error('exec error', err);
-        this.isStreaming.set(false);
-        this.stopFn = null;
-        this.messages.update(msgs => {
+        this.tabStreaming(tabId, false);
+        this.tabStopFns.delete(tabId);
+        this.tabMessages(tabId, msgs => {
           const copy = [...msgs];
           const lastIdx = copy.length - 1;
           const lastMsg = copy[lastIdx];
@@ -3612,11 +3657,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.activeChat?.clientId
     );
 
-    this.stopFn = () => {
+    this.tabStopFns.set(tabId, () => {
       abortExec();
-      this.isStreaming.set(false);
-      this.stopFn = null;
-      this.messages.update(msgs => {
+      this.tabStreaming(tabId, false);
+      this.tabStopFns.delete(tabId);
+      this.tabMessages(tabId, msgs => {
         const copy = [...msgs];
         const lastIdx = copy.length - 1;
         const lastMsg = copy[lastIdx];
@@ -3630,7 +3675,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         }
         return copy;
       });
-    };
+    });
   }
 
   handleUserAuthorize(requestId: string, agent: string, decision: 'approve' | 'reject') {
