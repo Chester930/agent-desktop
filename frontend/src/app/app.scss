@@ -1,43 +1,14 @@
-// ── Variables & Design System ────────────────────────
-:root {
-  // Dark Theme (Default)
-  --bg:         #0d0d0d;
-  --surface:    #161616;
-  --surface2:   #1f1f1f;
-  --border:     #2a2a2a;
-  --accent:     #d4a853;
-  --accent2:    #7c6fff;
-  --text:       #e8e8e8;
-  --text-dim:   #888;
-  --user-bg:    #1a2a1a;
-  --asst-bg:    #1a1a2a;
-}
-
-:root[data-theme='light'] {
-  // Light Theme
-  --bg:         #f5f5f5;
-  --surface:    #ffffff;
-  --surface2:   #f0f0f0;
-  --border:     #ddd;
-  --accent:     #c7913c;
-  --accent2:    #5a4ecc;
-  --text:       #1a1a1a;
-  --text-dim:   #666;
-  --user-bg:    #e8f5e9;
-  --asst-bg:    #e8eaf6;
-}
-
-// Map SCSS variables to dynamic CSS variables for full system theme synchronization
-$bg:         var(--bg);
-$surface:    var(--surface);
-$surface2:   var(--surface2);
-$border:     var(--border);
-$accent:     var(--accent);
-$accent2:    var(--accent2);
-$text:       var(--text);
-$text-dim:   var(--text-dim);
-$user-bg:    var(--user-bg);
-$asst-bg:    var(--asst-bg);
+// ── Variables ─────────────────────────────────────────
+$bg:         #0d0d0d;
+$surface:    #161616;
+$surface2:   #1f1f1f;
+$border:     #2a2a2a;
+$accent:     #d4a853;
+$accent2:    #7c6fff;
+$text:       #e8e8e8;
+$text-dim:   #888;
+$user-bg:    #1a2a1a;
+$asst-bg:    #1a1a2a;
 $radius:     10px;
 
 // ── Reset ─────────────────────────────────────────────
@@ -139,7 +110,7 @@ body {
     .usage-progress-bar {
       width: 42px;
       height: 6px;
-      background: var(--border, #2a2a2a);
+      background: $border;
       border-radius: 3px;
       overflow: hidden;
       display: inline-flex;
@@ -3204,15 +3175,15 @@ body {
 
 // #17 Profile switcher (sidebar header)
 .profile-switcher {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
+  background: $surface;
+  border: 1px solid $border;
   border-radius: 6px;
-  color: var(--text-primary);
+  color: $text;
   font-size: 11px;
   padding: 3px 6px;
   max-width: 140px;
   cursor: pointer;
-  &:hover { border-color: var(--accent); }
+  &:hover { border-color: $accent; }
 }
 
 // #16 Provider badge (topbar)
@@ -3238,16 +3209,16 @@ body {
 
 // #21 Export format select (topbar)
 .export-format-select {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
+  background: $surface;
+  border: 1px solid $border;
   border-radius: 4px;
-  color: var(--text-primary);
+  color: $text;
   font-size: 11px;
   padding: 2px 4px;
   cursor: pointer;
   max-width: 56px;
   &:disabled { opacity: 0.4; cursor: not-allowed; }
-  &:hover:not(:disabled) { border-color: var(--accent); }
+  &:hover:not(:disabled) { border-color: $accent; }
 }
 
 // #22 Update progress bar (topbar)
@@ -3362,7 +3333,7 @@ body {
   display: inline-block;
   animation: cursor-blink 1s step-end infinite;
   margin-left: 2px;
-  color: var(--accent, #a3e635);
+  color: $accent;
   vertical-align: baseline;
 }
 @keyframes cursor-blink {
@@ -3429,12 +3400,12 @@ body {
 .chat-welcome-title {
   font-size: 22px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: $text;
   letter-spacing: -0.02em;
 }
 .chat-welcome-sub {
   font-size: 13px;
-  color: var(--text-dim, #6b7280);
+  color: $text-dim;
   margin: 0;
 }
 .chat-welcome-prompts {
@@ -3445,18 +3416,18 @@ body {
   max-width: 480px;
 }
 .welcome-prompt-btn {
-  background: var(--bg-surface, #1a1a1a);
-  border: 1px solid var(--border, #2a2a2a);
+  background: $surface;
+  border: 1px solid $border;
   border-radius: 8px;
   padding: 8px 14px;
   font-size: 12px;
-  color: var(--text-primary);
+  color: $text;
   cursor: pointer;
   transition: all 0.15s;
   &:hover {
-    background: var(--bg-surface2, #252525);
-    border-color: var(--accent, #a3e635);
-    color: var(--accent, #a3e635);
+    background: $surface2;
+    border-color: $accent;
+    color: $accent;
   }
 }
 .chat-welcome-tips {
@@ -3468,7 +3439,7 @@ body {
 }
 .welcome-tip {
   font-size: 11px;
-  color: var(--text-dim, #6b7280);
+  color: $text-dim;
   kbd {
     background: #2a2a2a;
     border: 1px solid #3a3a3a;
@@ -3509,7 +3480,7 @@ body {
   border-radius: 5px;
   padding: 7px 12px;
   font-size: 12px;
-  color: var(--text-primary, #e5e7eb);
+  color: $text;
   cursor: pointer;
   &:hover { background: #2a2a3e; }
   &.ctx-danger { color: #f87171; &:hover { background: #3f1010; } }
@@ -3585,7 +3556,7 @@ body {
   border-bottom: 1px solid rgba(255,255,255,0.06);
   position: sticky;
   top: 0;
-  background: var(--bg-main, #0d0d0d);
+  background: $bg;
   z-index: 2;
 }
 .mcp-section-icon { font-size: 13px; }
@@ -4047,7 +4018,7 @@ body[style*="ns-resize"] .mcp-divider-grip {
   flex-shrink: 0;
   border-top: 1px solid rgba(255,255,255,0.06);
   padding: 6px 8px;
-  background: var(--bg-main, #0d0d0d);
+  background: $bg;
   z-index: 10;  // 確保 popup 蓋過 session-list
 }
 
