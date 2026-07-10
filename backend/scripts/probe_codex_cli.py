@@ -63,7 +63,10 @@ KNOWN_ITEM_TYPES = {
 
 async def _run_and_report(prompt: str, cwd: str, sandbox: str, model: str, resume_id: "str | None") -> "str | None":
     print(f"\n{'='*70}")
-    print(f"呼叫：codex exec {'resume ' + resume_id if resume_id else ''} --json --sandbox {sandbox} --cd {cwd} {('--model ' + model) if model else ''}")
+    if resume_id:
+        print(f"呼叫：codex exec resume {resume_id} --json --skip-git-repo-check{(' --model ' + model) if model else ''}")
+    else:
+        print(f"呼叫：codex exec --json --sandbox {sandbox} --cd {cwd} --skip-git-repo-check{(' --model ' + model) if model else ''}")
     print(f"prompt: {prompt!r}")
     print(f"{'='*70}\n")
 
@@ -74,16 +77,23 @@ async def _run_and_report(prompt: str, cwd: str, sandbox: str, model: str, resum
         pass  # collected via result.output instead; this is just for streaming display
 
     codex_bin = codex_engine._codex_bin()
-    cmd = [codex_bin, "exec"]
+    # 已驗證（codex exec resume --help）：resume 子指令不接受 --sandbox／
+    # --cd，塞了會直接整個失敗（見 codex_engine.py 檔頭的驗證記錄）。
+    #
+    # 已驗證（真實 CLI，這支腳本本身踩過這個坑）：prompt 不能當 CLI 引數傳
+    # ——Windows 上 codex 是 npm .cmd shim，wrap_cmd() 會包一層 cmd /c，而
+    # cmd.exe 對「引數裡包含換行字元」的處理是壞的，多行 prompt 傳進去會
+    # 被截斷/錯誤斷行，甚至讓 codex 整個退回互動式人類可讀輸出（不是 --json
+    # 要求的 JSONL）。改用官方文件記載的方式：引數位置填 "-"，實際 prompt
+    # 透過 stdin 送進去。
     if resume_id:
-        cmd += ["resume", resume_id, prompt]
+        cmd = [codex_bin, "exec", "resume", resume_id, "-", "--json", "--skip-git-repo-check"]
     else:
-        cmd += [prompt]
-    cmd += ["--json", "--sandbox", sandbox, "--cd", cwd, "--skip-git-repo-check"]
+        cmd = [codex_bin, "exec", "-", "--json", "--sandbox", sandbox, "--cd", cwd, "--skip-git-repo-check"]
     if model:
         cmd += ["--model", model]
 
-    print(f"實際指令：{' '.join(cmd)}\n")
+    print(f"實際指令：{' '.join(cmd)}（prompt 透過 stdin 傳送，不在指令列裡）\n")
     print("--- 原始輸出（逐行）---")
 
     # Windows 上 npm 全域安裝的 CLI 通常是 .cmd shim（`where codex` 會看到
@@ -94,8 +104,13 @@ async def _run_and_report(prompt: str, cwd: str, sandbox: str, model: str, resum
     # 輸出展示段落一樣要套用，才能在 Windows 上真的執行 codex 驗證。
     wrapped_cmd = wrap_cmd(cmd[0], cmd[1:])
     proc = await asyncio.create_subprocess_exec(
-        *wrapped_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=cwd,
+        *wrapped_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        stdin=asyncio.subprocess.PIPE, cwd=cwd,
     )
+    if proc.stdin is not None:
+        proc.stdin.write(prompt.encode("utf-8"))
+        await proc.stdin.drain()
+        proc.stdin.close()
     async for line in proc.stdout:
         raw = line.decode("utf-8", errors="replace").rstrip()
         if not raw:

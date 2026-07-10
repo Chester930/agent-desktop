@@ -104,18 +104,33 @@ async def run_turn(
     safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
     sandbox_mode = _normalize_sandbox_mode(permission_mode)
 
+    # 已驗證（真實 CLI）：team run 的 prompt 是多行字串（agent frontmatter
+    # body、memory context、任務描述用 "\n\n" 接起來）。Windows 上 codex 是
+    # npm .cmd shim（`where codex` 看到 codex.cmd），wrap_cmd() 會包一層
+    # `cmd /c` 執行——但 cmd.exe 對「一個引數裡包含換行字元」的處理是壞的，
+    # 多行 prompt 傳進去會被截斷/錯誤斷行（實測看到模型只收到
+    # "[Memory Context]" 這一行就結束，完全沒看到真正的任務內容，回覆
+    # 「你想要我在這個 repo 做什麼？」）。而且這個情境下 codex 甚至會整個
+    # 退回互動式的人類可讀輸出格式（不是 --json 要求的 JSONL），因為它把
+    # 傳壞的引數解析成別的東西。
+    #
+    # 修法：不把 prompt 當 CLI 引數傳，改用官方文件記載的方式——引數位置
+    # 填 "-"，實際 prompt 內容透過 stdin 送進去（「若引數是 "-"，從 stdin
+    # 讀取指示」）。這樣完全不經過 cmd.exe 的命令列 tokenize，多行/特殊字元
+    # 都不是問題。單行 prompt（例如這次驗證用的簡短測試句）不會踩到這個
+    # bug，但 stdin 是對所有情況都安全的做法，統一都走這條路。
     if resume_session_id:
-        cmd = [codex_bin, "exec", "resume", resume_session_id, prompt]
+        cmd = [codex_bin, "exec", "resume", resume_session_id, "-", "--json", "--skip-git-repo-check"]
+        if model:
+            cmd += ["--model", model]
     else:
-        cmd = [codex_bin, "exec", prompt]
-
-    # 已驗證：codex exec 預設要求在 git repo 裡執行，不然整個 turn 會安靜
-    # 結束、不產生任何 item.completed 事件（output/session_id 都是空字串，
-    # 不會丟例外，很容易誤判成「執行成功但沒反應」）。Team Run 的 cwd 不
-    # 保證是 git repo，所以無條件加這個 flag。
-    cmd += ["--json", "--sandbox", sandbox_mode, "--cd", safe_cwd, "--skip-git-repo-check"]
-    if model:
-        cmd += ["--model", model]
+        # 已驗證：codex exec 預設要求在 git repo 裡執行，不然整個 turn 會
+        # 安靜結束、不產生任何 item.completed 事件（output/session_id 都是
+        # 空字串，不會丟例外，很容易誤判成「執行成功但沒反應」）。Team Run
+        # 的 cwd 不保證是 git repo，所以無條件加這個 flag。
+        cmd = [codex_bin, "exec", "-", "--json", "--sandbox", sandbox_mode, "--cd", safe_cwd, "--skip-git-repo-check"]
+        if model:
+            cmd += ["--model", model]
 
     env = {**os.environ}
     if api_key:
@@ -123,6 +138,7 @@ async def run_turn(
 
     output_parts: list[str] = []
     session_id = ""
+    non_json_lines: list[str] = []
     proc = None
     try:
         cmd = wrap_cmd(cmd[0], cmd[1:])
@@ -130,12 +146,17 @@ async def run_turn(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE,
             cwd=safe_cwd,
             env=env,
         )
         if on_process:
             on_process(proc)
+
+        if proc.stdin is not None:
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
 
         async for line in proc.stdout:
             if is_cancelled and is_cancelled():
@@ -176,9 +197,20 @@ async def run_turn(
                         error=f"turn.failed: {err_text}",
                     )
             except json.JSONDecodeError:
-                pass
+                if len(non_json_lines) < 20:
+                    non_json_lines.append(raw)
         await proc.wait()
     except Exception as e:
         return RunResult(output="".join(output_parts), session_id=session_id, error=str(e))
+
+    # 已驗證：CLI 層級的失敗（例如 resume 子指令收到不支援的 flag）不會用
+    # JSON 事件回報，只會印純文字錯誤訊息到 stdout/stderr 然後以非零結束碼
+    # 結束——原本的解析器對這種情況完全沒反應，回傳一個看起來「成功但空白」
+    # 的 RunResult（output=""、session_id=""、error=None），呼叫端沒辦法
+    # 分辨「這一步真的什麼都沒做」還是「CLI 呼叫失敗了」。改成：process 以
+    # 非零結束碼結束、而且完全沒有解析到任何 JSON 事件時，視為失敗。
+    if proc is not None and proc.returncode not in (0, None) and not output_parts and not session_id:
+        detail = " | ".join(non_json_lines) if non_json_lines else f"exit code {proc.returncode}"
+        return RunResult(output="", session_id="", error=f"codex exec failed: {detail}")
 
     return RunResult(output="".join(output_parts), session_id=session_id)

@@ -30,13 +30,32 @@ class _FakeStdout:
         return self._lines.pop(0)
 
 
+class _FakeStdin:
+    """codex_engine.py 用 stdin=PIPE 傳 prompt（見該檔頭的說明：Windows 上
+    多行 prompt 當 CLI 引數傳會被 cmd.exe 搞壞，改用官方文件記載的
+    "-" + stdin 方式），這裡記錄寫入的內容供測試斷言。"""
+    def __init__(self):
+        self.written = b""
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written += data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class _FakeProc:
-    def __init__(self, lines):
+    def __init__(self, lines, returncode=0):
         self.stdout = _FakeStdout(lines)
-        self.returncode = 0
+        self.stdin = _FakeStdin()
+        self.returncode = returncode
 
     async def wait(self):
-        return 0
+        return self.returncode
 
 
 # ── registry.resolve_engine_name / get_engine ──────────────────────────────
@@ -189,11 +208,16 @@ async def test_codex_engine_turn_failed_becomes_error(monkeypatch):
 
 
 async def test_codex_engine_uses_resume_subcommand(monkeypatch):
+    """2026-07-10：prompt 不再出現在指令列引數裡（見下方 stdin 測試的說明），
+    改成用 "-" 佔位、實際內容透過 stdin 傳，所以這裡只驗證子指令結構，
+    prompt 內容的斷言移到 test_codex_engine_sends_prompt_via_stdin。"""
     captured = {}
 
     async def fake_create_subprocess_exec(*args, **kwargs):
         captured["args"] = args
-        return _FakeProc([])
+        proc = _FakeProc([])
+        captured["proc"] = proc
+        return proc
 
     monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
@@ -209,7 +233,129 @@ async def test_codex_engine_uses_resume_subcommand(monkeypatch):
     cmd = list(captured["args"])
     exec_idx = cmd.index("exec")
     assert cmd[exec_idx:exec_idx + 3] == ["exec", "resume", "sid-abc"]
-    assert "continue please" in cmd
+    assert "-" in cmd
+    assert "continue please" not in cmd  # 不再是 CLI 引數
+
+
+async def test_codex_engine_sends_prompt_via_stdin(monkeypatch):
+    """2026-07-10 用真實 codex CLI 驗證發現：Windows 上 codex 是 npm .cmd
+    shim，wrap_cmd() 會包一層 cmd /c；cmd.exe 對「引數裡包含換行字元」的
+    處理是壞的——team run 的真實 prompt 幾乎都是多行字串（memory context、
+    任務描述用 "\n\n" 接起來），當 CLI 引數傳會被截斷/錯誤斷行，實測看到
+    模型只收到 prompt 的第一行就結束，完全沒看到真正的任務內容，且 codex
+    甚至整個退回互動式人類可讀輸出（不是 --json 要求的 JSONL）。改用官方
+    文件記載的方式：引數位置填 "-"，實際 prompt 透過 stdin 送進去，完全不
+    經過 cmd.exe 的命令列 tokenize。"""
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        proc = _FakeProc([])
+        captured["proc"] = proc
+        captured["kwargs"] = kwargs
+        return proc
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    multiline_prompt = "[Memory Context]\n測試內容\n\n---\n## 任務\n\n請回覆 ok"
+    await codex_engine.run_turn(
+        prompt=multiline_prompt, cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id=None, api_key="", on_text=lambda c: None,
+    )
+
+    assert captured["kwargs"]["stdin"] == codex_engine.asyncio.subprocess.PIPE
+    assert captured["proc"].stdin.written == multiline_prompt.encode("utf-8")
+    assert captured["proc"].stdin.closed is True
+
+
+async def test_codex_engine_resume_omits_sandbox_and_cd_flags(monkeypatch):
+    """2026-07-10 用真實 codex CLI 驗證發現：`codex exec resume` 子指令完全
+    不接受 --sandbox／--cd（`codex exec resume --help` 的選項列表裡沒有這
+    兩個 flag），塞了會直接 `error: unexpected argument '--sandbox' found`
+    整個失敗——resumed session 沿用建立當下的 sandbox/cwd，沒辦法在 resume
+    時更換。"""
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc([])
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="continue please", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id="sid-abc", api_key="", on_text=lambda c: None,
+    )
+
+    cmd = list(captured["args"])
+    assert "--sandbox" not in cmd
+    assert "--cd" not in cmd
+    assert "--json" in cmd
+    assert "--skip-git-repo-check" in cmd
+
+
+async def test_codex_engine_fresh_call_still_includes_sandbox_and_cd(monkeypatch):
+    """對照組：非 resume 的一般呼叫仍然要帶 --sandbox／--cd（只有 resume
+    子指令不接受這兩個 flag）。"""
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc([])
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="hi", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id=None, api_key="", on_text=lambda c: None,
+    )
+
+    cmd = list(captured["args"])
+    assert "--sandbox" in cmd
+    assert "--cd" in cmd
+
+
+async def test_codex_engine_nonzero_exit_with_no_json_becomes_error(monkeypatch):
+    """2026-07-10 用真實 codex CLI 驗證發現：CLI 層級的失敗（例如 resume
+    收到不支援的 flag）不會用 JSON 事件回報，只印純文字錯誤訊息到
+    stdout/stderr 然後以非零結束碼結束——原本的解析器對這種情況完全沒反應，
+    回傳一個「看起來成功但空白」的 RunResult（output=""、session_id=""、
+    error=None），呼叫端沒辦法分辨「這一步真的什麼都沒做」還是「CLI 呼叫
+    失敗了」。改成：process 以非零結束碼結束、且完全沒有解析到任何 JSON
+    事件時，視為失敗。"""
+    lines = [
+        b"error: unexpected argument '--sandbox' found\n",
+        b"tip: to pass '--sandbox' as a value, use '-- --sandbox'\n",
+        b"Usage: codex exec resume --json <SESSION_ID> <PROMPT>\n",
+    ]
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return _FakeProc(lines, returncode=2)
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = await codex_engine.run_turn(
+        prompt="hi", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id="sid-abc", api_key="", on_text=lambda c: None,
+    )
+
+    assert result.error is not None
+    assert "unexpected argument" in result.error
+
+
+async def test_codex_engine_zero_exit_with_no_output_is_not_an_error(monkeypatch):
+    """對照組：process 正常結束（returncode 0）但沒有任何輸出，不應該被
+    誤判成失敗——例如一個空的 turn。"""
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return _FakeProc([], returncode=0)
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = await codex_engine.run_turn(
+        prompt="hi", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id=None, api_key="", on_text=lambda c: None,
+    )
+
+    assert result.error is None
 
 
 async def test_codex_engine_normalizes_unknown_sandbox_value_to_default(monkeypatch):
