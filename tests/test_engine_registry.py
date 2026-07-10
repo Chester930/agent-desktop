@@ -202,8 +202,13 @@ async def test_codex_engine_uses_resume_subcommand(monkeypatch):
         resume_session_id="sid-abc", api_key="", on_text=lambda c: None,
     )
 
+    # wrap_cmd() 在真的裝了 codex（Windows npm .cmd shim）的機器上會把整個
+    # cmd 包成 ["cmd", "/c", "<path>\\codex.CMD", "exec", "resume", ...]，
+    # 所以只斷言 "exec"/"resume"/"sid-abc" 這幾個字彙有依序出現，不要求它們
+    # 一定在最前面。
     cmd = list(captured["args"])
-    assert cmd[:4] == ["codex", "exec", "resume", "sid-abc"]
+    exec_idx = cmd.index("exec")
+    assert cmd[exec_idx:exec_idx + 3] == ["exec", "resume", "sid-abc"]
     assert "continue please" in cmd
 
 

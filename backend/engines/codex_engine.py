@@ -1,42 +1,55 @@
 """
 engines/codex_engine.py — OpenAI Codex CLI 的 AgentEngine 實作。
 
-⚠️ 尚未用真實 `codex` CLI 驗證過 ⚠️
-這個環境沒有安裝 codex，以下實作是根據 OpenAI 官方文件寫的第一版（2026-07
-查證，來源見下）。跟這次幫 Claude 那幾個引擎修 bug 的方法論不一樣——那些
-都是先用真實 CLI 實測過（例如 acceptEdits 底下 Write/Bash 到底能不能跑）
-才動手，這個檔案目前只是「照文件寫的最佳猜測」，行為沒有保證。
+2026-07-10 更新：已用真實 `codex` CLI（0.144.1，真實登入帳號）驗證過一輪
+（`scripts/probe_codex_cli.py`），下面「已驗證」段落是實測結果；沒有標記
+「已驗證」的細節（主要是 resume 子指令底下 flags 的實際行為）還沒測過。
 
-拿到有安裝 codex CLI 的機器後，跑 scripts/probe_codex_cli.py（跟這次
-`claude` CLI 驗證用的 permtest/accepttest 手法一樣：直接呼叫、印出原始
-事件、人工比對這個檔案的解析邏輯有沒有對上），把落差回報回來再校正。
+已驗證（真實 CLI 輸出，非猜測）：
+- `codex exec` 預設**要求在 git repo 裡執行**，不然會印
+  `Not inside a trusted directory and --skip-git-repo-check was not
+  specified.` 然後整個 turn 直接沒有任何 `item.completed` 事件、安靜結束
+  （`output`/`session_id` 都是空字串，沒有丟例外，非常容易被誤判成「執行
+  成功但沒有任何反應」）。Team Run 的 `cwd` 是使用者自己設定的工作目錄，
+  不保證一定是 git repo，所以這裡**無條件**加 `--skip-git-repo-check`。
+- 事件格式跟文件一致：`thread.started`（`thread_id`，UUID）、
+  `turn.started`、`item.completed`（`item.type == "agent_message"` 時
+  `item.text` 是文字內容）、`turn.completed`（含 `usage`）。
+- **新發現、文件沒提到的 item type**：`item.type == "error"`——例如這次
+  實測看到 `{"type":"item.completed","item":{"type":"error","message":
+  "Exceeded skills context budget of 2%. ..."}}`。這種事件不代表整個
+  turn 失敗（後面照樣接著 `item.completed`/`agent_message` 產出真正的
+  回覆、`turn.completed` 正常結束），所以不當作 `RunResult.error`，改成
+  跟一般文字一樣透過 `on_text` 送出（用 `[codex: ...]` 包起來），避免這類
+  非致命訊息被靜默吃掉。
+- `stdin=asyncio.subprocess.DEVNULL`（已經這樣做）搭配一個位置參數形式的
+  prompt 沒有任何卡住的問題；CLI 本身會印一行「Reading additional input
+  from stdin...」的說明訊息，純粹是資訊性文字，不影響執行。
+- Windows 上 `codex` 是 npm `.cmd` shim（`where codex` 會看到
+  `codex.cmd`），沒有套用既有的 `wrap_cmd()`（helpers.py）的話
+  `asyncio.create_subprocess_exec` 會直接 `FileNotFoundError`（這裡本來
+  就有呼叫 `wrap_cmd`，這點原本就是對的，不是這次修的）。
+
+尚未驗證（文件記載，還沒實測）：
+- Session resume 是**子指令**、不是 flag：
+  `codex exec resume --last "..."` 或 `codex exec resume <SESSION_ID> "..."`
+  （`SESSION_ID` 格式是 UUID，來自 `thread.started` 的 `thread_id`）。
+  resume 子指令底下 `--json`/`--sandbox`/`--model`/`--cd`/
+  `--skip-git-repo-check` 這些 flag 能不能照樣加、還是會被忽略／繼承原
+  session 設定——這裡先假設可以照樣加，`scripts/probe_codex_cli.py
+  --test-resume` 可以驗證，還沒實際跑過這個選項。
+- 官方文件說 `codex exec` 不會暫停等待互動核准，唯一的安全控制是
+  `--sandbox` 等級，`workspace-write` 對應 Claude 那邊選的 `acceptEdits`
+  ——這次實測任務很單純（純文字回覆），沒有真的觸發需要核准的操作
+  （Write/Bash），這部分的核准行為本身還沒有像 Claude `acceptEdits` 那樣
+  做過正面驗證。
+- 認證：`CODEX_API_KEY=<key>` 環境變數，只在 `codex exec` 模式生效——這次
+  實測用的是已經 `codex login` 過的憑證（`~/.codex/auth.json`），沒有走
+  這個 env var 路徑，這部分還沒驗證過。
 
 參考文件（2026-07 查證）：
 - https://developers.openai.com/codex/noninteractive （非互動模式 exec）
 - https://developers.openai.com/codex/cli/reference （全域 flags）
-
-已知（文件記載，未實測）：
-- 非互動呼叫：`codex exec [--json] [--sandbox <mode>] [--cd <dir>]
-  [--model <name>] "<prompt>"`。
-- `--json` 輸出 JSON Lines，逐行一個事件。已知事件型別：
-  `thread.started`（含 `thread_id`，UUID）、`turn.started`、
-  `turn.completed`（含 `usage`）、`turn.failed`、`item.started` /
-  `item.completed`（`item.type` 含 `agent_message`／`command_execution`／
-  `reasoning`／檔案異動／MCP 工具呼叫；文字內容在 `item.completed` 且
-  `item.type == "agent_message"` 時的 `item.text`）。
-- Session resume 是**子指令**、不是 flag：
-  `codex exec resume --last "..."` 或 `codex exec resume <SESSION_ID> "..."`
-  （`SESSION_ID` 格式是 UUID，來自 `thread.started` 的 `thread_id`）。
-  resume 子指令底下 `--json`/`--sandbox`/`--model`/`--cd` 這些 flag 能不能
-  照樣加、還是會被忽略／繼承原 session 設定——文件沒寫清楚，這裡先假設
-  可以照樣加，需要實測確認。
-- 官方文件明確說明 `codex exec` **不會**暫停等待互動核准（headless 模式
-  "never prompts"），唯一的安全控制是 `--sandbox` 等級——跟這次幫 Claude
-  Team Run 驗證出來的「headless -p 模式沒有真正互動核准」是同一個結論。
-  `workspace-write`（可寫入工作目錄，但不是完全不設防）在這裡的角色，
-  對應 Claude 那邊選的 `acceptEdits`。
-- 認證：`CODEX_API_KEY=<key>` 環境變數，只在 `codex exec` 模式生效
-  （對應這個 codebase 既有的 `env["ANTHROPIC_API_KEY"] = api_key` 模式）。
 """
 
 from __future__ import annotations
@@ -96,7 +109,11 @@ async def run_turn(
     else:
         cmd = [codex_bin, "exec", prompt]
 
-    cmd += ["--json", "--sandbox", sandbox_mode, "--cd", safe_cwd]
+    # 已驗證：codex exec 預設要求在 git repo 裡執行，不然整個 turn 會安靜
+    # 結束、不產生任何 item.completed 事件（output/session_id 都是空字串，
+    # 不會丟例外，很容易誤判成「執行成功但沒反應」）。Team Run 的 cwd 不
+    # 保證是 git repo，所以無條件加這個 flag。
+    cmd += ["--json", "--sandbox", sandbox_mode, "--cd", safe_cwd, "--skip-git-repo-check"]
     if model:
         cmd += ["--model", model]
 
@@ -135,9 +152,21 @@ async def run_turn(
                     session_id = ev["thread_id"]
                 elif ev_type == "item.completed":
                     item = ev.get("item", {})
-                    if item.get("type") == "agent_message":
+                    item_type = item.get("type")
+                    if item_type == "agent_message":
                         chunk = item.get("text", "")
                         if chunk:
+                            output_parts.append(chunk)
+                            await on_text(chunk)
+                    elif item_type == "error":
+                        # 已驗證：文件沒提到的 item type，實測看過（例如
+                        # skills context budget 超過）——不代表整個 turn
+                        # 失敗（後面照樣會有正常的 agent_message／
+                        # turn.completed），當成非致命訊息夾進輸出，不要
+                        # 靜默吃掉。
+                        msg = item.get("message", "")
+                        if msg:
+                            chunk = f"\n[codex: {msg}]\n"
                             output_parts.append(chunk)
                             await on_text(chunk)
                 elif ev_type == "turn.failed":

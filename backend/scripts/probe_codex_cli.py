@@ -46,10 +46,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engines import codex_engine  # noqa: E402
+from helpers import wrap_cmd  # noqa: E402
 
 KNOWN_EVENT_TYPES = {
     "thread.started", "turn.started", "turn.completed", "turn.failed",
     "item.started", "item.completed",
+}
+# 已驗證看過的 item.completed / item.started 底下的 item.type（agent_message
+# 是唯一被解析成文字輸出的；error 已驗證存在、非致命、會轉成 [codex: ...]
+# 文字；其餘是文件提過但還沒實測看到的型別，先列進「已知」避免誤報）。
+KNOWN_ITEM_TYPES = {
+    "agent_message", "error", "command_execution", "reasoning",
+    "file_change", "mcp_tool_call", "web_search", "plan_update",
 }
 
 
@@ -71,15 +79,22 @@ async def _run_and_report(prompt: str, cwd: str, sandbox: str, model: str, resum
         cmd += ["resume", resume_id, prompt]
     else:
         cmd += [prompt]
-    cmd += ["--json", "--sandbox", sandbox, "--cd", cwd]
+    cmd += ["--json", "--sandbox", sandbox, "--cd", cwd, "--skip-git-repo-check"]
     if model:
         cmd += ["--model", model]
 
     print(f"實際指令：{' '.join(cmd)}\n")
     print("--- 原始輸出（逐行）---")
 
+    # Windows 上 npm 全域安裝的 CLI 通常是 .cmd shim（`where codex` 會看到
+    # codex.cmd），asyncio.create_subprocess_exec 不像 shell 那樣會自動解析
+    # PATHEXT／幫忙包一層 cmd.exe，直接執行 .cmd 會是 FileNotFoundError
+    # （WinError 2）。這正是這個 codebase 既有的 wrap_cmd()（helpers.py）
+    # 存在的原因，codex_engine.py 內部呼叫也用了同一個 helper；這裡的原始
+    # 輸出展示段落一樣要套用，才能在 Windows 上真的執行 codex 驗證。
+    wrapped_cmd = wrap_cmd(cmd[0], cmd[1:])
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=cwd,
+        *wrapped_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=cwd,
     )
     async for line in proc.stdout:
         raw = line.decode("utf-8", errors="replace").rstrip()
@@ -92,6 +107,10 @@ async def _run_and_report(prompt: str, cwd: str, sandbox: str, model: str, resum
             ev_type = ev.get("type")
             if ev_type and ev_type not in KNOWN_EVENT_TYPES:
                 unknown_types.add(ev_type)
+            if ev_type in ("item.completed", "item.started"):
+                item_type = ev.get("item", {}).get("type")
+                if item_type and item_type not in KNOWN_ITEM_TYPES:
+                    unknown_types.add(f"item.type={item_type}")
         except json.JSONDecodeError:
             print(f"  ⚠ 這一行不是合法 JSON（codex_engine.py 的解析器會直接跳過它）")
     await proc.wait()
