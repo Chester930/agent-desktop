@@ -350,9 +350,34 @@ pytest tests/ 162 個測試全過；`tsc --noEmit`／`ng build` 全過；`docker
 2. **補齊權限轉發（最一致，工程量中等）**：仿照 `/api/team/execute` 的模式，`_agent_run_capture` 改用 `stdin=PIPE` + 偵測/轉發 `permission_request` 事件，前端 `_handleTeamRunEvent()` 也要補上核准/拒絕 UI（Team Run 進度面板目前沒有這塊）。維持現有安全模型（使用者仍要逐一核准），但要多做一輪前後端功能。
 3. **針對 Team Run 開放 `--permission-mode acceptEdits`（或更寬鬆）**：讓 team member 能自動完成檔案編輯類操作而不逐一詢問，最貼近「team 協作直接把活幹完」的產品直覺，但等於放寬了這條路徑的安全模型（跟 T1/T2/T16-18 這幾輪特別在意的「使用者親自核准敏感操作」原則有出入），需要使用者明確拍板才能做。
 
-### 🟡 發現 3（未修復，低優先級，UI 目前不可觸達）｜consensus 執行模式在成員數 >2 時會錯亂
+### 🔴 發現 4（已修復並補上回歸測試）｜`_execute_team_run()` 用 `except Exception: pass` 整個吞掉核心邏輯的例外，run 永久卡在「執行中」+ 記憶體洩漏
 
-`_execute_team_run_core()` 的 consensus 分支寫死只處理前 2 位成員（`agent_a = steps[0]`, `agent_b = steps[1]`），第 3、4 步驟用 `if len(steps) < 3/4: steps.append(...)` 才新增 —— 但如果 team 本來就有 ≥3 位成員（`handle_team_run_post` 已經照 member 數量建好對應筆數的 `steps`），第 3 位成員原本的 `steps[2]` 會被直接**覆寫**成 `agent_a` 的 revision 結果（`step_start` 事件回報的 agent 名字跟原本存在 `steps[2]["agent"]` 的名字對不上，UI 會顯示錯的成員名�ds），第 4 位以後的成員則永遠停在 `"pending"`，即使整個 run 的 `status` 已經變成 `"done"`，看起來會像「卡住了」。目前前端 Team 編輯器（`app.html:2365-2366`）只提供 `parallel`／`sequential` 兩個選項，`consensus` 沒有從 UI 暴露、HR Agent 產生的 plan 也不會用到這個模式，所以目前只能透過直接編輯 team YAML 檔手動觸發，優先級較低，暫不處理，先記錄。
+`_execute_team_run()`（`_execute_team_run_core()` 的外層 timeout wrapper）原本：
+
+```python
+try:
+    await asyncio.wait_for(_execute_team_run_core(...), timeout=timeout_val)
+except asyncio.TimeoutError:
+    ...（有完整處理：設 status="cancelled"、_finished_at、emit "done" 事件、kill 殘留 process）
+except Exception:
+    pass   # ← 這裡
+```
+
+只有「真的跑超過 300 秒」才會被 `TimeoutError` 分支正確收尾；`_execute_team_run_core()` 內部任何其他未預期例外（例如 `mem_dir.mkdir()` 因權限/磁碟問題失敗——這條路徑不在既有的 try/except 保護範圍內、或未來新增程式碼時不小心漏包 try/except）都會被 `except Exception: pass` 整個吃掉，後果比 timeout 更糟：
+
+1. `run["status"]` 永遠停在 `"running"`（`_execute_team_run_core` 裡負責設定 `"done"`/`_finished_at` 的那段程式碼根本沒執行到）。
+2. `handle_team_run_stream()` 的 SSE 迴圈只認 `done`/`error`/`cancelled` 三種事件型別為終止訊號，這三種事件永遠不會被送出——串流不會主動關閉，只會每 30 秒送一個 `ping`，前端進度面板會**無限期**卡在「執行中」，完全沒有任何錯誤提示（比 timeout 情境的「至少 5 分鐘後看到熔斷訊息」還糟）。
+3. 因為 `_finished_at` 永遠不會被設定，`_cleanup_old_runs()` 的 2 小時回收機制抓不到這個 run——`_team_runs`/`_team_events`/`_team_queues` 會一路留在記憶體裡直到 process 重啟。
+
+**修法**：比照既有 `TimeoutError` 分支的收尾邏輯，`except Exception as e:` 補上 `_log()` 記錄例外內容、設定 `status="error"`、`_finished_at`、`summary` 帶錯誤文字、送出 `"done"` SSE 事件（讓 stream 正常關閉、前端看得到失敗訊息、GC 機制能正常回收）。新增 `tests/test_team_run_error_handling.py`（2 個測試）：monkeypatch `_execute_team_run_core` 主動拋例外，驗證 run 會正確變成 `"error"` 而非卡死、且事後可被 GC 回收。`pytest tests/` 167 個測試全過。
+
+### 🟡 發現 5（未修復，低優先級，UI 目前不可觸達）｜consensus 執行模式在成員數 >2 時會錯亂
+
+`_execute_team_run_core()` 的 consensus 分支寫死只處理前 2 位成員（`agent_a = steps[0]`, `agent_b = steps[1]`），第 3、4 步驟用 `if len(steps) < 3/4: steps.append(...)` 才新增 —— 但如果 team 本來就有 ≥3 位成員（`handle_team_run_post` 已經照 member 數量建好對應筆數的 `steps`），第 3 位成員原本的 `steps[2]` 會被直接**覆寫**成 `agent_a` 的 revision 結果（`step_start` 事件回報的 agent 名字跟原本存在 `steps[2]["agent"]` 的名字對不上，UI 會顯示錯的成員名稱），第 4 位以後的成員則永遠停在 `"pending"`，即使整個 run 的 `status` 已經變成 `"done"`，看起來會像「卡住了」。目前前端 Team 編輯器（`app.html:2365-2366`）只提供 `parallel`／`sequential` 兩個選項，`consensus` 沒有從 UI 暴露、HR Agent 產生的 plan 也不會用到這個模式，所以目前只能透過直接編輯 team YAML 檔手動觸發，優先級較低，暫不處理，先記錄。
+
+### 已排除的假設（複查後確認不是問題）
+
+`build_team_memory_context()` 讀取 `_team_memory_dir(team_id)` 時對 inline/HR 派發（`team_id=""`）沒有特別擋，一開始懷疑會跟其他 HR 任務共用同一份 `CLAUDE_HOME/memory/teams/shared.md`／`projects/<slug>.md` 造成記憶體互相污染；但複查 `_execute_team_run_core()` 的寫入端（consensus 分支結尾、sequential/parallel 分支結尾）後確認兩處都已經有 `if team_id and cwd:` 擋著，inline/HR 派發的 run **從來不會寫入**這兩個共用檔案，所以讀到的永遠是空字串，不構成實際的污染路徑。
 
 ### 前端複查範圍與限制
 
@@ -360,4 +385,4 @@ pytest tests/ 162 個測試全過；`tsc --noEmit`／`ng build` 全過；`docker
 
 ### 本輪結論
 
-Team 協作系統的**資料模型與 CRUD**（P1/P2 後端）沒發現新問題；**執行引擎**這次抓到一個確定會影響 ROADMAP 旗艦功能（HR 自動組隊）的邏輯 bug，已修復並補測試；另外抓到一個「最主要的 team 協作入口做不了真實工具操作」的架構性限制，這個需要使用者對安全模型拍板才能往下推進。建議在推進「封裝成多環境軟體／支援 Codex 版本」之前，先決定發現 2 的方向——因為不管選哪個選項，都會影響到之後 Codex backend adapter 要不要／怎麼支援同一種 permission-relay 機制。
+Team 協作系統的**資料模型與 CRUD**（P1/P2 後端）沒發現新問題；**執行引擎**這次抓到兩個已修復的邏輯 bug——一個確定會影響 ROADMAP 旗艦功能（HR 自動組隊）的 `execution_mode` 被忽略問題，一個是會讓 run 永久卡死+洩漏記憶體的例外吞噬問題；另外抓到一個「最主要的 team 協作入口做不了真實工具操作」的架構性限制，這個需要使用者對安全模型拍板才能往下推進。建議在推進「封裝成多環境軟體／支援 Codex 版本」之前，先決定發現 2 的方向——因為不管選哪個選項，都會影響到之後 Codex backend adapter 要不要／怎麼支援同一種 permission-relay 機制。

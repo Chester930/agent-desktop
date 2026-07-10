@@ -278,8 +278,28 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
             from message_bus import global_bus
             global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
             _kill_team_run_processes(run_id)
-    except Exception:
-        pass
+    except Exception as e:
+        # 健檢修復：原本 `except Exception: pass` 把 _execute_team_run_core 拋出
+        # 的任何例外整個吃掉——run 的 status 永遠停在 "running"（不會走到 core
+        # 函式最後設定 status/_finished_at 的那段），SSE stream 也永遠不會收到
+        # done/error 事件（handle_team_run_stream 只會每 30 秒送 ping，永遠不
+        # 結束），前端進度面板會無限期卡在「執行中」不會有任何錯誤提示。而且
+        # 因為 _finished_at 永遠不會被設定，_cleanup_old_runs() 的 2 小時回收
+        # 機制也抓不到它，run/events/queues 會一直留在記憶體裡直到 process 重啟。
+        _log(f"[TeamRun {run_id}] 執行時發生未預期例外：{e!r}")
+        run = _team_runs.get(run_id)
+        if run and run.get("status") == "running":
+            run["status"] = "error"
+            run["_finished_at"] = time.time()
+            run["summary"] = f"### [執行錯誤] {e}"
+            # 比照上面 TimeoutError 分支的既有慣例：只送一個 "done" 事件（前端
+            # streamTeamRun 只認 done/error/cancelled 三種類型為終止事件，見
+            # handle_team_run_stream），summary 帶錯誤文字讓使用者看得到發生了
+            # 什麼事，而不是靜默停在「執行中」。
+            _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+            from message_bus import global_bus
+            global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
+            _kill_team_run_processes(run_id)
 
 
 async def _get_agent_memory_prompt(team_id: str, all_member_ids: list[str], agent_id: str, cwd: str, build_team_mem) -> str:
