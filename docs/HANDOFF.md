@@ -377,6 +377,27 @@ except Exception:
 
 `_execute_team_run_core()` 的 consensus 分支寫死只處理前 2 位成員（`agent_a = steps[0]`, `agent_b = steps[1]`），第 3、4 步驟用 `if len(steps) < 3/4: steps.append(...)` 才新增 —— 但如果 team 本來就有 ≥3 位成員（`handle_team_run_post` 已經照 member 數量建好對應筆數的 `steps`），第 3 位成員原本的 `steps[2]` 會被直接**覆寫**成 `agent_a` 的 revision 結果（`step_start` 事件回報的 agent 名字跟原本存在 `steps[2]["agent"]` 的名字對不上，UI 會顯示錯的成員名稱），第 4 位以後的成員則永遠停在 `"pending"`，即使整個 run 的 `status` 已經變成 `"done"`，看起來會像「卡住了」。目前前端 Team 編輯器（`app.html:2365-2366`）只提供 `parallel`／`sequential` 兩個選項，`consensus` 沒有從 UI 暴露、HR Agent 產生的 plan 也不會用到這個模式，所以目前只能透過直接編輯 team YAML 檔手動觸發，優先級較低，暫不處理，先記錄。
 
+### 🔴 發現 6（已修復並驗證編譯，本輪最嚴重的發現）｜HR 自動組隊點下「▶ 開始執行」後，畫面上完全沒有任何進度顯示——功能本身看起來像壞的
+
+複查前端 `teamRunOpen`/`teamRunState`/`openTeamRun()`/`submitTeamRun()` 這一整組 `/api/team/run` 的前端狀態時，逐一 grep 全部 `.ts`/`.html` 檔案，發現：
+
+1. **`teamRunOpen`、`teamRunState` 這兩個 signal 從未被任何 template 讀取過**——`app.html` 裡完全沒有 `teamRunOpen()`／`teamRunState()` 的蹤影，這組進度面板狀態純粹是「寫了但沒人看」。
+2. **`openTeamRun()`／`submitTeamRun()` 從未被任何按鈕呼叫過**——唯一的呼叫鏈是 `activateTeam() → openTeamRun()`，但 `activateTeam()` 本身也從未被任何按鈕呼叫（Team 卡片上根本沒有綁這個方法）。這整條「直接對存檔 team 發任務」的路徑是 100% 死碼，不只是沒畫面，而是使用者連入口都按不到。
+3. **唯一真正能從 UI 觸發進入 `/api/team/run` 的入口，只有「🤖 自動組隊」（HR Agent）流程**：`dispatchHR()` → plan 預覽 modal（`hrPlanOpen`）→ 使用者按「▶ 開始執行」→ `submitHRTeamRun()`。但 `submitHRTeamRun()` 一樣只是把資料寫進沒人讀的 `teamRunState`／`teamRunOpen`。
+
+實際後果：使用者填任務描述、按「🤖 自動組隊」、審核 HR 產生的計畫、按「▶ 開始執行」——modal 直接關閉，畫面上**什麼都沒發生**。但後端其實真的建立了 team run、真的花錢呼叫 `claude` CLI 執行每個成員的任務（尤其現在發現 1 的修復讓它真的照順序跑、真的有輸出串接了）。使用者完全看不到任何進度、任何輸出、任何結果，也看不到任何錯誤——這是本輪測試中對「team 協作」實際可用性影響最大的一個問題：ROADMAP Phase 4 的旗艦功能，從使用者的角度看起來就是壞的、按了沒反應。
+
+對照組：同一個檔案裡 `executeTeamCodePhase()`（`/api/team/execute`，「核准並執行」流程）走的是完全不同的機制——把 team run 掛在一則 chat message 上（`ChatMessage.teamRun`），用既有、已經在畫面上正確 render 的 `embedded-tr-steps` 區塊顯示每個成員的即時進度、輸出、權限核准卡片、完成後的成果畫廊。這條路徑是真的能用、也是 T38 修過跨分頁污染的那條。
+
+**修法**：把 `/api/team/run` 的前端狀態管理整個換成跟 `executeTeamCodePhase()` 一樣的「掛在 chat message 上」模式：
+- 新增 `_dispatchTeamRun()`（建立 `ChatMessage` 並塞進 `tabMessages(tabId, ...)`、呼叫 `runTeam()` 取得 `run_id`、用 `streamTeamRun()` 接 SSE）與 `_applyTeamRunEvent(tabId, ev)`（把 SSE 事件套用到該分頁最後一則訊息的 `teamRun` 欄位），兩者都用 `tabMessages`/`tabStreaming`/`tabStopFns` 的 per-tab 模式（避免切分頁時進度事件寫錯分頁，跟 T38 是同一類問題）。
+- `submitHRTeamRun()` 改呼叫 `_dispatchTeamRun()`。
+- 移除確認完全無人呼叫、無人讀取的死碼：`teamRunOpen`／`teamRunTarget`／`teamRunTask`／`teamRunState`／`teamRunLoading`／`_teamRunStopFn`／`openTeamRun()`／`submitTeamRun()`／`_handleTeamRunEvent()`／`cancelTeamRun()`／`closeTeamRun()`／`activateTeam()`。取消功能不用另外做——`ngOnDestroy()`/一般聊天的「停止」按鈕本來就會呼叫 `tabStopFns` 裡的函式，team run 註冊進同一個 map 後自動就有了。
+
+`tsc --noEmit` 與 `ng build` 皆通過（乾淨編譯，無新增錯誤）。**這是這輪測試裡風險最高的一個修復**——沒有 GUI 環境可以實際點擊驗證畫面真的會顯示進度，只驗證到「編譯通過、邏輯上鏡像了一條已經在生產環境跑得動的既有路徑（`executeTeamCodePhase`）」。強烈建議合併前先在有畫面的環境手動跑一次「🤖 自動組隊 → 審核計畫 → 開始執行」，確認 chat 訊息裡真的會即時顯示每個成員的步驟與輸出。
+
+另外附帶記錄：`openTeamRun()`/`activateTeam()` 被刪除後，「直接對某個存檔 team 發任務」這個 ROADMAP 提到的入口目前完全沒有 UI 按鈕可以觸發（刪除前也是如此，只是刪除前連死碼都還在）。如果之後想要在 Team 卡片上加一個「▶ 執行任務」按鈕重新開放這條路徑，`_dispatchTeamRun()` 已經是通用的，直接接一個新按鈕呼叫它即可；這屬於要不要加新 UI 入口的產品決定，這次沒有一併加。
+
 ### 已排除的假設（複查後確認不是問題）
 
 `build_team_memory_context()` 讀取 `_team_memory_dir(team_id)` 時對 inline/HR 派發（`team_id=""`）沒有特別擋，一開始懷疑會跟其他 HR 任務共用同一份 `CLAUDE_HOME/memory/teams/shared.md`／`projects/<slug>.md` 造成記憶體互相污染；但複查 `_execute_team_run_core()` 的寫入端（consensus 分支結尾、sequential/parallel 分支結尾）後確認兩處都已經有 `if team_id and cwd:` 擋著，inline/HR 派發的 run **從來不會寫入**這兩個共用檔案，所以讀到的永遠是空字串，不構成實際的污染路徑。
@@ -387,4 +408,6 @@ except Exception:
 
 ### 本輪結論
 
-Team 協作系統的**資料模型與 CRUD**（P1/P2 後端）沒發現新問題；**執行引擎**這次抓到兩個已修復的邏輯 bug——一個確定會影響 ROADMAP 旗艦功能（HR 自動組隊）的 `execution_mode` 被忽略問題，一個是會讓 run 永久卡死+洩漏記憶體的例外吞噬問題；另外抓到一個「最主要的 team 協作入口做不了真實工具操作」的架構性限制，這個需要使用者對安全模型拍板才能往下推進。建議在推進「封裝成多環境軟體／支援 Codex 版本」之前，先決定發現 2 的方向——因為不管選哪個選項，都會影響到之後 Codex backend adapter 要不要／怎麼支援同一種 permission-relay 機制。
+Team 協作系統的**資料模型與 CRUD**（P1/P2 後端）沒發現新問題；**執行引擎**這次抓到兩個已修復的邏輯 bug（HR 自動組隊 `execution_mode` 被忽略、例外吞噬導致 run 永久卡死+洩漏記憶體）；**前端**抓到一個影響範圍最大的問題——HR 自動組隊「開始執行」之後畫面上完全沒有任何進度顯示，功能從使用者角度看起來像壞的（發現 6），已修復並通過編譯，但強烈建議合併前找有畫面的環境實際點過一次再上線。另外抓到一個「最主要的 team 協作入口做不了真實工具操作」的架構性限制（發現 2），這個需要使用者對安全模型拍板才能往下推進。
+
+建議在推進「封裝成多環境軟體／支援 Codex 版本」之前，先決定發現 2 的方向——因為不管選哪個選項，都會影響到之後 Codex backend adapter 要不要／怎麼支援同一種 permission-relay 機制；也建議找時間補一輪真實瀏覽器端對端測試，把發現 6 的修復實際驗證過一次。
