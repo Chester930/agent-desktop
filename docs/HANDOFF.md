@@ -395,7 +395,13 @@ except Exception:
 - `submitHRTeamRun()` 改呼叫 `_dispatchTeamRun()`。
 - 移除確認完全無人呼叫、無人讀取的死碼：`teamRunOpen`／`teamRunTarget`／`teamRunTask`／`teamRunState`／`teamRunLoading`／`_teamRunStopFn`／`openTeamRun()`／`submitTeamRun()`／`_handleTeamRunEvent()`／`cancelTeamRun()`／`closeTeamRun()`／`activateTeam()`。取消功能不用另外做——`ngOnDestroy()`/一般聊天的「停止」按鈕本來就會呼叫 `tabStopFns` 裡的函式，team run 註冊進同一個 map 後自動就有了。
 
-`tsc --noEmit` 與 `ng build` 皆通過（乾淨編譯，無新增錯誤）。**這是這輪測試裡風險最高的一個修復**——沒有 GUI 環境可以實際點擊驗證畫面真的會顯示進度，只驗證到「編譯通過、邏輯上鏡像了一條已經在生產環境跑得動的既有路徑（`executeTeamCodePhase`）」。強烈建議合併前先在有畫面的環境手動跑一次「🤖 自動組隊 → 審核計畫 → 開始執行」，確認 chat 訊息裡真的會即時顯示每個成員的步驟與輸出。
+`tsc --noEmit` 與 `ng build` 皆通過（乾淨編譯，無新增錯誤）。
+
+**追加：已用真實瀏覽器自動化驗證過，不再只是「編譯通過」的推測**。一開始判斷這個修復無法在背景執行環境驗證，因為 `claude-in-chrome`（依賴使用者本機已連線的 Chrome 分頁）在這個 session 裡沒有連線。但 `frontend/e2e/`、`playwright.config.ts` 早就有一套完整的 Playwright 端對端測試基礎設施（`npm run e2e`），Playwright 自己的 headless Chromium 不需要連線到使用者的瀏覽器分頁，可以在背景環境獨立跑。
+
+驗證方式：另外起一個隔離的 `ng serve --port 4201`（不動使用者機器上原本就在跑的 4200/8765 那個真實 app，那兩個 port 一直有東西在監聽，判斷是使用者自己開著的 Claude 桌面版），用 `page.route()` mock 掉 `/api/hr/dispatch`／`/api/team/run`／`/api/team/run/:id/stream` 三個端點（回傳固定的假資料與假 SSE 事件序列，不呼叫真實 `claude` CLI——真實環境有 289 個 agent，一次 HR dispatch prompt 會很大、真的跑很慢很貴，且後端邏輯已經在 pytest 用真實 CLI 驗證過，這裡只關心前端渲染邏輯），跑完整的使用者操作序列：輸入任務 → 點「🤖 自動組隊」→ 確認 plan 預覽 modal 正確顯示 mock 資料 → 點「▶ 開始執行」→ **斷言 chat 訊息裡真的出現 `embedded-tr-steps` 進度區塊，含 mock 成員名稱、SSE 逐步累積的輸出文字、完成後的「執行完成」摘要**。
+
+新增 `frontend/e2e/team-run-progress.spec.ts`，測試通過（Chromium，headless）——截圖與 accessibility snapshot 都確認畫面上正確顯示「✓ @mock-agent-1 · (Coder) done / Hello from mocked agent!」、「📁 檢視執行成果 (Artifacts)」、「✓ mock-auto-team 執行完成」。這個修復現在有真實瀏覽器層級的自動化回歸測試覆蓋，不再需要合併前的人工驗證步驟。
 
 另外附帶記錄：`openTeamRun()`/`activateTeam()` 被刪除後，「直接對某個存檔 team 發任務」這個 ROADMAP 提到的入口目前完全沒有 UI 按鈕可以觸發（刪除前也是如此，只是刪除前連死碼都還在）。如果之後想要在 Team 卡片上加一個「▶ 執行任務」按鈕重新開放這條路徑，`_dispatchTeamRun()` 已經是通用的，直接接一個新按鈕呼叫它即可；這屬於要不要加新 UI 入口的產品決定，這次沒有一併加。
 
@@ -431,21 +437,22 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 
 ### 前端複查範圍與限制
 
-`tsc --noEmit` / `ng build` 全過。程式碼層面複查了 Team Run／Team Chat／HR Agent 三條前端路徑的事件處理完整性（發現 2 提到的 `permission_request` 缺口）；**受限於這是無 GUI 的背景執行環境（無法起 Electron 視窗），沒有做真實瀏覽器互動的端對端測試**，這部分若要做，建議在有畫面的環境用 `claude-in-chrome` 或 Playwright 補一輪。
+`tsc --noEmit` / `ng build` 全過。程式碼層面複查了 Team Run／Team Chat／HR Agent 三條前端路徑的事件處理完整性（發現 2 提到的 `permission_request` 缺口，目前維持現狀，Team Run 用 acceptEdits 繞過而非補權限 UI，故此缺口不再是阻塞項）。
+
+**修正**：一開始判斷「無 GUI 背景環境做不了真實瀏覽器測試」，後來發現這個判斷不完全正確——`claude-in-chrome`（依賴使用者本機已連線的 Chrome 分頁）確實在這個 session 沒有連線，但專案裡本來就有一套獨立的 Playwright headless 測試基礎設施（`frontend/e2e/`），不依賴使用者的瀏覽器分頁，可以在背景環境自主起一個隔離的 dev server + headless Chromium 完整跑過一次真實 DOM 渲染驗證（見發現 6 的追加驗證段落）。之後遇到類似「需要驗證前端渲染」的情境，應該先檢查專案裡有沒有現成的 Playwright/E2E 基礎設施，而不是預設只能交給人工。
 
 ### 本輪結論
 
-本輪一共發現 8 個問題，7 個已修復（發現 1、4、5、6、7、8 為邏輯/可用性/安全 bug，已修復並補上回歸測試；發現 6 額外需要真人在有畫面環境驗證一次），只有**發現 2**（`/api/team/run` 完全沒有工具權限核准機制）仍待使用者對安全模型拍板才能繼續：
+本輪一共發現 8 個問題，**全數修復並完成自動化驗證**：
 
 - **execution_mode 相關（發現 1）**：HR 自動組隊從完成以來實際上從未依設計循序執行過，且 HR prompt 從未輸出這個欄位——兩層都修了。
+- **權限模型（發現 2）**：`/api/team/run` 完全無法執行需要核准的操作。原本評估的「補齊權限轉發」修法（比照 `handle_team_execute` 的 `_legacy_exec` stdin y/n 模式）動手前先實測驗證，發現**行不通**——即使 `stdin=PIPE`，headless `-p` 模式也不會產生可偵測、可回應的互動式權限提示，真正能做互動核准的只有 pooled SDK 的 `can_use_tool` callback，代表要做完整權限轉發需要把整個 Team Run 執行引擎遷移到 SessionPool，工程量遠比原估大。使用者確認方向後採**開放 `--permission-mode acceptEdits`**：已用真實 CLI 驗證 acceptEdits 底下 Write/Bash 都能正常執行、`.claude/` 等敏感路徑的硬性保護不受影響——已修復。
 - **穩健性（發現 4）**：team run 核心邏輯任何未預期例外都會讓 run 永久卡死並洩漏記憶體——已修復。
 - **正確性（發現 5）**：consensus 模式成員數 >2 時 UI 會顯示錯誤成員、部分成員永遠卡在 pending——已修復。
-- **前端可用性（發現 6，本輪影響面最大）**：HR 自動組隊「開始執行」後畫面完全沒有進度顯示，功能看起來像壞的——已修復，**強烈建議合併前找有畫面的環境實際點過一次**（唯一無法在背景環境自動驗證的修復）。
+- **前端可用性（發現 6，本輪影響面最大）**：HR 自動組隊「開始執行」後畫面完全沒有進度顯示，功能看起來像壞的——已修復，並用 Playwright headless Chromium 端對端測試實際驗證過畫面渲染正確（見發現 6 段落，不再是只驗證到編譯通過）。
 - **安全性（發現 7）**：LLM 自己的文字輸出可以繞過使用者核准，直接核准任意 pending 權限請求——已移除該機制。
 - **可用性（發現 8，本輪與發現 6 並列最嚴重）**：「💬 團隊對話」——三條 team 協作路徑裡唯一有真正 UI 入口的一條——第一輪對話 100% 觸發 `NameError`，是修發現 7 的回歸測試時意外抓到的，舊的整合測試斷言太弱從未發現過。
 
-- **權限模型（發現 2）**：`/api/team/run` 完全無法執行需要核准的操作。原本評估的「補齊權限轉發」修法（比照 `handle_team_execute` 的 `_legacy_exec` stdin y/n 模式）動手前先實測驗證，發現**行不通**——即使 `stdin=PIPE`，headless `-p` 模式也不會產生可偵測、可回應的互動式權限提示，真正能做互動核准的只有 pooled SDK 的 `can_use_tool` callback，代表要做完整權限轉發需要把整個 Team Run 執行引擎遷移到 SessionPool，工程量遠比原估大。使用者確認方向後採**開放 `--permission-mode acceptEdits`**：已用真實 CLI 驗證 acceptEdits 底下 Write/Bash 都能正常執行、`.claude/` 等敏感路徑的硬性保護不受影響——已修復。
+**測試覆蓋**：177 個 pytest 測試全過（含 2 個真實呼叫 `claude` CLI 的整合測試）；`tsc --noEmit`/`ng build` 全過；新增 `frontend/e2e/team-run-progress.spec.ts`（Playwright headless Chromium，mock 網路層、不需真實 CLI，驗證發現 6 的修復在真實 DOM 渲染正確）。Team 協作系統這輪從資料模型、執行引擎、權限模型到前端渲染都有實測或自動化測試覆蓋，不再有「只驗證到編譯通過」的修復。
 
-本輪 8 個發現全數處理完畢：7 個已修復並補上回歸測試（177 個測試全過，含真實呼叫 `claude` CLI 的整合測試），僅**發現 6**（HR 自動組隊前端進度顯示）因為背景執行環境無 GUI，需要找有畫面的環境手動驗證一次才能算完全確認。
-
-建議下一步：找時間補一輪真實瀏覽器端對端測試（`claude-in-chrome` 或 Playwright），把發現 6 的修復實際點過一次驗證；封裝成多環境軟體／支援 Codex 版本現在可以繼續推進——Team 協作的核心執行引擎與權限模型這輪都已經過實測驗證與修復。
+建議下一步：封裝成多環境軟體／支援 Codex 版本現在可以繼續推進——Team 協作的核心執行引擎、權限模型、前端渲染這輪都已經過實測驗證與修復；若要更完整的前端覆蓋，可以考慮把 `frontend/e2e/` 這套 Playwright 基礎設施接進 CI（目前看起來是手動執行）。
