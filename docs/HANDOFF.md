@@ -398,6 +398,19 @@ except Exception:
 
 另外附帶記錄：`openTeamRun()`/`activateTeam()` 被刪除後，「直接對某個存檔 team 發任務」這個 ROADMAP 提到的入口目前完全沒有 UI 按鈕可以觸發（刪除前也是如此，只是刪除前連死碼都還在）。如果之後想要在 Team 卡片上加一個「▶ 執行任務」按鈕重新開放這條路徑，`_dispatchTeamRun()` 已經是通用的，直接接一個新按鈕呼叫它即可；這屬於要不要加新 UI 入口的產品決定，這次沒有一併加。
 
+### 🔴 發現 7（未修復，安全性問題，需要使用者拍板，非本輪自動修復範圍）｜LLM 自己輸出的文字可以不經使用者同意，直接核准任意 pending 權限請求
+
+複查第三條 team 協作路徑「💬 團隊對話」（`selectTeamLeader()` → `/api/team/chat` → `handle_team_chat()`）時發現：組長 agent 的回覆文字如果符合 `\[APPROVE:\s*([a-zA-Z0-9_-]+)\]` 這個正規表示式（`main.py:946`），系統會直接把對應的 `pending_permissions[req_id]["decision"] = "approve"`（`main.py:946-954`），**完全不經過使用者點擊確認**——跟 `handle_team_authorize()`（`main.py:1389`，使用者在前端點「✓ 允許」按鈕時走的正規核准端點）做的是一模一樣的事，差別只在於這條路徑的觸發者是 **LLM 自己生成的文字**，不是使用者的滑鼠點擊。
+
+`pending_permissions` 是模組層級的全域 dict，key 只是一個 8 字元的 hex request_id，**沒有依 `client_id`／`team_id`／session 做任何 ownership 隔離**（`handle_team_authorize()` 本身也是同樣的設計：只檢查 `request_id not in pending_permissions`，不檢查是誰的請求）。這代表：如果使用者同時開著兩個分頁跑不同的 team（例如分頁 A 的某個 member 透過 `/api/team/execute` 正在等待一個危險操作的核准，分頁 B 的團隊組長在討論一個會讀取外部內容的任務——網頁、檔案、使用者貼上的文字），只要分頁 B 組長輸出的文字裡剛好出現（不管是不小心、被使用者刻意誘導、還是被組長讀到的外部內容 prompt injection 出來）`[APPROVE: <分頁A那個 req_id>]` 這個字串，分頁 A 的危險操作就會被靜默核准——使用者從頭到尾沒有點過任何確認按鈕。
+
+嚴重度介於「單一本機使用者信任邊界內」（跟這幾輪健檢已經接受的「同機都算受信任」的整體立場一致，不算是外部攻擊者跨機器的提權）跟「繞過系統刻意設計的人工核准關卡」之間——`can_use_tool`/`permission_request` 這整套機制存在的目的就是要讓危險操作經過使用者親眼確認，而這條路徑讓 LLM 自己的輸出（可能被 prompt injection 操縱）就能繞過這道關卡，這跟 T1（MCP 敏感操作授權閘門形同虛設）在精神上是同一類問題，只是攻擊面小很多（需要同時有其他 pending 請求、需要 req_id 被猜到或洩漏）。
+
+**這是安全性決策，不在本輪自動修復範圍**，列出選項供拍板：
+1. **直接移除 `[APPROVE: xxx]` 這個自動解析機制**：核准一律只能透過使用者親自點擊 `handle_team_authorize()`。最安全，但拿掉了「組長討論完直接放行」這個看起來像是刻意設計的功能。
+2. **限縮範圍**：`[APPROVE: xxx]` 只能核准「同一個 `client_id`／team 底下自己成員的請求」，不能核准全域任意 req_id。工程量小，保留原意但堵住跨 session 的洞。
+3. **維持現狀**：接受這是本機信任模型下可接受的風險（跟 T2 選擇「應用層加固、不動 docker.sock 掛載」是類似的取捨邏輯）。
+
 ### 已排除的假設（複查後確認不是問題）
 
 `build_team_memory_context()` 讀取 `_team_memory_dir(team_id)` 時對 inline/HR 派發（`team_id=""`）沒有特別擋，一開始懷疑會跟其他 HR 任務共用同一份 `CLAUDE_HOME/memory/teams/shared.md`／`projects/<slug>.md` 造成記憶體互相污染；但複查 `_execute_team_run_core()` 的寫入端（consensus 分支結尾、sequential/parallel 分支結尾）後確認兩處都已經有 `if team_id and cwd:` 擋著，inline/HR 派發的 run **從來不會寫入**這兩個共用檔案，所以讀到的永遠是空字串，不構成實際的污染路徑。
