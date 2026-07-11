@@ -2253,7 +2253,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.hrLoading.set(true);
     this.hrError.set(null);
 
-    this.claude.dispatchHR(task).subscribe({
+    const agentEngine = this.settings.get().agentEngine;
+    this.claude.dispatchHR(task, agentEngine).subscribe({
       next: (plan) => {
         this.hrLoading.set(false);
         if (plan.error) {

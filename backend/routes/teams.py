@@ -187,6 +187,15 @@ async def _agent_run_capture(
     def _is_cancelled() -> bool:
         return _team_runs.get(run_id, {}).get("status") == "cancelled"
 
+    # resolve_key() 只解析 Anthropic API key（_resolve_api_key()，main.py
+    # 唯一的 key 解析器）。之前這裡不分引擎一律傳進去——如果使用者設定了
+    # Anthropic key、又選了 Codex 引擎，會把 Anthropic key 誤植進
+    # codex_engine.py 的 CODEX_API_KEY 環境變數，蓋掉正常運作的
+    # `codex login` 憑證。只有 engine.name == "claude" 時才適用這把 key；
+    # 其他引擎目前沒有對應的 key 設定欄位，統一傳空字串、讓 CLI 退回自己
+    # 已登入的憑證（這也是目前唯一實測過能正常運作的路徑）。
+    engine_api_key = resolve_key() if engine.name == "claude" else ""
+
     try:
         result = await engine.run_turn(
             prompt=full_prompt,
@@ -194,7 +203,7 @@ async def _agent_run_capture(
             model=model,
             permission_mode=permission_mode,
             resume_session_id=None,
-            api_key=resolve_key(),
+            api_key=engine_api_key,
             on_text=_on_text,
             on_process=_on_process,
             is_cancelled=_is_cancelled,

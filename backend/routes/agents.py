@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re as _re
 from pathlib import Path
 
@@ -24,8 +23,6 @@ from helpers import (
     _write_frontmatter,
     _skill_dict_from_file,
     _skill_dict_from_dir,
-    safe_kill_process,
-    wrap_cmd,
 )
 
 
@@ -141,9 +138,17 @@ async def handle_agent_delete(request: web.Request) -> web.Response:
 
 # ── HR Dispatch ───────────────────────────────────────────────────────────────
 
-async def _run_hr_agent(task: str) -> dict:
+async def _run_hr_agent(task: str, engine_name: str = "") -> dict:
+    """挑選 Agent 組隊的 HR 任務本身也是一次性的文字補全（要求模型輸出一段
+    JSON），跟 Team Run 的單一 step 是同一種形狀，所以比照
+    routes/teams.py::_agent_run_capture() 改走 engines/ 抽象，讓 HR 派發
+    也能選 Codex 執行（例如使用者的 Claude 額度用盡、想改用 Codex 做組隊
+    規劃）。"""
+    from engines.registry import get_engine, resolve_engine_name
+
     AGENTS_DIR, _ = _dirs()
-    claude_bin, resolve_key = _claude_bin_and_key()
+    _, resolve_key = _claude_bin_and_key()
+    engine = get_engine(resolve_engine_name("", engine_name))
     agents_list = []
     if AGENTS_DIR.exists():
         for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
@@ -193,27 +198,35 @@ JSON Schema:
 {task}
 """
 
-    env = os.environ.copy()
-    key = resolve_key()
-    if key:
-        env["ANTHROPIC_API_KEY"] = key
-    proc = None
+    # 跟 routes/teams.py::_agent_run_capture() 同樣的理由：resolve_key() 只
+    # 解析 Anthropic key，只有 claude 引擎適用，避免誤植進 Codex 的
+    # CODEX_API_KEY 蓋掉 codex login 憑證。
+    engine_api_key = resolve_key() if engine.name == "claude" else ""
+
+    async def _noop_on_text(chunk: str) -> None:
+        pass
+
     try:
-        cmd = wrap_cmd(claude_bin, ["-p", prompt, "--output-format", "text"])
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env=env, cwd=str(Path.home()),
+        result = await asyncio.wait_for(
+            engine.run_turn(
+                prompt=prompt,
+                cwd=str(Path.home()),
+                model="",
+                permission_mode="",
+                resume_session_id=None,
+                api_key=engine_api_key,
+                on_text=_noop_on_text,
+            ),
+            timeout=90,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
-        output_str = stdout.decode("utf-8", errors="replace").strip()
+    except asyncio.TimeoutError:
+        return {"error": "HR dispatch failed: timed out after 90s"}
     except Exception as e:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return {"error": f"HR dispatch failed: {e}"}
+
+    if result.error:
+        return {"error": f"HR dispatch failed: {result.error}"}
+    output_str = result.output.strip()
 
     s = output_str.strip()
     s = _re.sub(r"^```[a-zA-Z]*\s*", "", s)
@@ -247,7 +260,12 @@ async def handle_hr_dispatch(request: web.Request) -> web.Response:
         task = data.get("task", "").strip()
         if not task:
             return web.json_response({"error": "task is required"}, status=400)
-        plan = await _run_hr_agent(task)
+        engine_name = data.get("engine", "")
+        if engine_name:
+            from engines.registry import ENGINES
+            if engine_name not in ENGINES:
+                return web.json_response({"error": "invalid engine"}, status=400)
+        plan = await _run_hr_agent(task, engine_name)
         if "error" in plan:
             return web.json_response(plan, status=500)
         return web.json_response(plan)

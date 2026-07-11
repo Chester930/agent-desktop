@@ -120,3 +120,44 @@ async def test_agent_frontmatter_engine_overrides_run_level_default(monkeypatch,
 
     assert calls == ["claude"]
     assert teams_module._team_runs[run_id]["steps"][0]["output"] == "claude"
+
+
+async def test_agent_run_capture_does_not_leak_anthropic_key_into_codex_env(monkeypatch, tmp_path):
+    """2026-07-11：resolve_key()（main._resolve_api_key()）只解析 Anthropic
+    key。之前不分引擎一律傳給 engine.run_turn() 的 api_key 參數——如果使用者
+    設定了 Anthropic key、又讓某個 agent 用 engine: codex，會把 Anthropic
+    key 誤植進 codex_engine.py 的 CODEX_API_KEY 環境變數，蓋掉正常運作的
+    codex login 憑證。這裡驗證即使 main._resolve_api_key() 回傳非空字串，
+    codex_engine.run_turn() 收到的 api_key 仍然是空字串；claude 引擎則照常
+    收到那把 key。"""
+    import database
+    agents_dir = tmp_path / "agents"
+    _write_agent(agents_dir, "codex-agent", "codex")
+    _write_agent(agents_dir, "claude-agent", "claude")
+    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+
+    import sys
+    fake_main = type(sys)("fake_main_for_key_leak_test")
+    fake_main.CLAUDE_BIN = "claude"
+    fake_main._resolve_api_key = lambda: "sk-ant-should-not-leak"
+    monkeypatch.setitem(sys.modules, "main", fake_main)
+
+    captured = {}
+
+    async def fake_claude_run_turn(**kwargs):
+        captured["claude_api_key"] = kwargs.get("api_key")
+        return RunResult(output="claude", session_id="sid-claude")
+
+    async def fake_codex_run_turn(**kwargs):
+        captured["codex_api_key"] = kwargs.get("api_key")
+        return RunResult(output="codex", session_id="sid-codex")
+
+    monkeypatch.setattr(claude_engine, "run_turn", fake_claude_run_turn)
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+    teams_module._team_runs["key-leak-run"] = {"status": "running"}
+    await teams_module._agent_run_capture("key-leak-run", 0, "codex-agent", "hi", "", str(tmp_path))
+    await teams_module._agent_run_capture("key-leak-run", 1, "claude-agent", "hi", "", str(tmp_path))
+
+    assert captured["codex_api_key"] == ""
+    assert captured["claude_api_key"] == "sk-ant-should-not-leak"

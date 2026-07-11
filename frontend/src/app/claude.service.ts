@@ -198,8 +198,8 @@ export class ClaudeService {
     });
   }
 
-  dispatchHR(task: string): Observable<any> {
-    return this.http.post<any>(`${this.api}/hr/dispatch`, { task });
+  dispatchHR(task: string, engine?: string): Observable<any> {
+    return this.http.post<any>(`${this.api}/hr/dispatch`, { task, engine: engine ?? '' });
   }
 
   getTeamRun(runId: string): Observable<TeamRun> {
