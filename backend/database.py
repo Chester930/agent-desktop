@@ -31,7 +31,7 @@ SOUL_FILE          = CLAUDE_HOME / "soul.md"
 SOULS_DIR          = CLAUDE_HOME / "souls"
 
 def update_paths(value: Path):
-    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR, LOCAL_MCP_CONFIG_FILE, _INDEX_DB
+    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR, LOCAL_MCP_CONFIG_FILE, MCP_SERVERS_FILE, _INDEX_DB
     CLAUDE_HOME = value
     AGENTS_DIR = value / "agents"
     SKILLS_DIR = value / "skills"
@@ -42,6 +42,7 @@ def update_paths(value: Path):
     SOUL_FILE = value / "soul.md"
     SOULS_DIR = value / "souls"
     LOCAL_MCP_CONFIG_FILE = value / "claude-desktop-local-mcps.json"
+    MCP_SERVERS_FILE = value / "claude-desktop-mcp-servers.json"
     _INDEX_DB = value / "claude-desktop-index.db"
 
 def _safe_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
@@ -399,6 +400,23 @@ def _load_local_mcp_cfg() -> dict:
 
 def _save_local_mcp_cfg(cfg: dict) -> None:
     _safe_write_text(LOCAL_MCP_CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
+
+# App 自己的 MCP server 定義單一來源——跟上面的 LOCAL_MCP_CONFIG_FILE
+# （Docker/compose 執行期 metadata：container 名稱、port 等）是兩回事。
+# 這裡存的是 server 本身的定義（command/args/env 或 url/headers），
+# 用來同步到 Claude／Codex 兩邊 CLI 各自的原生設定（backend/mcp_sync.py）。
+MCP_SERVERS_FILE = CLAUDE_HOME / "claude-desktop-mcp-servers.json"
+
+def _load_mcp_servers() -> dict:
+    if MCP_SERVERS_FILE.exists():
+        try:
+            return json.loads(MCP_SERVERS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _save_mcp_servers(servers: dict) -> None:
+    _safe_write_text(MCP_SERVERS_FILE, json.dumps(servers, ensure_ascii=False, indent=2))
 
 def _analyze_mcp_entry(name: str) -> dict:
     """Read ~/.claude.json and return type + metadata for one MCP."""

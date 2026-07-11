@@ -1681,10 +1681,43 @@
             <div class="mcp-view">
               <div class="mcp-header">
                 <span style="font-size:12px;color:#888">MCP 伺服器（Model Context Protocol）</span>
+                <button class="btn-secondary btn-xs" (click)="openMcpServerEditor()" title="新增一個 MCP Server 定義，會同步到 Claude／Codex 兩邊">
+                  ＋ 新增
+                </button>
                 <button class="btn-secondary btn-xs" (click)="loadMcp()" [disabled]="mcpLoading()">
                   {{ mcpLoading() ? '…' : '↻ 整理' }}
                 </button>
               </div>
+
+              <!-- App 自己管理的 MCP Server 定義（單一來源，同步到 Claude／Codex 兩邊）
+                   跟下面「外部 API／本地」清單（parse claude mcp list 輸出，只反映 Claude
+                   那邊看得到什麼）是不同的資料來源。 -->
+              @if (objectKeys(mcpServerDefs()).length > 0) {
+                <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
+                  <div class="mcp-section-title">
+                    <span class="mcp-section-icon">🔗</span>
+                    <span>App 管理（雙引擎同步）</span>
+                    <span class="mcp-section-count">{{ objectKeys(mcpServerDefs()).length }}</span>
+                  </div>
+                  <div class="panel-list">
+                    @for (name of objectKeys(mcpServerDefs()); track name) {
+                      <div class="mcp-card-compact">
+                        <div class="mcc-row">
+                          <span class="mcc-name">{{ name }}</span>
+                          <span style="font-size:10px;color:#888;margin-left:6px;">{{ mcpServerDefs()[name].type }}</span>
+                          <span style="font-size:10px;margin-left:auto;"
+                            [style.color]="mcpServerDefs()[name].synced?.claude ? '#4caf50' : '#888'"
+                            title="Claude 同步狀態">Claude{{ mcpServerDefs()[name].synced?.claude ? ' ✓' : ' ✗' }}</span>
+                          <span style="font-size:10px;margin-left:6px;"
+                            [style.color]="mcpServerDefs()[name].synced?.codex ? '#4caf50' : '#888'"
+                            title="Codex 同步狀態">Codex{{ mcpServerDefs()[name].synced?.codex ? ' ✓' : ' ✗' }}</span>
+                          <button class="del-btn" style="margin-left:6px;" (click)="deleteMcpServerDef(name)" title="刪除（會同步從兩邊移除）">✕</button>
+                        </div>
+                      </div>
+                    }
+                  </div>
+                </div>
+              }
 
               <!-- ══════════════════════════════════════════════════
                    上半：外部 API（高度由分隔線拖曳控制）
@@ -2269,6 +2302,65 @@
         <div style="flex:1"></div>
         <button class="btn-secondary" (click)="agentEditorOpen.set(false)">取消</button>
         <button class="btn-primary" (click)="saveAgentEditor()">儲存</button>
+      </div>
+    </div>
+  }
+
+  <!-- ── MCP Server 編輯器 Modal（單一來源，同步到 Claude／Codex 兩邊）───── -->
+  @if (mcpServerEditorOpen()) {
+    <div class="editor-modal-overlay" (click)="mcpServerEditorOpen.set(false)"></div>
+    <div class="editor-modal" (click)="$event.stopPropagation()">
+      <div class="editor-modal-header">
+        <span class="editor-modal-title">新增 MCP Server</span>
+        <button class="usage-modal-close" (click)="mcpServerEditorOpen.set(false)">✕</button>
+      </div>
+      <div class="editor-modal-body">
+        <div class="editor-section">
+          <label class="editor-label">名稱
+            <input class="editor-input" [(ngModel)]="mcpServerEditorName" placeholder="my-server">
+          </label>
+          <label class="editor-label">類型
+            <select class="editor-input"
+              [value]="mcpServerEditorData().type"
+              (change)="mcpServerEditorData.set({...mcpServerEditorData(), type: $any($event.target).value})">
+              <option value="stdio">stdio（本機指令）</option>
+              <option value="http">http（遠端 URL）</option>
+            </select>
+          </label>
+
+          @if (mcpServerEditorData().type === 'stdio') {
+            <label class="editor-label">執行指令
+              <input class="editor-input"
+                [value]="mcpServerEditorData().command || ''"
+                (input)="mcpServerEditorData.set({...mcpServerEditorData(), command: $any($event.target).value})"
+                placeholder="npx">
+            </label>
+            <label class="editor-label">參數（一行一個）
+              <textarea class="editor-input editor-textarea" rows="2" [(ngModel)]="mcpServerEditorArgsText" placeholder="my-mcp-server"></textarea>
+            </label>
+            <label class="editor-label">環境變數（一行一個，格式 KEY=VALUE）
+              <textarea class="editor-input editor-textarea" rows="2" [(ngModel)]="mcpServerEditorEnvText" placeholder="API_KEY=xxx"></textarea>
+            </label>
+          } @else {
+            <label class="editor-label">URL
+              <input class="editor-input"
+                [value]="mcpServerEditorData().url || ''"
+                (input)="mcpServerEditorData.set({...mcpServerEditorData(), url: $any($event.target).value})"
+                placeholder="https://mcp.example.com/mcp">
+            </label>
+            <label class="editor-label">Headers（一行一個，格式 KEY=VALUE）
+              <textarea class="editor-input editor-textarea" rows="2" [(ngModel)]="mcpServerEditorHeadersText" placeholder="Authorization=Bearer xxx"></textarea>
+              <small>注意：Codex CLI 目前沒有任意 header 機制，這裡填的 headers 只會同步到 Claude 那邊。</small>
+            </label>
+          }
+        </div>
+      </div>
+      <div class="editor-modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn-secondary" (click)="mcpServerEditorOpen.set(false)">取消</button>
+        <button class="btn-primary" [disabled]="mcpServerSaving()" (click)="saveMcpServerEditor()">
+          {{ mcpServerSaving() ? '同步中…' : '儲存' }}
+        </button>
       </div>
     </div>
   }

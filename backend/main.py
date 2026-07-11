@@ -3550,13 +3550,14 @@ def build_app() -> web.Application:
     import sys
     sys.path.append(str(Path(__file__).parent))
     try:
-        from routes import register_agent_routes, register_skill_routes, register_team_routes
+        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes
     except ImportError:
-        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes
+        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes
 
     register_agent_routes(app, cors.add)
     register_skill_routes(app, cors.add)
     register_team_routes(app, cors.add)
+    register_mcp_server_routes(app, cors.add)
 
     async def cleanup_processes(app_ref):
         _log("[cleanup] Shutting down, cleaning up all active processes...")

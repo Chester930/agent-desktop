@@ -7,7 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -3921,8 +3921,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // T10 — MCP 管理
   mcpList = signal<string>('');
   mcpLoading = signal(false);
-  mcpNewName = '';
-  mcpNewCmd = '';
 
   loadMcp() {
     this.mcpLoading.set(true);
@@ -3937,6 +3935,86 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.mcpList.set('[無法取得清單]');
         this.mcpLoading.set(false);
       },
+    });
+    this.loadMcpServerDefs();
+  }
+
+  // ── MCP server 定義單一來源（同步到 Claude／Codex 兩邊 CLI）─────────────
+  // 跟上面 mcpList/parseMcpList（parse `claude mcp list` 輸出，只反映
+  // Claude 那邊看得到什麼）是不同的資料來源：這裡是 app 自己記錄、新增/
+  // 刪除時會同步推到兩邊 CLI 的那份（backend/mcp_sync.py）。
+  mcpServerDefs = signal<Record<string, McpServerDef>>({});
+  mcpServerEditorOpen = signal(false);
+  mcpServerEditorData = signal<McpServerDef>({ type: 'stdio' });
+  mcpServerEditorName = '';
+  mcpServerEditorArgsText = '';
+  mcpServerEditorEnvText = '';
+  mcpServerEditorHeadersText = '';
+  mcpServerSaving = signal(false);
+
+  loadMcpServerDefs() {
+    this.claude.listMcpServers().subscribe({
+      next: defs => this.mcpServerDefs.set(defs),
+      error: () => {},
+    });
+  }
+
+  objectKeys(obj: Record<string, unknown>): string[] {
+    return Object.keys(obj);
+  }
+
+  openMcpServerEditor() {
+    this.mcpServerEditorName = '';
+    this.mcpServerEditorArgsText = '';
+    this.mcpServerEditorEnvText = '';
+    this.mcpServerEditorHeadersText = '';
+    this.mcpServerEditorData.set({ type: 'stdio' });
+    this.mcpServerEditorOpen.set(true);
+  }
+
+  private _parseKvLines(text: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const line of text.split('\n')) {
+      const idx = line.indexOf('=');
+      if (idx > 0) out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+    }
+    return out;
+  }
+
+  saveMcpServerEditor() {
+    const name = this.mcpServerEditorName.trim();
+    if (!name) return;
+    const d = this.mcpServerEditorData();
+    const payload: McpServerDef = d.type === 'http'
+      ? { type: 'http', url: (d.url || '').trim(), headers: this._parseKvLines(this.mcpServerEditorHeadersText) }
+      : {
+          type: 'stdio',
+          command: (d.command || '').trim(),
+          args: this.mcpServerEditorArgsText.split('\n').map(s => s.trim()).filter(Boolean),
+          env: this._parseKvLines(this.mcpServerEditorEnvText),
+        };
+    if (d.type === 'stdio' && !payload.command) return;
+    if (d.type === 'http' && !payload.url) return;
+
+    this.mcpServerSaving.set(true);
+    this.claude.createMcpServer(name, payload).subscribe({
+      next: () => {
+        this.mcpServerSaving.set(false);
+        this.mcpServerEditorOpen.set(false);
+        this.loadMcpServerDefs();
+      },
+      error: (e) => {
+        this.mcpServerSaving.set(false);
+        this.showToast(e.error?.error || '新增 MCP Server 失敗', 'error');
+      },
+    });
+  }
+
+  deleteMcpServerDef(name: string) {
+    if (!confirm(`確定要刪除 MCP Server「${name}」？會同時從 Claude／Codex 兩邊移除。`)) return;
+    this.claude.deleteMcpServer(name).subscribe({
+      next: () => this.loadMcpServerDefs(),
+      error: (e) => this.showToast(e.error?.error || '刪除失敗', 'error'),
     });
   }
 

@@ -20,6 +20,18 @@ export interface Session {
 export interface Profile { slug: string; mtime: number; memoryCount: number; hasSoul: boolean; hasSchedules: boolean; }
 export interface SoulProfile { id: string; name: string; content: string; }
 
+// App 自己的 MCP server 定義單一來源——新增/刪除會同步到 Claude／Codex
+// 兩邊 CLI 的原生設定（backend/mcp_sync.py）。跟既有 MCP 面板顯示的
+// externalMcpServers/localMcpServers（parse `claude mcp list` 輸出）是
+// 不同的資料來源，這裡是 app 自己記錄、雙引擎都看得到的那份。
+export interface McpServerDef {
+  name?: string;
+  type: 'stdio' | 'http';
+  command?: string; args?: string[]; env?: Record<string, string>;
+  url?: string; headers?: Record<string, string>;
+  synced?: { claude: boolean; codex: boolean };
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
   text: string;
@@ -112,6 +124,16 @@ export class ClaudeService {
   }
   updateAgent(id: string, data: Partial<Agent>): Observable<{ ok: boolean }> {
     return this.http.put<{ ok: boolean }>(`${this.api}/agents/${id}`, data);
+  }
+
+  listMcpServers(): Observable<Record<string, McpServerDef>> {
+    return this.http.get<Record<string, McpServerDef>>(`${this.api}/mcp-servers`);
+  }
+  createMcpServer(name: string, data: McpServerDef): Observable<McpServerDef & { ok: boolean; name: string }> {
+    return this.http.post<McpServerDef & { ok: boolean; name: string }>(`${this.api}/mcp-servers`, { name, ...data });
+  }
+  deleteMcpServer(name: string): Observable<{ ok: boolean; synced: { claude: boolean; codex: boolean } }> {
+    return this.http.delete<{ ok: boolean; synced: { claude: boolean; codex: boolean } }>(`${this.api}/mcp-servers/${name}`);
   }
   deleteAgent(id: string): Observable<{ ok: boolean }> {
     return this.http.delete<{ ok: boolean }>(`${this.api}/agents/${id}`);
