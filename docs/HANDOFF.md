@@ -539,3 +539,25 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 
 - **Memory 頁籤**：`app.html` 的 `.tab-bar` 現在只有 TEAM/AGENT/SKILL/MCP/Scheduling，沒有 Memory。但 Settings modal 的說明文字（`app.html` 行 2039 附近）仍寫著「以 key-value 形式存在右側 Memory 頁籤」——文件跟實際 UI 不一致。是功能被拿掉了、還是搬到別的地方了，需要使用者確認。
 - **匯出格式下拉選單**：`.export-format-select`（`.md`/`.json`/`.txt` 三選一）在 `app.html` 已經完全找不到，只剩 `app.scss` 裡的死 CSS class。目前 topbar 上只有一個單一的「匯出對話」（⬇）按鈕（`exportChat()`），看起來像是簡化成固定格式匯出，但不確定是否為刻意設計。
+
+## 十四、2026-07-11 續篇二 — 依十二/十三節建議繼續優化與修復
+
+延續十二、十三節列出的待辦，這輪把「建議下一步」清單裡可以做的項目都做完了。
+
+### 已完成
+
+1. **`_run_hr_agent()`（HR 自動組隊派發）遷移到 `engines/` 抽象**：原本寫死呼叫 `claude -p ... --output-format text`，改用 `engines/registry.py`，`POST /api/hr/dispatch` 新增可選 `engine` 欄位，前端 Settings 的 Agent Engine 選擇現在也會套用到 HR 派發本身（不只是派發出來的 team run）。
+2. **修復一個真實 bug：Anthropic API key 誤植進 Codex 環境變數**——`resolve_key()`（`main._resolve_api_key()`）只解析 Anthropic key，但 `routes/teams.py::_agent_run_capture()` 跟 `routes/agents.py::_run_hr_agent()` 之前都不分引擎一律把這把 key 傳給 `engine.run_turn()`。如果使用者設定了 Anthropic key、又選 Codex 引擎，會把 Anthropic key 誤植進 `codex_engine.py` 的 `CODEX_API_KEY` 環境變數，蓋掉正常運作的 `codex login` 憑證。這個 bug 存在於這次 pluggable engine 架構自己的程式碼裡（不是外部相依問題），已修好並用 3 個永久回歸測試鎖定。
+3. **Agent 編輯器 UI 加上「執行引擎」下拉選單**：`engine:` frontmatter 欄位終於可以直接從 UI 設定（跟隨全域設定／Claude／Codex 三選一），不用再手動編輯 frontmatter。已用隔離的 `ng serve`（避開 Docker 的舊程式碼問題）實際驗證下拉選單渲染、選擇、儲存送出的 payload 都正確。
+4. **Team 編輯器刻意沒加類似欄位**：查證後發現目前完全沒有任何 UI 入口能直接「執行」一個已存檔的 Team（`activateTeam()`/`openTeamRun()` 這條路徑在十一節發現 6 已經確認是死碼並移除，唯一能觸發 `/api/team/run` 的只有 HR 自動組隊）。在這個前提下，Team 層級的引擎預設欄位現在加了也不會被任何東西讀取，是無效果的 UI，這次刻意不做，避免重蹈「加了功能但沒有真正的使用路徑」的覆轍。
+5. **`CODEX_API_KEY` env var 認證路徑**：使用者確認目前用 `codex login` 的方式登入，不需要另外設定 API key，這條路徑對目前的實際使用情境不適用，決定不繼續投入時間驗證。Code-level 行為（`codex_engine.py` 正確把 `api_key` 參數設進 `CODEX_API_KEY` 環境變數）已有既有的 mock 測試鎖定，這部分維持現狀。
+
+### 測試覆蓋（這輪結束時）
+
+`pytest tests/` **210 個測試全過**（新增：HR 派發路由到 Codex、HR 派發／Team Run 的 Anthropic key 不外洩到 Codex、Agent PUT/POST 帶合法與不合法 `engine` 值）。`tsc --noEmit`／`ng build` 全過。
+
+### 仍待處理
+
+- `main.py` 的 pooled SDK 路徑（`handle_chat`/`handle_team_chat`/`handle_team_execute`）仍然只支援 Claude——這條路徑用 Anthropic 自家 SDK 做長駐連線，Codex 沒有對應物，維持這輪核准的 plan 排除範圍，暫不處理。
+- PR #6 的 base branch 仍未從 `worktree-cozy-dancing-dragon` 改成 `master`——本機已經 rebase 乾淨（見對話紀錄），但 `git push --force-with-lease` 被使用者的安全 hook 擋下，需要使用者自己執行 push（或調整 hook）才能完成最後這一步。
+- 主要 checkout（`D:\Users\666\Desktop\claude-desktop`）仍然落後 `origin/master`，建議找時間 `git pull`（見十三節）。
