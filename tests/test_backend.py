@@ -1016,6 +1016,12 @@ class TestMemviewAPI:
         assert resp.status == 200
         body = await resp.text()
         assert "data:" in body
+        # 2026-07-10 修復：handle_team_chat 把所有例外都包成一個「正常的」
+        # SSE data: 事件回傳，光靠 "data:" in body 連 NameError 都測不出來
+        # （曾經整條 team chat 因為 all_members_list 未定義而 100% 炸掉，
+        # 這個測試卻一直顯示綠燈）。補上明確斷言排除錯誤事件。
+        assert '"type": "error"' not in body
+        assert "NameError" not in body
 
     async def test_team_execute_endpoint(self, client, tmp_claude_home, sample_team):
         """POST /api/team/execute 對無效路徑應報錯"""

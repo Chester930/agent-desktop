@@ -316,3 +316,143 @@ curl/腳本），docker-compose.yml 的 `prod` profile 又把 ngrok 對外網路
 `routes/run_artifacts.py` 的路徑穿越修復重新驗證仍然有效；`message_bus.py`／`watcher.py` 沒有超出第一輪已修復範圍的問題；`electron/preload.js` 暴露的介面精簡安全；`database.py` 的 `_analyze_mcp_entry` 邏輯繁瑣但功能正確。
 
 pytest tests/ 162 個測試全過；`tsc --noEmit`／`ng build` 全過；`docker build`/`docker run`/`docker compose config` 皆已實際驗證通過（非僅語法檢查）。
+
+---
+
+## 十一、2026-07-10 team 協作優化健檢
+
+> **背景**：前兩輪健檢以安全性為主軸。這一輪針對「team 協作」本身的**功能正確性**做專項複查——起因是 T19 顯示 team 執行引擎直到最近才發現 `wrap_cmd` 從未 import、100% 壞掉，代表兩輪安全健檢都沒有真正驗證過 team 協作的行為是否正確。用真人的 `claude` CLI（已登入、有實際額度）做過一次真實 subprocess 行為驗證（非僅讀原始碼猜測），其餘用 pytest 直接呼叫核心函式驗證（不重跑真的 subprocess，避免每個案例都燒 API 額度）。
+
+### 🔴 發現 1（已修復並補上回歸測試）｜HR Agent 自動組隊 100% 忽略 execution_mode，永遠平行跑
+
+`_execute_team_run_core()`（`routes/teams.py`）原本靠 `run["team_id"]` 回頭去 `TEAMS_DIR` 讀對應 yaml 檔案取得 `execution_mode`／`leader`。但 `POST /api/team/run` 的 inline team payload（**HR Agent 自動組隊 `submitHRTeamRun()` 是唯一使用者**，`_run_hr_agent()` 產出的 plan JSON 沒有 `"id"` 欄位）永遠沒有對應的 `team_id`，導致 `if team_id:` 判斷直接跳過，`team_info` 維持空字典，`mode` 靜默 fallback 成 `"parallel"`。
+
+矛盾點：`_run_hr_agent()` 的 prompt（`routes/agents.py`）明確要求「挑選 Agent 組成一個**循序執行**的團隊」、「前一個 Agent 的輸出將作為下一個 Agent 的輸入」——但實際執行時，**HR 自動組隊產生的每一個 team run，不分內容，一律用 `asyncio.gather` 平行跑**：
+1. 完全沒有「前一位輸出傳給下一位」這件事（parallel 分支沒有 `prev_output` 串接邏輯，只有 sequential 分支才有）。
+2. HR plan 裡設計好的 `input_memory`/`output_memory` 跨步驟串接會有 race condition——下游 member 有可能在上游 member 把 `output_memory` 寫進 `.md` 檔之前就已經開始讀了（`asyncio.gather` 讓所有 step 同時起跑）。
+
+換句話說：ROADMAP Phase 4 的旗艦功能「HR Agent 自動組隊」，從 P4 完成以來實際上從未依照設計跑過。
+
+**修法**：`execution_mode`／`leader` 改成在 `handle_team_run_post` 當下（此時 `team` dict 已經正確解析好，不管是 inline payload 還是存檔 team，都能拿到請求裡實際的值）就直接存進 `run` state；`_execute_team_run_core` 改讀 `run["execution_mode"]`／`run["leader"]`，不再靠 `team_id` 回頭查檔（也移除了執行時多一次不必要的磁碟 I/O）。已存檔 team（有 `id`）的既有行為不變，因為 `_team_dict()` 回傳的 dict 本來就含 `execution_mode`，`handle_team_run_post` 一樣拿得到。
+
+新增 `tests/test_team_run_execution_mode.py`（3 個測試）：直接呼叫 `_execute_team_run_core()` 用 monkeypatch 過的 `_agent_run_capture` 驗證 inline payload 的 `execution_mode: "sequential"` 真的會讓 step 2 的 prompt 收到 step 1 的輸出；順手更新 `tests/test_upgrade.py::TestAdversarialDebate`（原本手動建構 run state 時沒帶 `execution_mode`/`leader`，靠舊的 team_id 回頭查檔行為才能通過，改成比照 `handle_team_run_post` 實際會產生的資料直接帶上）。
+
+**追加修復（同一發現的另一半，複查上面的修法時發現還不夠）**：上面的修法只解決了「execution_mode 有值時會被正確套用」，但 `_run_hr_agent()`（`routes/agents.py`）的 prompt/JSON schema 從頭到尾**沒有要求模型輸出 `execution_mode` 欄位**——代表就算修好了套用機制，HR Agent 實際產生的 plan 還是永遠沒有這個欄位，套用端一樣只能 fallback 成預設的 `"parallel"`，等於白修。補上：① prompt 明確要求固定填 `"sequential"`、JSON Schema 範例加上這個欄位；② 解析完 JSON 後再補一層防呆（`_with_sequential_default`），模型偶爾漏填時後端直接補上 `"sequential"`，不 100% 依賴模型照 schema 輸出。新增 `tests/test_hr_dispatch_execution_mode.py`（3 個測試，含模擬模型漏填欄位、模型有填、輸出包 markdown fence 三種情境）。`pytest tests/` 170 個測試全過。
+
+### 🟢 發現 2（已修復並補上回歸測試，採用選項 3：開放 acceptEdits）｜`/api/team/run` 完全沒有工具權限核准機制
+
+用真實 `claude -p` CLI 直接重現 `_agent_run_capture()`（`routes/teams.py`）修復前的 subprocess 呼叫方式驗證過（非猜測）：`cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]`，**沒有 `--permission-mode` flag，`stdin=asyncio.subprocess.DEVNULL`（無法回應任何核准提示）**。實測結果：CLI 不會卡住等待，而是**直接把需要核准的工具呼叫自動判定為拒絕**（`permission_denials` 裡記一筆，回傳文字說明「請求被系統阻擋」），process 正常以 `exit 0` 結束——「發任務給 Team」進度面板這個最主要的 team 協作入口，實質上做不了任何需要核准的真實操作（寫檔、跑指令等）。
+
+**選項 2（補齊權限轉發，仿照 `_legacy_exec` 的 stdin y/n 模式）動手前先做了一次實測驗證，結果推翻了原本的假設**：把 `_agent_run_capture` 的 `stdin=DEVNULL` 改成 `stdin=PIPE` 後用真實 CLI 重測，headless `-p` 模式底下即使 stdin 是可寫入的 pipe，**依然不會產生任何可偵測、可回應的互動式權限提示**——CLI 只會印一行「no stdin data received in 3s, proceeding without it」然後照樣自主判斷（對敏感路徑自動拒絕）。這代表 `handle_team_execute` 的 `_legacy_exec` 那套「偵測 raw text prompt 寫 y/n 到 stdin」的假設，對目前這個 CLI 版本（2.1.206）的 headless `-p` 模式並不成立；真正能做到互動核准的只有 pooled SDK 的 `can_use_tool` callback（`_pooled_exec`），代表選項 2 實際上需要把整個 Team Run 執行引擎（parallel/sequential/consensus）從「逐步驟重開 raw subprocess」遷移成「透過 `SessionPool`/`ClaudeSDKClient` 執行」，工程量遠比原估的「中等」大。
+
+使用者確認方向後採**選項 3**：直接開放 `--permission-mode acceptEdits`。動手前先用真實 CLI 驗證 `acceptEdits` 底下的實際行為（同一個任務、同一台機器，分別測未設定 permission-mode 與設定 `acceptEdits` 兩種情況）：在非敏感路徑（一般專案目錄）下，`acceptEdits` 讓 `Write` 與 `Bash` 兩種工具呼叫都直接成功、`permission_denials` 為空；Claude Code 自身對 `.claude/` 等敏感路徑的硬性保護則完全不受這個 flag 影響、依然生效（這也解釋了為什麼一開始在 `.claude/jobs/...` 底下測試時 `acceptEdits` 看起來「沒用」——那是另一層跟 permission-mode 無關的路徑保護）。
+
+**修法**：`_agent_run_capture()` 新增 `permission_mode` 參數，預設 `"acceptEdits"`，組 CLI 指令時帶上 `--permission-mode <value>`；`handle_team_run_post()` 從請求 body 讀取可選的 `permission_mode`（預設 `acceptEdits`），比照既有 `_is_safe_id` 一類輸入驗證慣例，用白名單（`acceptEdits`/`auto`/`bypassPermissions`/`manual`/`dontAsk`/`plan`，來自 `claude --help` 列出的合法值）擋掉不合法的值，存進 `run["permission_mode"]`；`_execute_team_run_core()` 讀取 `run.get("permission_mode", "acceptEdits")` 並傳給所有 `_agent_run_capture` 呼叫點（consensus 4 處、parallel/sequential 各 1 處）。新增 `tests/test_team_run_permission_mode.py`（4 個測試）：驗證 `_agent_run_capture` 預設會帶 `--permission-mode acceptEdits`、可被明確覆寫、`handle_team_run_post` 正確存進 run state、不合法值會被 400 擋下。
+
+**尚未處理（跟這個修法無直接關係，先記錄）**：`/api/team/execute` 那條路徑已有的 `permission_request`/核准 UI 沒有變動；如果之後想讓使用者能針對 Team Run 個別任務選擇更嚴格的模式（例如敏感專案想維持逐一核准），`permission_mode` 已經是可從請求 body 傳入的參數，前端只要在 Team Run 面板加一個下拉選單即可，這次沒有一併加。
+
+### 🔴 發現 4（已修復並補上回歸測試）｜`_execute_team_run()` 用 `except Exception: pass` 整個吞掉核心邏輯的例外，run 永久卡在「執行中」+ 記憶體洩漏
+
+`_execute_team_run()`（`_execute_team_run_core()` 的外層 timeout wrapper）原本：
+
+```python
+try:
+    await asyncio.wait_for(_execute_team_run_core(...), timeout=timeout_val)
+except asyncio.TimeoutError:
+    ...（有完整處理：設 status="cancelled"、_finished_at、emit "done" 事件、kill 殘留 process）
+except Exception:
+    pass   # ← 這裡
+```
+
+只有「真的跑超過 300 秒」才會被 `TimeoutError` 分支正確收尾；`_execute_team_run_core()` 內部任何其他未預期例外（例如 `mem_dir.mkdir()` 因權限/磁碟問題失敗——這條路徑不在既有的 try/except 保護範圍內、或未來新增程式碼時不小心漏包 try/except）都會被 `except Exception: pass` 整個吃掉，後果比 timeout 更糟：
+
+1. `run["status"]` 永遠停在 `"running"`（`_execute_team_run_core` 裡負責設定 `"done"`/`_finished_at` 的那段程式碼根本沒執行到）。
+2. `handle_team_run_stream()` 的 SSE 迴圈只認 `done`/`error`/`cancelled` 三種事件型別為終止訊號，這三種事件永遠不會被送出——串流不會主動關閉，只會每 30 秒送一個 `ping`，前端進度面板會**無限期**卡在「執行中」，完全沒有任何錯誤提示（比 timeout 情境的「至少 5 分鐘後看到熔斷訊息」還糟）。
+3. 因為 `_finished_at` 永遠不會被設定，`_cleanup_old_runs()` 的 2 小時回收機制抓不到這個 run——`_team_runs`/`_team_events`/`_team_queues` 會一路留在記憶體裡直到 process 重啟。
+
+**修法**：比照既有 `TimeoutError` 分支的收尾邏輯，`except Exception as e:` 補上 `_log()` 記錄例外內容、設定 `status="error"`、`_finished_at`、`summary` 帶錯誤文字、送出 `"done"` SSE 事件（讓 stream 正常關閉、前端看得到失敗訊息、GC 機制能正常回收）。新增 `tests/test_team_run_error_handling.py`（2 個測試）：monkeypatch `_execute_team_run_core` 主動拋例外，驗證 run 會正確變成 `"error"` 而非卡死、且事後可被 GC 回收。`pytest tests/` 167 個測試全過。
+
+### 🟢 發現 5（已修復並補上回歸測試）｜consensus 執行模式在成員數 >2 時會錯亂
+
+`_execute_team_run_core()` 的 consensus 分支原本寫死只處理前 2 位成員（`agent_a = steps[0]`, `agent_b = steps[1]`），第 3、4 步驟用 `if len(steps) < 3/4: steps.append(...)` 才新增 —— 但如果 team 本來就有 ≥3 位成員（`handle_team_run_post` 已經照 member 數量建好對應筆數的 `steps`），第 3 位成員原本的 `steps[2]` 會被直接**覆寫**成 `agent_a` 的 revision 結果（`step_start` 事件回報的 agent 名字跟原本存在 `steps[2]["agent"]` 的名字對不上，UI 會顯示錯的成員名稱），第 4 位以後的成員則永遠停在 `"pending"`，即使整個 run 的 `status` 已經變成 `"done"`，看起來會像「卡住了」。雖然目前前端 Team 編輯器只提供 `parallel`／`sequential` 兩個選項、UI 不可觸達，但既然是明確的邏輯 bug，直接修掉。
+
+**修法**：consensus 分支一開始就把 `run["steps"]` 換成 consensus 專用的固定 4 步驟結構（Coder 草稿／Auditor 審查／Coder 修正／Leader 總結），不再挪用其他成員原本的 step slot；移除原本 `if len(steps) < 3/4: steps.append(...)` 的條件式補丁。新增 `tests/test_team_run_consensus_members.py`：模擬 4 位成員的 team 跑 consensus 模式，驗證最終只產生 4 個正確歸屬的 step、且第 3、4 位成員（`ThirdAgent`/`FourthAgent`）從未被實際呼叫。
+
+### 🔴 發現 6（已修復並驗證編譯，本輪最嚴重的發現）｜HR 自動組隊點下「▶ 開始執行」後，畫面上完全沒有任何進度顯示——功能本身看起來像壞的
+
+複查前端 `teamRunOpen`/`teamRunState`/`openTeamRun()`/`submitTeamRun()` 這一整組 `/api/team/run` 的前端狀態時，逐一 grep 全部 `.ts`/`.html` 檔案，發現：
+
+1. **`teamRunOpen`、`teamRunState` 這兩個 signal 從未被任何 template 讀取過**——`app.html` 裡完全沒有 `teamRunOpen()`／`teamRunState()` 的蹤影，這組進度面板狀態純粹是「寫了但沒人看」。
+2. **`openTeamRun()`／`submitTeamRun()` 從未被任何按鈕呼叫過**——唯一的呼叫鏈是 `activateTeam() → openTeamRun()`，但 `activateTeam()` 本身也從未被任何按鈕呼叫（Team 卡片上根本沒有綁這個方法）。這整條「直接對存檔 team 發任務」的路徑是 100% 死碼，不只是沒畫面，而是使用者連入口都按不到。
+3. **唯一真正能從 UI 觸發進入 `/api/team/run` 的入口，只有「🤖 自動組隊」（HR Agent）流程**：`dispatchHR()` → plan 預覽 modal（`hrPlanOpen`）→ 使用者按「▶ 開始執行」→ `submitHRTeamRun()`。但 `submitHRTeamRun()` 一樣只是把資料寫進沒人讀的 `teamRunState`／`teamRunOpen`。
+
+實際後果：使用者填任務描述、按「🤖 自動組隊」、審核 HR 產生的計畫、按「▶ 開始執行」——modal 直接關閉，畫面上**什麼都沒發生**。但後端其實真的建立了 team run、真的花錢呼叫 `claude` CLI 執行每個成員的任務（尤其現在發現 1 的修復讓它真的照順序跑、真的有輸出串接了）。使用者完全看不到任何進度、任何輸出、任何結果，也看不到任何錯誤——這是本輪測試中對「team 協作」實際可用性影響最大的一個問題：ROADMAP Phase 4 的旗艦功能，從使用者的角度看起來就是壞的、按了沒反應。
+
+對照組：同一個檔案裡 `executeTeamCodePhase()`（`/api/team/execute`，「核准並執行」流程）走的是完全不同的機制——把 team run 掛在一則 chat message 上（`ChatMessage.teamRun`），用既有、已經在畫面上正確 render 的 `embedded-tr-steps` 區塊顯示每個成員的即時進度、輸出、權限核准卡片、完成後的成果畫廊。這條路徑是真的能用、也是 T38 修過跨分頁污染的那條。
+
+**修法**：把 `/api/team/run` 的前端狀態管理整個換成跟 `executeTeamCodePhase()` 一樣的「掛在 chat message 上」模式：
+- 新增 `_dispatchTeamRun()`（建立 `ChatMessage` 並塞進 `tabMessages(tabId, ...)`、呼叫 `runTeam()` 取得 `run_id`、用 `streamTeamRun()` 接 SSE）與 `_applyTeamRunEvent(tabId, ev)`（把 SSE 事件套用到該分頁最後一則訊息的 `teamRun` 欄位），兩者都用 `tabMessages`/`tabStreaming`/`tabStopFns` 的 per-tab 模式（避免切分頁時進度事件寫錯分頁，跟 T38 是同一類問題）。
+- `submitHRTeamRun()` 改呼叫 `_dispatchTeamRun()`。
+- 移除確認完全無人呼叫、無人讀取的死碼：`teamRunOpen`／`teamRunTarget`／`teamRunTask`／`teamRunState`／`teamRunLoading`／`_teamRunStopFn`／`openTeamRun()`／`submitTeamRun()`／`_handleTeamRunEvent()`／`cancelTeamRun()`／`closeTeamRun()`／`activateTeam()`。取消功能不用另外做——`ngOnDestroy()`/一般聊天的「停止」按鈕本來就會呼叫 `tabStopFns` 裡的函式，team run 註冊進同一個 map 後自動就有了。
+
+`tsc --noEmit` 與 `ng build` 皆通過（乾淨編譯，無新增錯誤）。
+
+**追加：已用真實瀏覽器自動化驗證過，不再只是「編譯通過」的推測**。一開始判斷這個修復無法在背景執行環境驗證，因為 `claude-in-chrome`（依賴使用者本機已連線的 Chrome 分頁）在這個 session 裡沒有連線。但 `frontend/e2e/`、`playwright.config.ts` 早就有一套完整的 Playwright 端對端測試基礎設施（`npm run e2e`），Playwright 自己的 headless Chromium 不需要連線到使用者的瀏覽器分頁，可以在背景環境獨立跑。
+
+驗證方式：另外起一個隔離的 `ng serve --port 4201`（不動使用者機器上原本就在跑的 4200/8765 那個真實 app，那兩個 port 一直有東西在監聽，判斷是使用者自己開著的 Claude 桌面版），用 `page.route()` mock 掉 `/api/hr/dispatch`／`/api/team/run`／`/api/team/run/:id/stream` 三個端點（回傳固定的假資料與假 SSE 事件序列，不呼叫真實 `claude` CLI——真實環境有 289 個 agent，一次 HR dispatch prompt 會很大、真的跑很慢很貴，且後端邏輯已經在 pytest 用真實 CLI 驗證過，這裡只關心前端渲染邏輯），跑完整的使用者操作序列：輸入任務 → 點「🤖 自動組隊」→ 確認 plan 預覽 modal 正確顯示 mock 資料 → 點「▶ 開始執行」→ **斷言 chat 訊息裡真的出現 `embedded-tr-steps` 進度區塊，含 mock 成員名稱、SSE 逐步累積的輸出文字、完成後的「執行完成」摘要**。
+
+新增 `frontend/e2e/team-run-progress.spec.ts`，測試通過（Chromium，headless）——截圖與 accessibility snapshot 都確認畫面上正確顯示「✓ @mock-agent-1 · (Coder) done / Hello from mocked agent!」、「📁 檢視執行成果 (Artifacts)」、「✓ mock-auto-team 執行完成」。這個修復現在有真實瀏覽器層級的自動化回歸測試覆蓋，不再需要合併前的人工驗證步驟。
+
+另外附帶記錄：`openTeamRun()`/`activateTeam()` 被刪除後，「直接對某個存檔 team 發任務」這個 ROADMAP 提到的入口目前完全沒有 UI 按鈕可以觸發（刪除前也是如此，只是刪除前連死碼都還在）。如果之後想要在 Team 卡片上加一個「▶ 執行任務」按鈕重新開放這條路徑，`_dispatchTeamRun()` 已經是通用的，直接接一個新按鈕呼叫它即可；這屬於要不要加新 UI 入口的產品決定，這次沒有一併加。
+
+### 🟢 發現 7（已修復並補上回歸測試，採用選項 1）｜LLM 自己輸出的文字可以不經使用者同意，直接核准任意 pending 權限請求
+
+複查第三條 team 協作路徑「💬 團隊對話」（`selectTeamLeader()` → `/api/team/chat` → `handle_team_chat()`）時發現：組長 agent 的回覆文字如果符合 `\[APPROVE:\s*([a-zA-Z0-9_-]+)\]` 這個正規表示式（`main.py:946`，修復前），系統會直接把對應的 `pending_permissions[req_id]["decision"] = "approve"`，**完全不經過使用者點擊確認**——跟 `handle_team_authorize()`（`main.py:1389`，使用者在前端點「✓ 允許」按鈕時走的正規核准端點）做的是一模一樣的事，差別只在於這條路徑的觸發者是 **LLM 自己生成的文字**，不是使用者的滑鼠點擊。
+
+`pending_permissions` 是模組層級的全域 dict，key 只是一個 8 字元的 hex request_id，**沒有依 `client_id`／`team_id`／session 做任何 ownership 隔離**。這代表：如果使用者同時開著兩個分頁跑不同的 team（例如分頁 A 的某個 member 透過 `/api/team/execute` 正在等待一個危險操作的核准，分頁 B 的團隊組長在討論一個會讀取外部內容的任務——網頁、檔案、使用者貼上的文字），只要分頁 B 組長輸出的文字裡剛好出現（不管是不小心、被使用者刻意誘導、還是被組長讀到的外部內容 prompt injection 出來）`[APPROVE: <分頁A那個 req_id>]` 這個字串，分頁 A 的危險操作就會被靜默核准——使用者從頭到尾沒有點過任何確認按鈕。這跟 T1（MCP 敏感操作授權閘門形同虛設）在精神上是同一類問題。
+
+複查所有 persona prompt 樣板（leader/member 兩種角色的系統提示）後確認：**模型從來沒有被告知 `[APPROVE: xxx]` 這個語法**（只有 `[CREATE_PROJECT: ...]` 有在 prompt 裡教過模型）——代表這是一段模型正常情況下絕不會主動輸出的死語法，唯一會觸發的情境就是被 prompt injection 誘導，沒有任何正常使用情境會用到它。
+
+**修法（選項 1：直接移除）**：直接刪掉 `handle_team_chat()` 裡解析 `[APPROVE: xxx]` 並設定 `decision = "approve"` 的整段程式碼。核准一律只能透過使用者親自點擊「✓ 允許」呼叫 `handle_team_authorize()`。新增 `tests/test_team_chat_no_llm_auto_approve.py`：模擬組長輸出剛好包含 `[APPROVE: fake-req-1]` 字串，驗證對應的 pending_permissions 紀錄不會被靜默核准（`decision` 仍是 `None`）。
+
+**修復過程中意外抓到的獨立重大 bug（發現 8）**：見下方。
+
+### 🔴 發現 8（已修復並補上回歸測試，本輪與發現 6 並列最嚴重）｜「💬 團隊對話」第一輪對話 100% 觸發 NameError，整條功能等於是壞的
+
+寫發現 7 的回歸測試時（用 mock 過的 subprocess 呼叫 `/api/team/chat`），斷言失敗，回應內容是：
+
+```
+data: {"type": "error", "text": "name 'all_members_list' is not defined"}
+```
+
+複查 `handle_team_chat()` 的 `_build_full_prompt()`（`main.py:716`）：呼叫 `build_team_memory_context(team_id, all_members_list, agent_id, cwd, ...)`，但 `all_members_list` **在整個 `handle_team_chat()` 裡從未被定義過**——唯一存在的是 `member_agent_ids`（`main.py:693`，`[m["agent"] for m in members]`），顯然是一次變數改名重構時漏改了一處。`_build_full_prompt()` 會在**每一次「第一輪對話」或「還沒有 persisted session」時**被呼叫——也就是說，「💬 團隊對話」這個功能幾乎每一次真實使用都會先撞上 `NameError`，跟 T19（`wrap_cmd` 從未 import，team 執行引擎 100% 壞掉）是同一類「看起來已經上線、實際上一叫就炸」的問題，而且這條路徑是三條 team 協作路徑裡唯一有真正 UI 按鈕（`selectTeamLeader()`）可以觸發的。
+
+**先前的整合測試為什麼沒抓到**：`tests/test_backend.py::test_team_chat_endpoint` 對 `/api/team/chat` 發送真實請求，但只斷言 `resp.status == 200` 和 `"data:" in body`。`handle_team_chat()` 把所有例外都用 `except Exception as e: ... {"type": "error", ...}` 包成一個「正常的」SSE `data:` 事件回傳——HTTP 層看起來永遠是 200、body 永遠含有 `"data:"`，就算內部整個 `NameError` 炸掉，這個測試也會判定通過。是本輪寫發現 7 的回歸測試時用了更嚴格的斷言（明確排除 `"type": "error"`），才意外揪出這個已經存在的重大 bug。
+
+**修法**：`all_members_list` 改成 `member_agent_ids`（一行修正）。新增 `tests/test_team_chat_first_turn_nameerror.py`：mock subprocess 模擬第一輪對話，明確斷言回應不含任何錯誤事件、且組長的真實回覆有正常送達。同時補強 `tests/test_backend.py::test_team_chat_endpoint`（既有測試，走真實 `claude` CLI 呼叫）的斷言，排除 `"type": "error"`／`NameError`，關掉「測試綠燈但功能其實是壞的」這個漏洞——已用真實 CLI 呼叫重跑過一次驗證通過（59 秒，含真實 API 呼叫）。
+
+### 已排除的假設（複查後確認不是問題）
+
+`build_team_memory_context()` 讀取 `_team_memory_dir(team_id)` 時對 inline/HR 派發（`team_id=""`）沒有特別擋，一開始懷疑會跟其他 HR 任務共用同一份 `CLAUDE_HOME/memory/teams/shared.md`／`projects/<slug>.md` 造成記憶體互相污染；但複查 `_execute_team_run_core()` 的寫入端（consensus 分支結尾、sequential/parallel 分支結尾）後確認兩處都已經有 `if team_id and cwd:` 擋著，inline/HR 派發的 run **從來不會寫入**這兩個共用檔案，所以讀到的永遠是空字串，不構成實際的污染路徑。
+
+### 前端複查範圍與限制
+
+`tsc --noEmit` / `ng build` 全過。程式碼層面複查了 Team Run／Team Chat／HR Agent 三條前端路徑的事件處理完整性（發現 2 提到的 `permission_request` 缺口，目前維持現狀，Team Run 用 acceptEdits 繞過而非補權限 UI，故此缺口不再是阻塞項）。
+
+**修正**：一開始判斷「無 GUI 背景環境做不了真實瀏覽器測試」，後來發現這個判斷不完全正確——`claude-in-chrome`（依賴使用者本機已連線的 Chrome 分頁）確實在這個 session 沒有連線，但專案裡本來就有一套獨立的 Playwright headless 測試基礎設施（`frontend/e2e/`），不依賴使用者的瀏覽器分頁，可以在背景環境自主起一個隔離的 dev server + headless Chromium 完整跑過一次真實 DOM 渲染驗證（見發現 6 的追加驗證段落）。之後遇到類似「需要驗證前端渲染」的情境，應該先檢查專案裡有沒有現成的 Playwright/E2E 基礎設施，而不是預設只能交給人工。
+
+### 本輪結論
+
+本輪一共發現 8 個問題，**全數修復並完成自動化驗證**：
+
+- **execution_mode 相關（發現 1）**：HR 自動組隊從完成以來實際上從未依設計循序執行過，且 HR prompt 從未輸出這個欄位——兩層都修了。
+- **權限模型（發現 2）**：`/api/team/run` 完全無法執行需要核准的操作。原本評估的「補齊權限轉發」修法（比照 `handle_team_execute` 的 `_legacy_exec` stdin y/n 模式）動手前先實測驗證，發現**行不通**——即使 `stdin=PIPE`，headless `-p` 模式也不會產生可偵測、可回應的互動式權限提示，真正能做互動核准的只有 pooled SDK 的 `can_use_tool` callback，代表要做完整權限轉發需要把整個 Team Run 執行引擎遷移到 SessionPool，工程量遠比原估大。使用者確認方向後採**開放 `--permission-mode acceptEdits`**：已用真實 CLI 驗證 acceptEdits 底下 Write/Bash 都能正常執行、`.claude/` 等敏感路徑的硬性保護不受影響——已修復。
+- **穩健性（發現 4）**：team run 核心邏輯任何未預期例外都會讓 run 永久卡死並洩漏記憶體——已修復。
+- **正確性（發現 5）**：consensus 模式成員數 >2 時 UI 會顯示錯誤成員、部分成員永遠卡在 pending——已修復。
+- **前端可用性（發現 6，本輪影響面最大）**：HR 自動組隊「開始執行」後畫面完全沒有進度顯示，功能看起來像壞的——已修復，並用 Playwright headless Chromium 端對端測試實際驗證過畫面渲染正確（見發現 6 段落，不再是只驗證到編譯通過）。
+- **安全性（發現 7）**：LLM 自己的文字輸出可以繞過使用者核准，直接核准任意 pending 權限請求——已移除該機制。
+- **可用性（發現 8，本輪與發現 6 並列最嚴重）**：「💬 團隊對話」——三條 team 協作路徑裡唯一有真正 UI 入口的一條——第一輪對話 100% 觸發 `NameError`，是修發現 7 的回歸測試時意外抓到的，舊的整合測試斷言太弱從未發現過。
+
+**測試覆蓋**：177 個 pytest 測試全過（含 2 個真實呼叫 `claude` CLI 的整合測試）；`tsc --noEmit`/`ng build` 全過；新增 `frontend/e2e/team-run-progress.spec.ts`（Playwright headless Chromium，mock 網路層、不需真實 CLI，驗證發現 6 的修復在真實 DOM 渲染正確）。Team 協作系統這輪從資料模型、執行引擎、權限模型到前端渲染都有實測或自動化測試覆蓋，不再有「只驗證到編譯通過」的修復。
+
+建議下一步：封裝成多環境軟體／支援 Codex 版本現在可以繼續推進——Team 協作的核心執行引擎、權限模型、前端渲染這輪都已經過實測驗證與修復；若要更完整的前端覆蓋，可以考慮把 `frontend/e2e/` 這套 Playwright 基礎設施接進 CI（目前看起來是手動執行）。

@@ -171,12 +171,14 @@ async def _run_hr_agent(task: str) -> dict:
 2. 根據任務的邏輯順序安排執行步驟（Step 1, Step 2...）。前一個 Agent 的輸出將作為下一個 Agent 的輸入上下文。
 3. 為每個步驟的 Agent 設定合適的 role（任務職責說明）。
 4. 設定 input_memory（讀取）與 output_memory（寫入）的鍵值（keys），用於在步驟間傳遞 context 或保存中間產物。例如第一步寫入 'step1-result'，第二步讀取 'step1-result'。
-5. 請只輸出一個純 JSON 對象，不要包含任何 markdown 標記（如 ```json ... ```）、引言或額外說明文字。
+5. execution_mode 固定填 "sequential"——這個團隊本來就是設計成「前一位輸出傳給下一位」，一定要循序執行，不能平行跑。
+6. 請只輸出一個純 JSON 對象，不要包含任何 markdown 標記（如 ```json ... ```）、引言或額外說明文字。
 
 JSON Schema:
 {{
   "name": "auto-created-team-name",
   "description": "說明此團隊如何協作與組隊理由",
+  "execution_mode": "sequential",
   "members": [
     {{
       "agent": "選用的 Agent ID",
@@ -217,13 +219,23 @@ JSON Schema:
     s = _re.sub(r"^```[a-zA-Z]*\s*", "", s)
     s = _re.sub(r"\s*```$", "", s.strip()).strip()
 
+    def _with_sequential_default(plan):
+        # 健檢修復：HR Agent 產生的團隊本來就是設計成「前一位輸出傳給下一位」
+        # （見上方 prompt），一定要循序執行；prompt 已要求固定填 "sequential"，
+        # 這裡再補一層防呆，避免模型偶爾漏填時又靜默 fallback 成 "parallel"
+        # （routes/teams.py 的 handle_team_run_post 對缺欄位的預設值就是
+        # "parallel"）。
+        if isinstance(plan, dict) and "execution_mode" not in plan:
+            plan["execution_mode"] = "sequential"
+        return plan
+
     try:
-        return json.loads(s)
+        return _with_sequential_default(json.loads(s))
     except Exception:
         start_idx, end_idx = s.find("{"), s.rfind("}")
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
             try:
-                return json.loads(s[start_idx:end_idx + 1])
+                return _with_sequential_default(json.loads(s[start_idx:end_idx + 1]))
             except Exception:
                 pass
         return {"error": "Failed to parse HR Agent JSON response", "raw": output_str[:500]}

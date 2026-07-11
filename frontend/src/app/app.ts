@@ -2041,10 +2041,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.teamEditorData.set({ ...d, members });
   }
 
-  activateTeam(team: Team) {
-    this.openTeamRun(team);
-  }
-
   selectTeamLeader(t: Team) {
     // 組長優先用 t.leader，空時 fallback 到第一個成員
     const leaderId = t.leader || (t.members[0]?.agent ?? '');
@@ -2115,71 +2111,28 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // ── Team Run (Phase 3) ────────────────────────────────────────────────────
-  teamRunOpen    = signal(false);
-  teamRunTarget  = signal<Team | null>(null);
-  teamRunTask    = signal('');
-  teamRunState   = signal<TeamRun | null>(null);
-  teamRunLoading = signal(false);
-  private _teamRunStopFn: (() => void) | null = null;
+  // 2026-07-10 修復：teamRunOpen/teamRunState 這兩個 signal 從未被任何
+  // template 讀取過，openTeamRun()/submitTeamRun() 也從未被任何按鈕呼叫過
+  // ——結果是唯一真正可從 UI 觸發的入口 submitHRTeamRun()（🤖 自動組隊）點下
+  // 「▶ 開始執行」後，後端會真的啟動一個會消耗 API 額度的 team run，但畫面上
+  // 完全沒有任何進度顯示、沒有結果、沒有錯誤訊息——使用者只會看到彈窗關閉，
+  // 像什麼都沒發生一樣。改成比照 executeTeamCodePhase()（/api/team/execute
+  // 那條路徑，已經在畫面上正確 render）的模式：把 team run 掛在一則 chat
+  // message 上（ChatMessage.teamRun），用既有的 embedded-tr-steps 區塊顯示
+  // 進度；並改用 tabMessages/tabStreaming/tabStopFns 的 per-tab 模式，避免
+  // 切分頁時進度事件寫錯分頁（跟 T38 是同一類問題）。真正無人呼叫的
+  // openTeamRun()/teamRunTarget/teamRunTask/teamRunOpen/teamRunState/
+  // cancelTeamRun()/closeTeamRun() 直接移除，不留死碼。
 
-  openTeamRun(team: Team) {
-    this.teamRunTarget.set(team);
-    this.teamRunTask.set('');
-    this.teamRunState.set(null);
-    this.teamRunOpen.set(true);
-  }
-
-  submitTeamRun() {
-    const team = this.teamRunTarget();
-    const task = this.teamRunTask().trim();
-    if (!team || !task) return;
-    // 取消並清理上一個尚未結束的 SSE 連線
-    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
-    this.teamRunLoading.set(true);
-    this.expandedOutputs.set([]);
-
-    this.runArtifacts.set([]); // 🚀 啟動前主動清空舊成果，防止舊資料殘留污染
-    this.teamRunState.set({
-      id: '', team_id: team.id, name: team.name, task,
-      status: 'running',
-      steps: team.members.map(m => ({ agent: m.agent, role: m.role, status: 'pending' as const, output: '' })),
-      summary: '',
-    });
-
-    const s = this.settings.get();
-    this.claude.runTeam(team.id, task, s.model, s.workDir).subscribe({
-      next: (r) => {
-        this.teamRunLoading.set(false);
-        const runId = r.run_id;
-        this.activeRunId = runId; // 🚀 記錄當前運行 ID
-        this.teamRunState.update(st => st ? { ...st, id: runId } : st);
-        this._teamRunStopFn = this.claude.streamTeamRun(
-          runId,
-          (ev) => this._handleTeamRunEvent(ev),
-          () => {
-            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s);
-            this.loadRunArtifacts(runId);
-            this.activeRunId = ''; // 🚀 結束清空
-          },
-          (e) => {
-            console.error('team run error', e);
-            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s);
-            this.activeRunId = ''; // 🚀 出錯清空
-          }
-        );
-      },
-      error: () => {
-        this.teamRunLoading.set(false);
-        this.activeRunId = '';
-      },
-    });
-  }
-
-  private _handleTeamRunEvent(ev: any) {
+  private _applyTeamRunEvent(tabId: string, ev: any) {
     if (ev.type === 'ping') return;
-    this.teamRunState.update(st => {
-      if (!st) return st;
-      const steps = [...st.steps];
+    this.tabMessages(tabId, msgs => {
+      const lastIdx = msgs.length - 1;
+      const lastMsg = msgs[lastIdx];
+      if (!lastMsg || !lastMsg.teamRun) return msgs;
+      const tr = lastMsg.teamRun;
+      const steps = [...tr.steps];
+      const copy = [...msgs];
       if (ev.type === 'step_start' && steps[ev.step]) {
         steps[ev.step] = { ...steps[ev.step], status: 'running' };
       } else if (ev.type === 'step_text' && steps[ev.step]) {
@@ -2187,34 +2140,95 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       } else if (ev.type === 'step_done' && steps[ev.step]) {
         steps[ev.step] = { ...steps[ev.step], status: 'done' };
       } else if (ev.type === 'done') {
-        return { ...st, status: 'done', steps, summary: ev.summary ?? '' };
+        copy[lastIdx] = {
+          ...lastMsg, isStreaming: false, text: `✓ ${tr.name} 執行完成`,
+          teamRun: { ...tr, status: 'done', steps, summary: ev.summary ?? '' },
+        };
+        return copy;
       } else if (ev.type === 'cancelled') {
-        return { ...st, status: 'cancelled', steps };
+        copy[lastIdx] = { ...lastMsg, isStreaming: false, teamRun: { ...tr, status: 'cancelled', steps } };
+        return copy;
       } else if (ev.type === 'error') {
-        return { ...st, status: 'error', steps };
+        copy[lastIdx] = { ...lastMsg, isStreaming: false, teamRun: { ...tr, status: 'error', steps } };
+        return copy;
       }
-      return { ...st, steps };
+      copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+      return copy;
     });
+    if (tabId === this.activeChatId()) this.shouldScroll = true;
   }
 
-  cancelTeamRun() {
-    const st = this.teamRunState();
-    const runId = st?.id || this.activeRunId;
-    if (runId) {
-      this.claude.cancelTeamRun(runId).subscribe();
-      this.activeRunId = '';
-    }
-    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
-    // 立即更新 UI 狀態，不等 SSE 回應
-    this.teamRunState.update(s => s ? { ...s, status: 'cancelled' } : s);
-    if (runId) this.loadRunArtifacts(runId);
-  }
+  private _dispatchTeamRun(
+    tabId: string, teamId: string, task: string, cwd: string, model: string,
+    teamName: string, members: { agent: string; role: string }[], inlineTeam?: any,
+  ) {
+    const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+    const teamRun: TeamRun = {
+      id: '', team_id: teamId, name: teamName, task,
+      status: 'running',
+      steps: members.map(m => ({ agent: m.agent, role: m.role, status: 'pending' as const, output: '' })),
+      summary: '',
+    };
+    const runMsg: ChatMessage = { role: 'assistant', text: '', isStreaming: true, time: now, teamRun };
+    this.tabMessages(tabId, m => [...m, runMsg]);
+    if (tabId === this.activeChatId()) this.shouldScroll = true;
+    this.tabStreaming(tabId, true);
 
-  closeTeamRun() {
-    const st = this.teamRunState();
-    if (st?.id && st.status === 'running') this.claude.cancelTeamRun(st.id).subscribe();
-    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
-    this.teamRunOpen.set(false);
+    this.claude.runTeam(teamId, task, model, cwd, inlineTeam).subscribe({
+      next: (r) => {
+        const runId = r.run_id;
+        this.tabMessages(tabId, msgs => {
+          const lastIdx = msgs.length - 1;
+          const lastMsg = msgs[lastIdx];
+          if (!lastMsg?.teamRun) return msgs;
+          const copy = [...msgs];
+          copy[lastIdx] = { ...lastMsg, teamRun: { ...lastMsg.teamRun, id: runId } };
+          return copy;
+        });
+
+        const stopFn = this.claude.streamTeamRun(
+          runId,
+          (ev) => this._applyTeamRunEvent(tabId, ev),
+          () => {
+            this.tabStreaming(tabId, false);
+            this.tabStopFns.delete(tabId);
+            this.loadRunArtifacts(runId);
+          },
+          (e) => {
+            console.error('team run error', e);
+            this.tabStreaming(tabId, false);
+            this.tabStopFns.delete(tabId);
+          },
+        );
+        this.tabStopFns.set(tabId, () => {
+          stopFn();
+          this.claude.cancelTeamRun(runId).subscribe();
+          this.tabStreaming(tabId, false);
+          this.tabStopFns.delete(tabId);
+          this.tabMessages(tabId, msgs => {
+            const lastIdx = msgs.length - 1;
+            const lastMsg = msgs[lastIdx];
+            if (!lastMsg?.teamRun) return msgs;
+            const copy = [...msgs];
+            copy[lastIdx] = { ...lastMsg, isStreaming: false, teamRun: { ...lastMsg.teamRun, status: 'cancelled' } };
+            return copy;
+          });
+        });
+      },
+      error: (err) => {
+        this.tabStreaming(tabId, false);
+        const errMsg = err.error?.error || err.message || '執行失敗';
+        this.showToast(errMsg, 'error');
+        this.tabMessages(tabId, msgs => {
+          const lastIdx = msgs.length - 1;
+          const lastMsg = msgs[lastIdx];
+          if (!lastMsg?.teamRun) return msgs;
+          const copy = [...msgs];
+          copy[lastIdx] = { ...lastMsg, isStreaming: false, text: `⚠ ${errMsg}`, teamRun: { ...lastMsg.teamRun, status: 'error' } };
+          return copy;
+        });
+      },
+    });
   }
 
   // ── Team Run — step output expand/collapse ────────────────────────────────
@@ -2302,56 +2316,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const task = this.inputText.trim();
     if (!plan || !task) return;
 
-    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
     this.hrPlanOpen.set(false);
-    this.teamRunTarget.set({
-      id: '',
-      name: plan.name || '自動組隊任務',
-      description: plan.description || '',
-      members: plan.members
-    });
-    this.teamRunTask.set(task);
-    this.teamRunLoading.set(true);
-    this.teamRunOpen.set(true);
     this.expandedOutputs.set([]);
+    this.inputText = '';
 
-    this.runArtifacts.set([]); // 🚀 啟動前主動清空舊成果，防止舊資料殘留污染
-    this.teamRunState.set({
-      id: '', team_id: '', name: plan.name || '自動組隊任務', task,
-      status: 'running',
-      steps: plan.members.map((m: any) => ({ agent: m.agent, role: m.role, status: 'pending' as const, output: '' })),
-      summary: '',
-    });
-
+    const tabId = this.activeChatId();
     const s = this.settings.get();
-    this.claude.runTeam('', task, s.model, s.workDir, plan).subscribe({
-      next: (r) => {
-        this.teamRunLoading.set(false);
-        const runId = r.run_id;
-        this.activeRunId = runId; // 🚀 記錄當前運行 ID
-        this.teamRunState.update(st => st ? { ...st, id: runId } : st);
-        this._teamRunStopFn = this.claude.streamTeamRun(
-          runId,
-          (ev) => this._handleTeamRunEvent(ev),
-          () => {
-            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s);
-            this.loadRunArtifacts(runId); // 🚀 補齊成果加載，確保自動組隊成果畫廊能成功顯現！
-            this.activeRunId = ''; // 🚀 結束清空
-          },
-          (e) => {
-            console.error('team run error', e);
-            this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s);
-            this.activeRunId = ''; // 🚀 出錯清空
-          }
-        );
-      },
-      error: (err) => {
-        this.teamRunLoading.set(false);
-        this.activeRunId = '';
-        const errMsg = err.error?.error || err.message || '執行失敗';
-        this.showToast(errMsg, 'error');
-      }
-    });
+    this._dispatchTeamRun(
+      tabId, '', task, s.workDir, s.model,
+      plan.name || '自動組隊任務', plan.members, plan,
+    );
   }
 
   // 清空某個對話欄的訊息
@@ -2989,7 +2963,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
     for (const fn of this.tabStopFns.values()) fn();
     this.tabStopFns.clear();
-    this._teamRunStopFn?.();
     if (this.recognition) {
       // Detach handlers first so onend/onerror can't fire after the component is gone.
       this.recognition.onstart = null;

@@ -134,6 +134,12 @@ class TestAdversarialDebate(unittest.IsolatedAsyncioTestCase):
         routes.teams._team_runs[run_id] = {
             "team_id": "test-team",
             "status": "running",
+            # 2026-07-10 修復：execution_mode/leader 現在由 handle_team_run_post
+            # 在 dispatch 當下存進 run state（不再靠 team_id 回頭查 yaml 檔，見
+            # routes/teams.py 的說明），所以直接建構 run state 的測試也要帶上，
+            # 才能反映 handle_team_run_post 實際會產生的資料。
+            "execution_mode": "consensus",
+            "leader": "LeaderAgent",
             "steps": [
                 {"agent": "CoderAgent", "role": "Coder", "status": "pending", "output": ""},
                 {"agent": "AuditorAgent", "role": "Auditor", "status": "pending", "output": ""}

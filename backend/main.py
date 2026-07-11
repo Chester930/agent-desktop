@@ -716,7 +716,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         async def _build_full_prompt(hist: str) -> str:
             """組裝首 Turn 用的完整 prompt。"""
             mem_ctx = await asyncio.to_thread(
-                build_team_memory_context, team_id, all_members_list, agent_id, cwd,
+                build_team_memory_context, team_id, member_agent_ids, agent_id, cwd,
                 members_meta=members,
                 query=prompt_text
             )
@@ -942,16 +942,6 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                     except Exception as ex:
                         err_text = f"\n[專案目錄建立失敗: {ex}]\n"
                         await response.write(f"data: {json.dumps({'type': 'text', 'agent': leader_agent_id, 'text': err_text})}\n\n".encode())
-
-                approve_match = re.search(r"\[APPROVE:\s*([a-zA-Z0-9_-]+)\]", agent_output)
-                if approve_match:
-                    req_id = approve_match.group(1).strip()
-                    if req_id in pending_permissions:
-                        record = pending_permissions[req_id]
-                        record["decision"] = "approve"
-                        record["event"].set()
-                        text_val = f"\n[組長自動授權：已同意 @{record['agent']} 的操作]\n"
-                        await response.write(f"data: {json.dumps({'type': 'text', 'agent': leader_agent_id, 'text': text_val})}\n\n".encode())
 
             next_agent = None
             if is_leader:

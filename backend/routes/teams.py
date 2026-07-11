@@ -129,7 +129,8 @@ async def _gc_team_runs_task() -> None:
 async def _agent_run_capture(
     run_id: str, step_idx: int,
     agent_id: str, prompt: str,
-    model: str, cwd: str
+    model: str, cwd: str,
+    permission_mode: str = "acceptEdits",
 ) -> str:
     _, AGENTS_DIR = _dirs()
     claude_bin, resolve_key = _claude_bin_and_key()
@@ -156,6 +157,16 @@ async def _agent_run_capture(
     cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]
     if model and model not in ("sonnet", ""):
         cmd += ["--model", model]
+    # 健檢修復（發現 2）：headless -p 模式下 stdin 沒有互動核准通道
+    # （已用真實 CLI 驗證：即使 stdin=PIPE，遇到需要核准的工具呼叫也只會在
+    # 3 秒後自動判斷，不會等待/接受 y/n 輸入），team member 原本 100% 無法
+    # 執行任何 Write/Edit/Bash 等需要核准的操作，只能做純文字分析。改成預設
+    # 帶 --permission-mode acceptEdits，讓 team member 真正能協作完成任務；
+    # 已用真實 CLI 驗證 acceptEdits 底下 Write/Bash 都能正常執行（零
+    # permission_denials），Claude Code 自身對敏感路徑（如 .claude/ 設定目
+    # 錄）的硬性保護不受此 flag 影響、依然生效。
+    if permission_mode:
+        cmd += ["--permission-mode", permission_mode]
 
     env = {**os.environ}
     api_key = resolve_key()
@@ -278,8 +289,28 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
             from message_bus import global_bus
             global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
             _kill_team_run_processes(run_id)
-    except Exception:
-        pass
+    except Exception as e:
+        # 健檢修復：原本 `except Exception: pass` 把 _execute_team_run_core 拋出
+        # 的任何例外整個吃掉——run 的 status 永遠停在 "running"（不會走到 core
+        # 函式最後設定 status/_finished_at 的那段），SSE stream 也永遠不會收到
+        # done/error 事件（handle_team_run_stream 只會每 30 秒送 ping，永遠不
+        # 結束），前端進度面板會無限期卡在「執行中」不會有任何錯誤提示。而且
+        # 因為 _finished_at 永遠不會被設定，_cleanup_old_runs() 的 2 小時回收
+        # 機制也抓不到它，run/events/queues 會一直留在記憶體裡直到 process 重啟。
+        _log(f"[TeamRun {run_id}] 執行時發生未預期例外：{e!r}")
+        run = _team_runs.get(run_id)
+        if run and run.get("status") == "running":
+            run["status"] = "error"
+            run["_finished_at"] = time.time()
+            run["summary"] = f"### [執行錯誤] {e}"
+            # 比照上面 TimeoutError 分支的既有慣例：只送一個 "done" 事件（前端
+            # streamTeamRun 只認 done/error/cancelled 三種類型為終止事件，見
+            # handle_team_run_stream），summary 帶錯誤文字讓使用者看得到發生了
+            # 什麼事，而不是靜默停在「執行中」。
+            _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+            from message_bus import global_bus
+            global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
+            _kill_team_run_processes(run_id)
 
 
 async def _get_agent_memory_prompt(team_id: str, all_member_ids: list[str], agent_id: str, cwd: str, build_team_mem) -> str:
@@ -329,7 +360,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
     global_bus.publish("team:run_start", {"run_id": run_id, "task": task})
     
     old_snap = _take_workspace_snapshot(cwd)
-    TEAMS_DIR, AGENTS_DIR = _dirs()
+    _, AGENTS_DIR = _dirs()
     run = _team_runs[run_id]
     steps = run["steps"]
     
@@ -349,21 +380,38 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
     except Exception:
         pass
 
-    team_info = {}
-    if team_id:
-        try:
-            f_team = TEAMS_DIR / f"{team_id}.yaml"
-            if f_team.exists():
-                team_info = _team_dict(f_team)
-        except Exception:
-            pass
-
-    mode = team_info.get("execution_mode", "parallel") if team_info else "parallel"
+    # 健檢修復：execution_mode/leader 改用 handle_team_run_post 當下就存進
+    # run state 的值（見該函式），不再靠 team_id 回頭查 TEAMS_DIR 的 yaml 檔。
+    # 舊寫法對 inline team payload（HR Agent 自動組隊 submitHRTeamRun() 送出
+    # 的 plan 沒有 "id" 欄位）永遠查不到 team_info，導致 execution_mode 靜默
+    # fallback 成 "parallel"——即使 HR Agent 的 prompt 明確要求「循序執行、
+    # 前一位輸出傳給下一位」，實際卻用 asyncio.gather 平行跑，member 之間的
+    # input_memory/output_memory 讀寫會有 race（讀到的時候上一位可能還沒寫完）。
+    mode = run.get("execution_mode", "parallel")
+    permission_mode = run.get("permission_mode", "acceptEdits")
 
     if mode == "consensus" and len(steps) >= 2:
         agent_a = steps[0]["agent"]
         agent_b = steps[1]["agent"]
-        
+        leader  = run.get("leader") or agent_a
+
+        # 健檢修復：consensus 是固定 4 步驟流程（Coder 草稿 → Auditor 審查 →
+        # Coder 修正 → Leader 總結），只會用到 agent_a/agent_b/leader 三個
+        # 角色，跟「有幾位成員就有幾個 step」的 parallel/sequential 假設不
+        # 相容。team 成員數 ≥3 時，原本的寫法會直接覆寫第 3 位成員原本的
+        # steps[2]（step_start 事件回報的 agent 名字跟 steps[2]["agent"] 對
+        # 不上，UI 顯示錯的成員名稱），第 4 位以後的成員則永遠停在
+        # "pending"，即使整個 run 已經 "done"，看起來像卡住了。改成一開始
+        # 就把 run["steps"] 換成 consensus 專用的固定 4 步驟結構，不再重用
+        # 其他成員原本的 step slot。
+        steps = [
+            {"agent": agent_a, "role": "Coder (Initial Draft)",           "status": "pending", "output": ""},
+            {"agent": agent_b, "role": "Auditor (Review)",                "status": "pending", "output": ""},
+            {"agent": agent_a, "role": "Coder (Revision)",                "status": "pending", "output": ""},
+            {"agent": leader,  "role": "Team Leader (Consensus Summary)", "status": "pending", "output": ""},
+        ]
+        run["steps"] = steps
+
         # 1. Initial Draft (Agent A)
         _tr_emit(run_id, {"type": "step_start", "step": 0, "agent": agent_a, "role": "Coder (Initial Draft)"})
         mem_a = await _get_agent_memory_prompt(team_id, all_member_ids, agent_a, cwd, build_team_mem)
@@ -373,7 +421,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         prompt_1_parts.append(f"[任務]\n{task}\n\n請根據任務，產出你的初始設計方案（Initial Draft）。")
         prompt_1 = "\n\n".join(prompt_1_parts)
         
-        draft = await _agent_run_capture(run_id, 0, agent_a, prompt_1, model, cwd)
+        draft = await _agent_run_capture(run_id, 0, agent_a, prompt_1, model, cwd, permission_mode)
         steps[0]["output"] = draft
         steps[0]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 0})
@@ -396,7 +444,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         )
         prompt_2 = "\n\n".join(prompt_2_parts)
         
-        feedback = await _agent_run_capture(run_id, 1, agent_b, prompt_2, model, cwd)
+        feedback = await _agent_run_capture(run_id, 1, agent_b, prompt_2, model, cwd, permission_mode)
         steps[1]["output"] = feedback
         steps[1]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 1})
@@ -406,9 +454,6 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             return
 
         # 3. Revision (Agent A)
-        if len(steps) < 3:
-            steps.append({"agent": agent_a, "role": "Coder (Revision)", "status": "pending", "output": ""})
-        
         _tr_emit(run_id, {"type": "step_start", "step": 2, "agent": agent_a, "role": "Coder (Revision)"})
         prompt_3_parts = []
         if mem_a:
@@ -421,7 +466,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         )
         prompt_3 = "\n\n".join(prompt_3_parts)
         
-        revised = await _agent_run_capture(run_id, 2, agent_a, prompt_3, model, cwd)
+        revised = await _agent_run_capture(run_id, 2, agent_a, prompt_3, model, cwd, permission_mode)
         steps[2]["output"] = revised
         steps[2]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 2})
@@ -431,10 +476,6 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             return
 
         # 4. Consensus Summary (Leader)
-        leader = team_info.get("leader") or agent_a
-        if len(steps) < 4:
-            steps.append({"agent": leader, "role": "Team Leader (Consensus Summary)", "status": "pending", "output": ""})
-            
         _tr_emit(run_id, {"type": "step_start", "step": 3, "agent": leader, "role": "Team Leader (Consensus Summary)"})
         mem_leader = await _get_agent_memory_prompt(team_id, all_member_ids, leader, cwd, build_team_mem)
         prompt_4_parts = []
@@ -450,7 +491,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         )
         prompt_4 = "\n\n".join(prompt_4_parts)
         
-        summary = await _agent_run_capture(run_id, 3, leader, prompt_4, model, cwd)
+        summary = await _agent_run_capture(run_id, 3, leader, prompt_4, model, cwd, permission_mode)
         steps[3]["output"] = summary
         steps[3]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 3})
@@ -528,7 +569,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             prompt_parts.append(f"---\n## 任務\n\n{task}")
             prompt = "\n\n".join(prompt_parts)
 
-            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd)
+            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode)
             step["output"] = output
             step["status"] = "done"
             _tr_emit(run_id, {"type": "step_done", "step": i})
@@ -599,7 +640,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
 
             prompt = "\n\n".join(prompt_parts)
 
-            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd)
+            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode)
             step["output"] = output
             step["status"] = "done"
             prev_output = output
@@ -727,6 +768,9 @@ async def handle_team_delete(request: web.Request) -> web.Response:
 
 # ── Team Run handlers ─────────────────────────────────────────────────────────
 
+_VALID_PERMISSION_MODES = {"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"}
+
+
 async def handle_team_run_post(request: web.Request) -> web.Response:
     TEAMS_DIR, _ = _dirs()
     data    = await request.json()
@@ -735,6 +779,9 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
     model   = data.get("model", "")
     cwd     = data.get("cwd", "")
     team_payload = data.get("team", None)
+    permission_mode = data.get("permission_mode", "acceptEdits")
+    if permission_mode not in _VALID_PERMISSION_MODES:
+        return web.json_response({"error": "invalid permission_mode"}, status=400)
 
     if not task:
         return web.json_response({"error": "task required"}, status=400)
@@ -768,6 +815,14 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         "task":    task,
         "cwd":     cwd,
         "status":  "running",
+        # 健檢修復：於 dispatch 當下就把 execution_mode/leader 存進 run state，
+        # 見 _execute_team_run_core 內的說明。
+        "execution_mode": team.get("execution_mode", "parallel"),
+        "leader":         team.get("leader", ""),
+        # 健檢修復（發現 2）：預設帶 acceptEdits，讓 team member 能真正執行
+        # Write/Edit/Bash 等操作，而不是被 headless -p 模式無條件自動拒絕。
+        # 見 _agent_run_capture 內的說明。
+        "permission_mode": permission_mode,
         "steps": [
             {
                 "agent":         m["agent"],
