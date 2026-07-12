@@ -345,10 +345,10 @@
           <div class="modal-form">
             <label>執行引擎
               <select [(ngModel)]="settingsForm.agentEngine">
-                <option value="claude">Claude Code CLI（預設）</option>
-                <option value="codex">OpenAI Codex CLI</option>
+                <option value="claude" [disabled]="engineOptionDisabled('claude')">{{ engineOptionLabel('claude') }}（預設）</option>
+                <option value="codex" [disabled]="engineOptionDisabled('codex')">{{ engineOptionLabel('codex') }}</option>
               </select>
-              <small>Team 協作任務實際呼叫哪個 CLI 執行；個別 agent 可在自己的 frontmatter 用 <code>engine:</code> 覆寫，混用不同引擎的成員。Codex 需先 <code>codex login</code>；Windows 上 <code>workspace-write</code> sandbox 目前無法執行 shell 指令（Codex CLI 本身的限制），已驗證 <code>danger-full-access</code> 可繞過此限制，但該等級完全沒有沙盒保護，請謹慎使用。</small>
+              <small>Team 協作任務實際呼叫哪個 CLI 執行；個別 agent 可在自己的 frontmatter 用 <code>engine:</code> 覆寫，混用不同引擎的成員。Codex 需先 <code>codex login</code>；Windows 上 <code>workspace-write</code> sandbox 目前無法執行 shell 指令（Codex CLI 本身的限制），已驗證 <code>danger-full-access</code> 可繞過此限制，但該等級完全沒有沙盒保護，請謹慎使用。灰掉的選項代表該引擎目前未安裝或未登入；即使選了不可用的引擎，實際執行時也會自動切換到還可用的那個。</small>
             </label>
           </div>
         </div>
@@ -2226,10 +2226,10 @@
               [value]="agentEditorData().engine || ''"
               (change)="agentEditorData.set({...agentEditorData(), engine: $any($event.target).value})">
               <option value="">（跟隨全域設定）</option>
-              <option value="claude">Claude Code CLI</option>
-              <option value="codex">OpenAI Codex CLI</option>
+              <option value="claude" [disabled]="engineOptionDisabled('claude')">{{ engineOptionLabel('claude') }}</option>
+              <option value="codex" [disabled]="engineOptionDisabled('codex')">{{ engineOptionLabel('codex') }}</option>
             </select>
-            <small>留空則使用 Settings 裡的 Agent Engine 全域預設；個別 Agent 可在此覆寫，讓同一個 team 混用不同引擎。</small>
+            <small>留空則使用 Settings 裡的 Agent Engine 全域預設；個別 Agent 可在此覆寫，讓同一個 team 混用不同引擎。灰掉的選項代表該引擎目前未安裝或未登入。</small>
           </label>
           <label class="editor-label">靈魂人格設定 (Soul Persona)
             <textarea class="memory-editor"

@@ -7,7 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -1778,6 +1778,24 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.agentEditorSoulContent = '';
     }
     this.agentEditorOpen.set(true);
+
+    this.claude.getEngineStatus().subscribe({
+      next: status => {
+        this.engineStatus.set(status);
+        const eng = this.agentEditorData().engine;
+        if (eng && status[eng]?.available === false) {
+          const other = eng === 'claude' ? 'codex' : 'claude';
+          if (status[other]?.available) {
+            this.agentEditorData.set({ ...this.agentEditorData(), engine: other });
+            this.showToast(
+              `此 Agent 指定的引擎「${this.ENGINE_LABEL[eng]}」目前無法使用，編輯器已預選「${this.ENGINE_LABEL[other]}」（尚未儲存）。`,
+              'info', 4000,
+            );
+          }
+        }
+      },
+      error: () => {},
+    });
   }
 
   saveAgentEditor() {
@@ -2261,6 +2279,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           this.hrError.set(plan.error);
           this.showToast(plan.error, 'error');
         } else {
+          if (plan.engine_notice) this.showToast(plan.engine_notice, 'info', 4000);
           // Normalise plan fields to avoid undefined errors
           if (!plan.members) plan.members = [];
           plan.members.forEach((m: any) => {
@@ -2878,6 +2897,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.loadLogs();
     this.loadTelegramSettings();
     this.loadMemoryOverview();
+    this.loadEngineStatus();
     this.claude.getStatus().subscribe(s => {
       this.statusInfo.set(s.claude_bin ?? '未知');
     });
@@ -4016,6 +4036,52 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       next: () => this.loadMcpServerDefs(),
       error: (e) => this.showToast(e.error?.error || '刪除失敗', 'error'),
     });
+  }
+
+  // ── 引擎可用性偵測（已安裝／已登入，不含用量數字——兩邊 CLI 都沒有可
+  // 腳本化的用量查詢管道）────────────────────────────────────────────────
+  engineStatus = signal<Record<string, EngineAvailability>>({});
+
+  private readonly ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code CLI', codex: 'OpenAI Codex CLI' };
+  private readonly ENGINE_REASON_LABEL: Record<string, string> = {
+    not_installed: '未安裝', not_logged_in: '未登入',
+    check_timeout: '狀態檢查逾時', unexpected_output: '狀態檢查失敗',
+  };
+
+  loadEngineStatus(force = false) {
+    this.claude.getEngineStatus(force).subscribe({
+      next: status => {
+        this.engineStatus.set(status);
+        this._autoCorrectGlobalEngine(status);
+      },
+      error: () => {},   // 拿不到狀態就保持現狀（既有 select 行為不變），不擋住 UI
+    });
+  }
+
+  engineOptionDisabled(name: 'claude' | 'codex'): boolean {
+    const s = this.engineStatus()[name];
+    return !!s && !s.available;   // 還沒拿到狀態時（{} 空物件）不擋，避免載入瞬間全部變成 disabled
+  }
+
+  engineOptionLabel(name: 'claude' | 'codex'): string {
+    const s = this.engineStatus()[name];
+    const base = this.ENGINE_LABEL[name];
+    if (!s || s.available) return base;
+    const reason = this.ENGINE_REASON_LABEL[s.reason] || '不可用';
+    return `${base}（${reason}）`;
+  }
+
+  private _autoCorrectGlobalEngine(status: Record<string, EngineAvailability>) {
+    const current = this.settings.get().agentEngine;
+    if (status[current]?.available !== false) return;   // 可用或狀態未知都不動
+    const other = current === 'claude' ? 'codex' : 'claude';
+    if (!status[other]?.available) return;               // 兩邊都不可用，UI 端不硬猜，交給執行期防護網處理
+    this.settings.save({ agentEngine: other as 'claude' | 'codex' });
+    if (this.settingsOpen()) this.settingsForm.agentEngine = other as 'claude' | 'codex';
+    this.showToast(
+      `全域執行引擎「${this.ENGINE_LABEL[current]}」目前無法使用，已自動切換為「${this.ENGINE_LABEL[other]}」。`,
+      'info', 4000,
+    );
   }
 
   isSkillAuthorized(id: string): boolean {

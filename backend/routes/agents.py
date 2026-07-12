@@ -155,10 +155,16 @@ async def _run_hr_agent(task: str, engine_name: str = "") -> dict:
     也能選 Codex 執行（例如使用者的 Claude 額度用盡、想改用 Codex 做組隊
     規劃）。"""
     from engines.registry import get_engine, resolve_engine_name
+    from engines.availability import apply_availability_fallback, NoEngineAvailableError
 
     AGENTS_DIR, _ = _dirs()
     _, resolve_key = _claude_bin_and_key()
-    engine = get_engine(resolve_engine_name("", engine_name))
+    preferred_name = resolve_engine_name("", engine_name)
+    try:
+        final_name, engine_notice = await apply_availability_fallback(preferred_name)
+    except NoEngineAvailableError as e:
+        return {"error": f"HR dispatch failed: {e}"}
+    engine = get_engine(final_name)
     agents_list = []
     if AGENTS_DIR.exists():
         for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
@@ -250,6 +256,8 @@ JSON Schema:
         # "parallel"）。
         if isinstance(plan, dict) and "execution_mode" not in plan:
             plan["execution_mode"] = "sequential"
+        if isinstance(plan, dict) and engine_notice:
+            plan["engine_notice"] = engine_notice
         return plan
 
     try:

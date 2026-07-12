@@ -32,6 +32,15 @@ export interface McpServerDef {
   synced?: { claude: boolean; codex: boolean };
 }
 
+// 引擎可用性偵測（backend/engines/availability.py）——只做「已安裝／已登入」
+// 偵測，用量／額度數字兩邊 CLI 都沒有可腳本化的資料來源，這輪沒有做。
+export interface EngineAvailability {
+  installed: boolean;
+  loggedIn: boolean;
+  available: boolean;
+  reason: '' | 'not_installed' | 'not_logged_in' | 'check_timeout' | 'unexpected_output';
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
   text: string;
@@ -134,6 +143,11 @@ export class ClaudeService {
   }
   deleteMcpServer(name: string): Observable<{ ok: boolean; synced: { claude: boolean; codex: boolean } }> {
     return this.http.delete<{ ok: boolean; synced: { claude: boolean; codex: boolean } }>(`${this.api}/mcp-servers/${name}`);
+  }
+
+  getEngineStatus(force = false): Observable<Record<string, EngineAvailability>> {
+    const q = force ? '?force=1' : '';
+    return this.http.get<Record<string, EngineAvailability>>(`${this.api}/engines/status${q}`);
   }
   deleteAgent(id: string): Observable<{ ok: boolean }> {
     return this.http.delete<{ ok: boolean }>(`${this.api}/agents/${id}`);

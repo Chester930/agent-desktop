@@ -220,7 +220,7 @@ def get_agent_soul(agent_id: str) -> str:
         return ""
 
 
-def _resolve_agent_engine_and_key(agent_id: str):
+async def _resolve_agent_engine_and_key(agent_id: str):
     """比照 routes/teams.py::_agent_run_capture() 已經驗證過的模式：讀
     agent 自己 frontmatter 宣告的 engine:，解析成實際引擎模組，並決定
     api_key 要不要傳（resolve_key() 只解析 Anthropic key，非 claude 引擎
@@ -230,8 +230,15 @@ def _resolve_agent_engine_and_key(agent_id: str):
     完全沒有讀取 agent 的 engine: 欄位，寫死呼叫 Claude——這個 helper是
     補上這個缺口用的共用邏輯，避免三處各自重複實作。沒有 agent_id（沒有
     activated agent）時自然解析成預設引擎 "claude"，維持既有行為不變。
+
+    resolve_engine_name() 算出來的偏好引擎，還會再疊加一層
+    apply_availability_fallback()（engines/availability.py）：偏好引擎
+    現在真的可用就直接通過（notice 為 None，行為跟這次改動之前完全一樣）；
+    不可用就切到另一個可用的引擎並回傳一句可以直接顯示給使用者的提示；
+    兩個都不可用會丟出 NoEngineAvailableError，呼叫端要自行處理。
     """
     from engines.registry import resolve_engine_name, get_engine
+    from engines.availability import apply_availability_fallback
 
     agent_own_engine = ""
     if agent_id:
@@ -241,9 +248,11 @@ def _resolve_agent_engine_and_key(agent_id: str):
                 agent_own_engine = _agent_dict(agent_file).get("engine", "")
             except Exception:
                 pass
-    engine = get_engine(resolve_engine_name(agent_own_engine, ""))
+    preferred_name = resolve_engine_name(agent_own_engine, "")
+    final_name, notice = await apply_availability_fallback(preferred_name)
+    engine = get_engine(final_name)
     engine_api_key = _resolve_api_key() if engine.name == "claude" else ""
-    return engine, engine_api_key
+    return engine, engine_api_key, notice
 
 
 def load_schedules() -> list:
@@ -341,6 +350,30 @@ def find_claude() -> str:
     return "claude"   # fallback, let OS resolve
 
 CLAUDE_BIN = find_claude()
+
+# ── Locate codex executable ───────────────────────────
+def find_codex() -> str:
+    found = shutil.which("codex")
+    if found:
+        return found
+    candidates = [
+        # Windows
+        Path.home() / "AppData" / "Roaming" / "npm" / "codex.cmd",
+        Path.home() / "AppData" / "Local" / "nvm" / "nodejs" / "codex.cmd",
+        # macOS (Homebrew + npm global)
+        Path("/usr/local/bin/codex"),
+        Path("/opt/homebrew/bin/codex"),
+        Path.home() / ".npm-global" / "bin" / "codex",
+        # Linux
+        Path("/usr/bin/codex"),
+        Path.home() / ".local" / "bin" / "codex",
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return "codex"   # fallback, let OS resolve
+
+CODEX_BIN = find_codex()
 
 def _detect_claude_version() -> str:
     try:
@@ -673,9 +706,11 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             payload = json.dumps({"type": "error", "text": result.error})
             await response.write(f"data: {payload}\n\n".encode())
 
-    engine, engine_api_key = _resolve_agent_engine_and_key(agent)
-
     try:
+        engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent)
+        if engine_notice:
+            notice_msg = {"type": "assistant", "message": {"content": [{"type": "text", "text": engine_notice}]}}
+            await response.write(f"data: {json.dumps(notice_msg)}\n\n".encode())
         if engine.name != "claude":
             full_message = message if client_id in active_sessions else await _build_full_message()
             await _run_engine_turn(engine, engine_api_key, full_message)
@@ -979,7 +1014,9 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         has_persisted = session_key in active_sessions
         in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(session_key)
         use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
-        engine, engine_api_key = _resolve_agent_engine_and_key(agent_id)
+        engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent_id)
+        if engine_notice:
+            await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': engine_notice})}\n\n".encode())
 
         if engine.name != "claude":
             if not has_persisted or is_first_turn:
@@ -1492,7 +1529,21 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
         has_persisted = exec_key in active_sessions
         in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(proc_key)
         use_pool = HAS_AGENT_SDK and _team_pool is not None
-        engine, engine_api_key = _resolve_agent_engine_and_key(agent_id)
+
+        from engines.availability import NoEngineAvailableError
+        try:
+            engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent_id)
+        except NoEngineAvailableError as e:
+            # 這個函式外層（sequential 迴圈的 await／parallel 模式的
+            # asyncio.gather）完全沒有 try/except 包住——沒接住的例外會
+            # 整個炸掉這次 team execute 的 SSE 串流，不是只掛掉這個成員，
+            # 所以這裡要自己補一個局部防護，回傳空字串維持既有 contract。
+            await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
+            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': f'[Error: {e}]'})}\n\n".encode())
+            await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+            return ""
+        if engine_notice:
+            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': engine_notice})}\n\n".encode())
 
         if engine.name != "claude":
             if not has_persisted:
@@ -3550,14 +3601,15 @@ def build_app() -> web.Application:
     import sys
     sys.path.append(str(Path(__file__).parent))
     try:
-        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes
+        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes
     except ImportError:
-        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes
+        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes
 
     register_agent_routes(app, cors.add)
     register_skill_routes(app, cors.add)
     register_team_routes(app, cors.add)
     register_mcp_server_routes(app, cors.add)
+    register_engine_routes(app, cors.add)
 
     async def cleanup_processes(app_ref):
         _log("[cleanup] Shutting down, cleaning up all active processes...")
@@ -3698,6 +3750,10 @@ async def on_startup(app: web.Application) -> None:
     global _tg_task
     _log(f"Backend started. Claude: {CLAUDE_BIN}")
     asyncio.create_task(run_schedule_runner())
+    # 預熱引擎可用性 cache，避免開機後第一個真的用到的請求要付冷啟動的
+    # subprocess spawn 成本（claude auth status / codex login status）。
+    from engines.availability import get_status as _prime_engine_status
+    asyncio.create_task(_prime_engine_status())
     if HAS_AGENT_SDK and _team_pool is not None:
         from session_pool import run_idle_pruner
         asyncio.create_task(run_idle_pruner(_team_pool))

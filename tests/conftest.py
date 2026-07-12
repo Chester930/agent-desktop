@@ -132,3 +132,24 @@ async def client(app):
     """每個測試函數都取得一個新的 TestClient（function scope，避免 loop 綁定問題）"""
     async with TestClient(TestServer(app)) as cli:
         yield cli
+
+
+@pytest.fixture(autouse=True)
+def _mock_engine_availability(monkeypatch):
+    """engines/availability.py 這輪新增的可用性偵測會真的 spawn `claude
+    auth status --json`／`codex login status` 子行程——如果每個既有測試都
+    不特別處理，會變成每個測試都要付真實 CLI subprocess 的延遲，且在沒有
+    安裝/登入這兩個 CLI 的機器（例如 CI）上會直接失敗。這裡用 autouse
+    fixture 把預設值鎖定成「兩邊都可用」，跟這輪改動之前的行為完全一樣，
+    既有測試不用逐一修改；需要測試「不可用/自動切換」情境的測試，可以在
+    測試本體內用 monkeypatch 覆寫 engines.availability.get_status，會蓋掉
+    這裡的預設值。"""
+    from engines import availability
+
+    async def _fake_get_status(force: bool = False) -> dict:
+        return {
+            "claude": {"installed": True, "loggedIn": True, "available": True, "reason": ""},
+            "codex": {"installed": True, "loggedIn": True, "available": True, "reason": ""},
+        }
+
+    monkeypatch.setattr(availability, "get_status", _fake_get_status)
