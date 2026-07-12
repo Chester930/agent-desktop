@@ -4015,7 +4015,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   saveMcpServerEditor() {
     const name = this.mcpServerEditorName.trim();
-    if (!name) return;
+    if (!name) { this.showToast('請填寫名稱', 'error'); return; }
     const d = this.mcpServerEditorData();
     const payload: McpServerDef = d.type === 'http'
       ? { type: 'http', url: (d.url || '').trim(), headers: this._parseKvLines(this.mcpServerEditorHeadersText) }
@@ -4025,8 +4025,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           args: this.mcpServerEditorArgsText.split('\n').map(s => s.trim()).filter(Boolean),
           env: this._parseKvLines(this.mcpServerEditorEnvText),
         };
-    if (d.type === 'stdio' && !payload.command) return;
-    if (d.type === 'http' && !payload.url) return;
+    if (d.type === 'stdio' && !payload.command) { this.showToast('請填寫執行指令', 'error'); return; }
+    if (d.type === 'http' && !payload.url) { this.showToast('請填寫 URL', 'error'); return; }
 
     this.mcpServerSaving.set(true);
     this.claude.createMcpServer(name, payload).subscribe({

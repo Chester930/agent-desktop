@@ -349,11 +349,16 @@
                 <option value="codex" [disabled]="engineOptionDisabled('codex')">只用 {{ engineOptionLabel('codex') }}</option>
                 <option value="both">兩者都開放，Agent 可自行指定</option>
               </select>
-              <small>
-                鎖定為「只用 Claude」或「只用 Codex」時，個別 Agent 的 <code>engine:</code> 覆寫會被完全忽略，一律使用這裡選的引擎；選擇「兩者都開放」時才會依 Agent 自己的設定（或下方的預設引擎）決定，混用不同引擎的成員。
-                Codex 需先 <code>codex login</code>；Windows 上 <code>workspace-write</code> sandbox 目前無法執行 shell 指令（Codex CLI 本身的限制），已驗證 <code>danger-full-access</code> 可繞過此限制，但該等級完全沒有沙盒保護，請謹慎使用。
-                灰掉的選項代表該引擎目前未安裝或未登入。
-              </small>
+              <div style="font-size:11px;display:flex;gap:14px;margin:4px 0 2px">
+                <span [style.color]="engineStatus()['claude']?.available ? '#4caf50' : '#e07070'">
+                  {{ engineStatus()['claude']?.available ? '✓' : '✗' }} Claude{{ engineOptionDisabled('claude') ? '（' + (engineStatus()['claude']?.reason === 'not_logged_in' ? '未登入' : '未安裝') + '）' : '' }}
+                </span>
+                <span [style.color]="engineStatus()['codex']?.available ? '#4caf50' : '#e07070'">
+                  {{ engineStatus()['codex']?.available ? '✓' : '✗' }} Codex{{ engineOptionDisabled('codex') ? '（' + (engineStatus()['codex']?.reason === 'not_logged_in' ? '未登入' : '未安裝') + '）' : '' }}
+                </span>
+              </div>
+              <small>鎖定為「只用 Claude」或「只用 Codex」時，個別 Agent 的 <code>engine:</code> 覆寫會被完全忽略，一律使用這裡選的引擎；選擇「兩者都開放」時才會依 Agent 自己的設定（或下方的預設引擎）決定，混用不同引擎的成員。</small>
+              <small>Codex 需先 <code>codex login</code>；Windows 上 <code>workspace-write</code> sandbox 目前無法執行 shell 指令（Codex CLI 本身的限制），已驗證 <code>danger-full-access</code> 可繞過此限制，但該等級完全沒有沙盒保護，請謹慎使用。</small>
             </label>
             @if (settingsForm.engineMode === 'both') {
               <label>兩者都開放時的預設引擎
@@ -1720,11 +1725,11 @@
                           <span class="mcc-name">{{ name }}</span>
                           <span style="font-size:10px;color:#888;margin-left:6px;">{{ mcpServerDefs()[name].type }}</span>
                           <span style="font-size:10px;margin-left:auto;"
-                            [style.color]="mcpServerDefs()[name].synced?.claude ? '#4caf50' : '#888'"
-                            title="Claude 同步狀態">Claude{{ mcpServerDefs()[name].synced?.claude ? ' ✓' : ' ✗' }}</span>
+                            [style.color]="mcpServerDefs()[name].synced?.claude ? '#4caf50' : '#e07070'"
+                            title="Claude 同步狀態——✗ 代表上次同步失敗（例如 Claude CLI 未安裝），不是還沒同步">Claude{{ mcpServerDefs()[name].synced?.claude ? ' ✓' : ' ✗' }}</span>
                           <span style="font-size:10px;margin-left:6px;"
-                            [style.color]="mcpServerDefs()[name].synced?.codex ? '#4caf50' : '#888'"
-                            title="Codex 同步狀態">Codex{{ mcpServerDefs()[name].synced?.codex ? ' ✓' : ' ✗' }}</span>
+                            [style.color]="mcpServerDefs()[name].synced?.codex ? '#4caf50' : '#e07070'"
+                            title="Codex 同步狀態——✗ 代表上次同步失敗（例如 Codex CLI 未安裝或未登入），不是還沒同步">Codex{{ mcpServerDefs()[name].synced?.codex ? ' ✓' : ' ✗' }}</span>
                           <button class="del-btn" style="margin-left:6px;" (click)="deleteMcpServerDef(name)" title="刪除（會同步從兩邊移除）">✕</button>
                         </div>
                       </div>
@@ -2251,12 +2256,13 @@
                 <option value="claude">Claude Code</option>
                 <option value="codex">OpenAI Codex</option>
               </select>
-              <small style="color:#e07070">
-                Settings 目前鎖定為「只用 {{ engineMode() === 'claude' ? 'Claude' : 'Codex' }}」，這個 Agent 自己存的執行引擎設定
-                @if (agentEditorData().engine) { （目前存的值：{{ agentEditorData().engine }}） }
-                @else { （目前留空，跟隨全域設定） }
-                在執行時不會生效，一律使用 {{ engineMode() === 'claude' ? 'Claude' : 'Codex' }}。到 Settings 把執行引擎範圍改回「兩者都開放」才能讓這裡的設定重新生效。
-              </small>
+              @if (agentEditorData().engine) {
+                <small style="color:#e07070">
+                  Settings 目前鎖定為「只用 {{ engineMode() === 'claude' ? 'Claude' : 'Codex' }}」，這個 Agent 自己存的執行引擎設定（{{ agentEditorData().engine }}）在執行時不會生效，一律使用 {{ engineMode() === 'claude' ? 'Claude' : 'Codex' }}。到 Settings 把執行引擎範圍改回「兩者都開放」才能讓這裡的設定重新生效。
+                </small>
+              } @else {
+                <small>Settings 目前鎖定為「只用 {{ engineMode() === 'claude' ? 'Claude' : 'Codex' }}」，這個 Agent 沒有個別指定，會照這個鎖定的引擎執行。</small>
+              }
             }
           </label>
           <label class="editor-label">靈魂人格設定 (Soul Persona)
