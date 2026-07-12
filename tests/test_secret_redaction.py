@@ -23,6 +23,16 @@ class TestConfigGetRedactsLineSecret:
         assert "lineChannelSecret" not in body
         assert "super-secret-hmac-key" not in _json.dumps(body)
 
+    async def test_line_channel_access_token_not_in_config_response(self, client, tmp_claude_home):
+        """2026-07-12：這個欄位跟 lineChannelSecret 同樣是外洩就能冒充 bot
+        呼叫 LINE API 的真實憑證，但原本的 redaction 只處理了 lineChannelSecret，
+        漏掉這個——這輪部署後在實際環境用真實憑證重現過，已經修復。"""
+        await _set_config(tmp_claude_home, {"lineChannelAccessToken": "super-secret-access-token"})
+        resp = await client.get("/api/config")
+        body = await resp.json()
+        assert "lineChannelAccessToken" not in body
+        assert "super-secret-access-token" not in _json.dumps(body)
+
     async def test_api_key_cmd_still_readable_for_settings_prefill(self, client, tmp_claude_home):
         """apiKeyCmd 前端會讀回填入設定表單，不能被誤刪。"""
         await _set_config(tmp_claude_home, {"apiKeyCmd": "echo my-key"})

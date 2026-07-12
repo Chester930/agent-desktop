@@ -3339,6 +3339,11 @@ async def handle_config_get(request: web.Request) -> web.Response:
     # 偽造合法 webhook 請求繞過簽章驗證。前端 settings 表單目前不會讀回這個
     # 欄位（只有 apiKeyCmd 會被讀回填入表單），拿掉不影響既有功能。
     cfg.pop("lineChannelSecret", None)
+    # 這是呼叫 LINE Messaging API（傳訊息、驗證身分）用的 access token，
+    # 外洩等於能冒充這個 bot 呼叫 LINE API——跟上面 lineChannelSecret 同樣
+    # 嚴重，原本漏掉沒一起處理。前端目前沒有任何地方讀這個欄位（grep 過
+    # frontend/src/app 確認），拿掉不影響既有功能。
+    cfg.pop("lineChannelAccessToken", None)
     return web.json_response(cfg)
 
 
