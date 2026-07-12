@@ -94,6 +94,7 @@ copy .env.example .env
 ```env
 NGROK_AUTHTOKEN=你的ngrok_token    # https://dashboard.ngrok.com 免費申請
 CLAUDE_HOME=C:/Users/你的名字/.claude
+CODEX_HOME=C:/Users/你的名字/.codex    # 選用，要在容器裡用 Codex CLI 引擎才需要
 ```
 
 **3. 啟動**

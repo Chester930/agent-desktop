@@ -24,9 +24,20 @@ services:
       - type: bind
         source: ${CLAUDE_HOME}
         target: /root/.claude
+      # Codex CLI 自己的登入憑證/設定（~/.codex，config.toml 跟 OAuth token）。
+      # 沒有這個掛載的話，容器裡就算裝了 codex CLI 二進位檔，也永遠是
+      # 「已安裝但未登入」——跟 CLAUDE_HOME 掛載是同一個理由。CODEX_HOME
+      # 是選用的，沒在 .env 填的話 fallback 回 CLAUDE_HOME 的路徑（一定
+      # 存在），避免沒用到 Codex 的人 docker-compose up 直接掛掉在「bind
+      # mount source 不存在」——fallback 到的目錄裡沒有 codex 的
+      # config.toml，CLI 自己會正確判斷成未登入，不影響任何行為。
+      - type: bind
+        source: ${CODEX_HOME:-${CLAUDE_HOME}}
+        target: /root/.codex
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
+      - CODEX_BIN=codex
       # container 需要接受 frontend-dev 透過 compose 內部網路連線，
       # 明確放寬成 0.0.0.0（僅限 container 內部，host 端仍只綁 127.0.0.1，見上）
       - BACKEND_BIND_HOST=0.0.0.0
@@ -79,9 +90,15 @@ services:
       - type: bind
         source: ${CLAUDE_HOME}
         target: /home/appuser/.claude
+      # 同 backend-dev：CODEX_HOME 選用，未設定時 fallback 回 CLAUDE_HOME
+      # 的路徑，避免沒用到 Codex 的人 docker-compose up 直接掛掉。
+      - type: bind
+        source: ${CODEX_HOME:-${CLAUDE_HOME}}
+        target: /home/appuser/.codex
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
+      - CODEX_BIN=codex
       - BACKEND_BIND_HOST=0.0.0.0
     deploy:
       resources:

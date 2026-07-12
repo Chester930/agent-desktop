@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y curl && \
     apt-get install -y nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Claude CLI
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude CLI + Codex CLI
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 WORKDIR /app
 COPY requirements.txt .
@@ -15,8 +15,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # main.py imports helpers/session_pool/memory_agent/message_bus and the routes/
 # package at startup — COPY was missing all of these, so this image never
 # actually booted (ModuleNotFoundError on the first `python main.py`).
-COPY main.py database.py helpers.py session_pool.py memory_agent.py message_bus.py agency_agents_importer.py ./
+# mcp_sync.py 和 engines/ package（可插拔 Claude/Codex 引擎）是後來加的，
+# 同樣的理由要一起 COPY，不然這個 image 一樣開機就死。
+COPY main.py database.py helpers.py session_pool.py memory_agent.py message_bus.py agency_agents_importer.py mcp_sync.py ./
 COPY routes/ ./routes/
+COPY engines/ ./engines/
 COPY presets/ ./presets/
 
 # 健檢第二輪修復：容器原本預設用 root 執行，疊加 docker.sock + 使用者
