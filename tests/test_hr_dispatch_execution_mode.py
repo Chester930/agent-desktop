@@ -77,7 +77,10 @@ async def test_model_omits_execution_mode_gets_defaulted_to_sequential(monkeypat
 
     monkeypatch.setattr(claude_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
-    plan = await agents_module._run_hr_agent("build something")
+    # 2026-07-13 起預設引擎是 Codex——這幾則測試在意的是 execution_mode
+    # 解析/補預設值邏輯，不是預設引擎本身，明確指定 engine_name="claude"
+    # 讓測試意圖不隨預設值變動而跟著壞掉。
+    plan = await agents_module._run_hr_agent("build something", engine_name="claude")
 
     assert "error" not in plan
     assert plan["execution_mode"] == "sequential"
@@ -95,7 +98,10 @@ async def test_model_explicit_execution_mode_is_preserved(monkeypatch):
 
     monkeypatch.setattr(claude_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
-    plan = await agents_module._run_hr_agent("build something")
+    # 2026-07-13 起預設引擎是 Codex——這幾則測試在意的是 execution_mode
+    # 解析/補預設值邏輯，不是預設引擎本身，明確指定 engine_name="claude"
+    # 讓測試意圖不隨預設值變動而跟著壞掉。
+    plan = await agents_module._run_hr_agent("build something", engine_name="claude")
 
     assert plan["execution_mode"] == "sequential"
 
@@ -115,7 +121,10 @@ async def test_markdown_fenced_response_still_gets_default(monkeypatch):
 
     monkeypatch.setattr(claude_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
-    plan = await agents_module._run_hr_agent("build something")
+    # 2026-07-13 起預設引擎是 Codex——這幾則測試在意的是 execution_mode
+    # 解析/補預設值邏輯，不是預設引擎本身，明確指定 engine_name="claude"
+    # 讓測試意圖不隨預設值變動而跟著壞掉。
+    plan = await agents_module._run_hr_agent("build something", engine_name="claude")
 
     assert "error" not in plan
     assert plan["execution_mode"] == "sequential"

@@ -363,8 +363,8 @@
             @if (settingsForm.engineMode === 'both') {
               <label>兩者都開放時的預設引擎
                 <select [(ngModel)]="settingsForm.agentEngine">
-                  <option value="claude" [disabled]="engineOptionDisabled('claude')">{{ engineOptionLabel('claude') }}（預設）</option>
-                  <option value="codex" [disabled]="engineOptionDisabled('codex')">{{ engineOptionLabel('codex') }}</option>
+                  <option value="claude" [disabled]="engineOptionDisabled('claude')">{{ engineOptionLabel('claude') }}</option>
+                  <option value="codex" [disabled]="engineOptionDisabled('codex')">{{ engineOptionLabel('codex') }}（預設）</option>
                 </select>
                 <small>沒有 Agent 自行指定時使用哪個引擎；Agent 的 <code>engine:</code> 覆寫優先於這裡。即使選了不可用的引擎，實際執行時也會自動切換到還可用的那個。</small>
               </label>

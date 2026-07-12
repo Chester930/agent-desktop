@@ -68,7 +68,7 @@ const DEFAULTS: AppSettings = {
   providerApiUrl: '',
   providerApiKey: '',
   providerModel: '',
-  agentEngine: 'claude',
+  agentEngine: 'codex',
   engineMode: 'both',
   lang: 'zh',
   openAtLogin: false,

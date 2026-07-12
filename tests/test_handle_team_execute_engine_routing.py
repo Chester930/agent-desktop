@@ -87,67 +87,43 @@ async def test_team_execute_member_routes_to_codex(client, monkeypatch, app, tmp
     assert any(e.get("type") == "exec_done" and e.get("agent") == "codex-executor" for e in events)
 
 
-async def test_team_execute_member_without_engine_still_uses_claude_legacy(client, monkeypatch, app, tmp_path):
+async def test_team_execute_member_without_engine_defaults_to_codex(client, monkeypatch, app, tmp_path):
+    """2026-07-13 起沒有宣告 engine: 時預設引擎是 Codex（不再是 Claude）——
+    使用者確認：兩邊 CLI 都能用時，預設選 Codex。"""
     import main
-    _write_agent(main.AGENTS_DIR, "claude-executor", engine="")
-    _write_team(main.TEAMS_DIR, "claude-exec-team", ["claude-executor"])
+    _write_agent(main.AGENTS_DIR, "default-engine-executor", engine="")
+    _write_team(main.TEAMS_DIR, "default-engine-exec-team", ["default-engine-executor"])
 
     project_dir = tmp_path / "project2"
     project_dir.mkdir()
 
-    from engines import codex_engine
-    codex_called = False
+    from engines import claude_engine, codex_engine
+    claude_called = False
+
+    async def fake_claude_run_turn(**kwargs):
+        nonlocal claude_called
+        claude_called = True
+        return RunResult(output="should not happen")
+
+    monkeypatch.setattr(claude_engine, "run_turn", fake_claude_run_turn)
+
+    codex_calls = []
 
     async def fake_codex_run_turn(**kwargs):
-        nonlocal codex_called
-        codex_called = True
-        return RunResult(output="should not happen")
+        codex_calls.append(kwargs)
+        await kwargs["on_text"]("預設引擎執行完成")
+        return RunResult(output="預設引擎執行完成", session_id="sid-default-codex-exec")
 
     monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
 
-    async def fake_create_subprocess_exec(*args, **kwargs):
-        class _FakeStdout:
-            def __init__(self):
-                self._lines = [b'{"type":"result","session_id":"sid-legacy-exec"}\n']
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                if not self._lines:
-                    raise StopAsyncIteration
-                return self._lines.pop(0)
-
-        class _FakeStdin:
-            def write(self, data):
-                pass
-
-            async def drain(self):
-                pass
-
-            def close(self):
-                pass
-
-        class _FakeProc:
-            def __init__(self):
-                self.stdout = _FakeStdout()
-                self.stdin = _FakeStdin()
-                self.returncode = 0
-
-            async def wait(self):
-                return 0
-
-        return _FakeProc()
-
-    monkeypatch.setattr(main.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-
     resp = await client.post("/api/team/execute", json={
-        "client_id": "test-client-exec-claude",
-        "team_id": "claude-exec-team",
+        "client_id": "test-client-exec-default",
+        "team_id": "default-engine-exec-team",
         "project_path": str(project_dir),
         "task": "完成這個任務",
     })
     assert resp.status == 200
     await _read_sse_events(resp)
 
-    assert not codex_called
+    assert len(codex_calls) == 1
+    assert not claude_called

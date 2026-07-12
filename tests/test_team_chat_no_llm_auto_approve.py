@@ -69,6 +69,11 @@ async def test_leader_output_containing_approve_tag_does_not_auto_approve(
 
     monkeypatch.setattr(main.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(main, "HAS_AGENT_SDK", False)  # force the legacy subprocess path deterministically
+    # 2026-07-13 起預設引擎是 Codex；這則測試在意的是 auto-approve 這個安全
+    # 問題本身，不是預設引擎，鎖定 get_engine_mode() 回傳 'claude' 讓測試
+    # 走既有的 Claude legacy subprocess 路徑，不去動共用的 fixture 檔案。
+    import database
+    monkeypatch.setattr(database, "get_engine_mode", lambda: "claude")
 
     payload = {
         "message": "哈囉團隊",

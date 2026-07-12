@@ -68,52 +68,36 @@ async def test_handle_chat_routes_to_codex_when_agent_declares_it(client, monkey
     assert any("Hello from codex" in b.get("text", "") for e in assistant_events for b in e["message"]["content"])
 
 
-async def test_handle_chat_still_uses_claude_when_no_engine_declared(client, monkeypatch, app):
-    """沒有宣告 engine:（或宣告 claude）時，維持現有行為——這裡的測試環境
-    沒有 Agent SDK（HAS_AGENT_SDK 應為 False 或 pool 不可用），所以會走
-    legacy subprocess 路徑，跟這次改動之前完全一樣。"""
+async def test_handle_chat_defaults_to_codex_when_no_engine_declared(client, monkeypatch, app):
+    """沒有宣告 engine: 時，2026-07-13 起預設引擎是 Codex（不再是 Claude）——
+    使用者確認：兩邊 CLI 都能用時，預設選 Codex。"""
     import main
-    _write_agent(main.AGENTS_DIR, "claude-chat-agent", engine="")
+    _write_agent(main.AGENTS_DIR, "default-engine-chat-agent", engine="")
 
-    codex_called = False
+    claude_called = False
 
-    async def fake_codex_run_turn(**kwargs):
-        nonlocal codex_called
-        codex_called = True
+    async def fake_claude_run_turn(**kwargs):
+        nonlocal claude_called
+        claude_called = True
         return RunResult(output="should not happen")
 
-    from engines import codex_engine
+    from engines import claude_engine, codex_engine
+    monkeypatch.setattr(claude_engine, "run_turn", fake_claude_run_turn)
+
+    codex_calls = []
+
+    async def fake_codex_run_turn(**kwargs):
+        codex_calls.append(kwargs)
+        await kwargs["on_text"]("預設引擎回覆")
+        return RunResult(output="預設引擎回覆", session_id="sid-default-codex")
+
     monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
 
-    async def fake_create_subprocess_exec(*args, **kwargs):
-        class _FakeStdout:
-            def __init__(self):
-                self._lines = [b'{"type":"result","session_id":"sid-legacy"}\n']
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                if not self._lines:
-                    raise StopAsyncIteration
-                return self._lines.pop(0)
-
-        class _FakeProc:
-            def __init__(self):
-                self.stdout = _FakeStdout()
-                self.returncode = 0
-
-            async def wait(self):
-                return 0
-
-        return _FakeProc()
-
-    monkeypatch.setattr(main.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-
     resp = await client.post("/api/chat", json={
-        "message": "hi", "client_id": "test-client-claude", "agent": "claude-chat-agent",
+        "message": "hi", "client_id": "test-client-default-engine", "agent": "default-engine-chat-agent",
     })
     assert resp.status == 200
     await _read_sse_events(resp)
 
-    assert not codex_called
+    assert len(codex_calls) == 1
+    assert not claude_called

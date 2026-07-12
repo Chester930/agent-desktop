@@ -4371,7 +4371,18 @@ body[style*="ns-resize"] .mcp-divider-grip {
   padding: 5px 8px;
   outline: none;
   &:focus { border-color: #7c6fff; }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  // disabled 的 <select>（例如引擎範圍鎖定時的唯讀顯示）在 Windows 上瀏覽器
+  // 會退回系統原生的 disabled 控件底色（通常是淺色/白色），只設 opacity
+  // 不會覆蓋掉——沒有明確重新宣告 background/color、加 appearance: none
+  // 強制用 author 樣式的話，就會變成白底配這裡設的淺色文字，幾乎看不到字。
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: rgba(255,255,255,0.05);
+    color: #e0e0e0;
+    -webkit-appearance: none;
+    appearance: none;
+  }
 }
 
 .editor-textarea {

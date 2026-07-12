@@ -35,7 +35,10 @@ async def test_agent_run_capture_folds_skill_content_into_prompt_for_claude(monk
     import database
     agents_dir = tmp_path / "agents"
     skills_dir = tmp_path / "skills"
-    _write_agent(agents_dir, "skilled-agent", ["tdd"])
+    # 2026-07-13 起預設引擎是 Codex——這則測試在意的是 Claude 路徑的 skill
+    # 注入邏輯，不是預設引擎本身，明確指定 engine: claude 讓測試意圖不隨
+    # 預設值變動而跟著壞掉。
+    _write_agent(agents_dir, "skilled-agent", ["tdd"], engine="claude")
     _write_skill(skills_dir, "tdd", "永遠先寫測試，紅燈-綠燈-重構。")
     monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
     monkeypatch.setattr(database, "SKILLS_DIR", skills_dir)
@@ -86,8 +89,9 @@ async def test_agent_run_capture_without_skills_has_no_skills_section(monkeypatc
     import database
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
+    # 同上：明確指定 engine: claude，跟預設引擎是誰無關。
     (agents_dir / "plain-agent.md").write_text(
-        "---\nname: plain-agent\ndescription: test\n---\n\nbody\n", encoding="utf-8",
+        "---\nname: plain-agent\ndescription: test\nengine: claude\n---\n\nbody\n", encoding="utf-8",
     )
     monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
 

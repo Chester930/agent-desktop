@@ -59,6 +59,12 @@ async def test_first_turn_team_chat_does_not_raise_nameerror(
 
     monkeypatch.setattr(main.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(main, "HAS_AGENT_SDK", False)  # force the legacy subprocess path deterministically
+    # 2026-07-13 起預設引擎是 Codex；這則測試在意的是 Claude legacy subprocess
+    # 路徑本身的 NameError 回歸，不是預設引擎，用共用的 session-scoped
+    # sample_agent/sample_team fixture 又不該直接改檔案（會汙染其他測試），
+    # 改成鎖定 get_engine_mode() 回傳 'claude'，測試本體乾淨、不留副作用。
+    import database
+    monkeypatch.setattr(database, "get_engine_mode", lambda: "claude")
 
     payload = {
         "message": "第一次打招呼",

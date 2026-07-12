@@ -34,8 +34,12 @@ async def test_agent_run_capture_defaults_to_accept_edits(monkeypatch):
 
     monkeypatch.setattr(teams_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
+    # 2026-07-13 起預設引擎是 Codex（不會組出 --permission-mode，那是 Claude
+    # CLI 專屬的旗標）；這則測試在意的是 Claude 側 acceptEdits 預設值本身，
+    # 明確指定 default_engine="claude"。
     await teams_module._agent_run_capture(
         "run-x", 0, "nonexistent-agent", "prompt", "haiku", "/tmp",
+        default_engine="claude",
     )
 
     cmd = captured_cmd["args"]
@@ -54,6 +58,7 @@ async def test_agent_run_capture_respects_explicit_permission_mode(monkeypatch):
 
     await teams_module._agent_run_capture(
         "run-x", 0, "nonexistent-agent", "prompt", "haiku", "/tmp", "plan",
+        default_engine="claude",
     )
 
     cmd = captured_cmd["args"]

@@ -65,8 +65,9 @@ class _FakeProc:
 class TestResolveEngineName:
     pytestmark = []
 
-    def test_defaults_to_claude_when_nothing_specified(self):
-        assert resolve_engine_name("", "") == DEFAULT_ENGINE_NAME == "claude"
+    def test_defaults_to_codex_when_nothing_specified(self):
+        """2026-07-13：使用者確認兩邊 CLI 都能用時，預設改成 Codex。"""
+        assert resolve_engine_name("", "") == DEFAULT_ENGINE_NAME == "codex"
 
     def test_frontmatter_takes_priority_over_request(self):
         assert resolve_engine_name("codex", "claude") == "codex"
