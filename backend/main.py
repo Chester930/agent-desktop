@@ -261,7 +261,14 @@ async def _resolve_agent_engine_and_key(agent_id: str):
     preferred_name = resolve_engine_name_gated(agent_own_engine, "", mode)
     final_name, notice = await apply_availability_fallback(preferred_name, allowed)
     engine = get_engine(final_name)
-    engine_api_key = _resolve_api_key() if engine.name == "claude" else ""
+    # 三選一：Claude 用 _resolve_api_key()、Codex 用 _resolve_codex_api_key()，
+    # 其餘引擎一律傳空字串——兩個 resolver 各自只解析自己的 config key，
+    # 完全不共用邏輯，避免哪個引擎的 key 誤植進另一邊的環境變數。
+    engine_api_key = (
+        _resolve_api_key() if engine.name == "claude"
+        else _resolve_codex_api_key() if engine.name == "codex"
+        else ""
+    )
     return engine, engine_api_key, notice
 
 
@@ -414,6 +421,25 @@ def _resolve_api_key() -> str:
         return ""
 
 
+def _resolve_codex_api_key() -> str:
+    """跟 _resolve_api_key() 幾乎一樣，只是讀 codexApiKeyCmd 這個獨立的
+    config key、回傳的值只會被拿去設 CODEX_API_KEY——刻意跟 Claude 那把
+    key 的 resolver 完全分開，不共用任何邏輯，避免哪天改壞了互相污染。"""
+    cfg = _load_config()
+    cmd = cfg.get("codexApiKeyCmd", "").strip()
+    if not cmd:
+        return ""
+    import subprocess
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip()
+    except Exception as e:
+        print(f"[codexApiKeyCmd] error: {e}")
+        return ""
+
+
 def build_memory_context(agent_id: str, cwd: str, query: str = "") -> str:
     """
     使用 MemoryAgent 進行動態分層加載與智能 Context 裁剪與 RAG 召回。
@@ -495,6 +521,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     agent        = data.get("agent", "")
     cwd_override = data.get("cwd", "")
     bin_override = data.get("claude_bin", "")
+    codex_bin_override = data.get("codex_bin", "")
     attachments  = data.get("attachments", [])
     model        = data.get("model", "")
     effort       = data.get("effort", "")
@@ -706,6 +733,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 prompt=full_message, cwd=cwd, model=model, permission_mode=permission_mode,
                 resume_session_id=active_sessions.get(client_id), api_key=engine_api_key,
                 on_text=_on_text, on_process=_on_process, attachments=attachments,
+                bin_override=(codex_bin_override if engine.name == "codex" else ""),
             )
         finally:
             active_procs.pop(client_id, None)
@@ -757,6 +785,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
     team_id      = data.get("team_id", "")
     cwd_override = data.get("cwd", "")
     bin_override = data.get("claude_bin", "")
+    codex_bin_override = data.get("codex_bin", "")
     attachments  = data.get("attachments", [])
     model        = data.get("model", "")
     effort       = data.get("effort", "")
@@ -1007,6 +1036,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                     prompt=fp, cwd=cwd, model=model, permission_mode=permission_mode,
                     resume_session_id=resume_sid, api_key=engine_api_key,
                     on_text=_on_text, on_process=_on_process, attachments=attachments,
+                    bin_override=(codex_bin_override if engine.name == "codex" else ""),
                 )
             finally:
                 active_procs.pop(client_id, None)
@@ -1190,6 +1220,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
     project_path = data.get("project_path", "")
     task         = data.get("task", "")
     bin_override = data.get("claude_bin", "")
+    codex_bin_override = data.get("codex_bin", "")
     model        = data.get("model", "")
     effort       = data.get("effort", "")
     permission_mode = data.get("permission_mode", "")
@@ -1522,6 +1553,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                     prompt=prompt, cwd=project_path, model=model, permission_mode=permission_mode,
                     resume_session_id=resume_sid, api_key=engine_api_key,
                     on_text=_on_text, on_process=_on_process,
+                    bin_override=(codex_bin_override if engine.name == "codex" else ""),
                 )
             finally:
                 active_procs.pop(proc_key, None)
@@ -3334,6 +3366,7 @@ async def handle_config_get(request: web.Request) -> web.Response:
     cfg.setdefault("projectDir", "")
     cfg.setdefault("claudeHome", "")
     cfg.setdefault("engineMode", "both")
+    cfg.setdefault("codexApiKeyCmd", "")
     cfg["_resolvedClaudeHome"] = str(CLAUDE_HOME)   # read-only info for UI
     # 健檢第二輪修復：這是驗證 LINE webhook 簽章的 HMAC secret，外洩等於能
     # 偽造合法 webhook 請求繞過簽章驗證。前端 settings 表單目前不會讀回這個
@@ -3355,6 +3388,8 @@ async def handle_config_put(request: web.Request) -> web.Response:
         cfg["projectDir"] = data["projectDir"].strip()
     if "apiKeyCmd" in data:
         cfg["apiKeyCmd"] = data["apiKeyCmd"].strip()
+    if "codexApiKeyCmd" in data:
+        cfg["codexApiKeyCmd"] = data["codexApiKeyCmd"].strip()
     if "claudeHome" in data:
         cfg["claudeHome"] = data["claudeHome"].strip()
     if "engineMode" in data:

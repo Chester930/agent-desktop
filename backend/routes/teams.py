@@ -67,6 +67,11 @@ def _claude_bin_and_key():
     return claude_bin, resolve_key
 
 
+def _resolve_codex_key_fn():
+    main = _get_main_module()
+    return getattr(main, "_resolve_codex_api_key", lambda: "") if main else (lambda: "")
+
+
 def _get_agent_soul(agent_id: str) -> str:
     main = _get_main_module()
     get_soul = getattr(main, "get_agent_soul", None) if main else None
@@ -152,6 +157,7 @@ async def _agent_run_capture(
 
     _, AGENTS_DIR = _dirs()
     _, resolve_key = _claude_bin_and_key()
+    resolve_codex_key = _resolve_codex_key_fn()
     agent_file = AGENTS_DIR / f"{agent_id}.md"
     agent_body = ""
     agent_own_engine = ""
@@ -216,14 +222,18 @@ async def _agent_run_capture(
     def _is_cancelled() -> bool:
         return _team_runs.get(run_id, {}).get("status") == "cancelled"
 
-    # resolve_key() 只解析 Anthropic API key（_resolve_api_key()，main.py
-    # 唯一的 key 解析器）。之前這裡不分引擎一律傳進去——如果使用者設定了
-    # Anthropic key、又選了 Codex 引擎，會把 Anthropic key 誤植進
-    # codex_engine.py 的 CODEX_API_KEY 環境變數，蓋掉正常運作的
-    # `codex login` 憑證。只有 engine.name == "claude" 時才適用這把 key；
-    # 其他引擎目前沒有對應的 key 設定欄位，統一傳空字串、讓 CLI 退回自己
-    # 已登入的憑證（這也是目前唯一實測過能正常運作的路徑）。
-    engine_api_key = resolve_key() if engine.name == "claude" else ""
+    # resolve_key() 只解析 Anthropic API key（_resolve_api_key()）、
+    # resolve_codex_key() 只解析 Codex API key（_resolve_codex_api_key()），
+    # 兩者完全分開、互不共用邏輯——如果使用者設定了 Anthropic key、又選了
+    # Codex 引擎，把 Anthropic key 誤植進 codex_engine.py 的 CODEX_API_KEY
+    # 環境變數會蓋掉正常運作的 `codex login` 憑證，反之亦然。engine.name
+    # 是 claude/codex 以外的引擎時，兩把 key 都不套用，統一傳空字串、讓
+    # CLI 退回自己已登入的憑證。
+    engine_api_key = (
+        resolve_key() if engine.name == "claude"
+        else resolve_codex_key() if engine.name == "codex"
+        else ""
+    )
 
     try:
         result = await engine.run_turn(

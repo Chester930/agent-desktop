@@ -219,10 +219,6 @@
         </div>
         <div class="modal-scroll-wrap">
         <div class="modal-body">
-          <label>Claude 執行路徑
-            <input [(ngModel)]="settingsForm.claudeBin" placeholder="claude">
-            <small>留空則自動偵測（建議留空）</small>
-          </label>
           <label>預設工作目錄（全域）
             <div style="display:flex;gap:6px;align-items:center;">
               <input style="flex:1" [(ngModel)]="settingsForm.projectDir"
@@ -235,7 +231,7 @@
               記憶、排程、靈魂等資料固定存放於 <code>~/.claude/</code>，與此設定無關。
             </small>
           </label>
-          <label>Claude 資料根目錄（claudeHome）
+          <label>資料根目錄（claudeHome）
             <div style="display:flex;gap:6px;align-items:center;">
               <input style="flex:1" [(ngModel)]="settingsForm.claudeHome"
                 placeholder="留空 = 自動使用 ~/.claude">
@@ -243,17 +239,12 @@
                 (click)="pickClaudeHome()">選擇…</button>
             </div>
             <small>
-              如果你把 Claude Code 安裝到非預設路徑，或需要管理多個 Claude 環境，可在此指定根目錄。
+              App 的共用資料根目錄（Agent、Skill、Team、靈魂設定、對話紀錄），Claude 與 Codex 引擎共用同一份，並非僅供 Claude 使用。
               留空則使用作業系統預設的 <code>~/.claude</code>。
               @if (resolvedClaudeHome()) {
                 目前生效：<code style="color:#d4a853">{{ resolvedClaudeHome() }}</code>
               }
             </small>
-          </label>
-          <label>API Key 命令（Vault）
-            <input [(ngModel)]="settingsForm.apiKeyCmd"
-              placeholder="留空 = 使用 claude login。例：op read op://vault/item/credential">
-            <small>若填入指令，後端會執行它並把輸出作為 ANTHROPIC_API_KEY。支援 1Password CLI、pass、任意 shell 指令。</small>
           </label>
           <label>工作目錄
             <input [(ngModel)]="settingsForm.workDir" placeholder="C:\Users\mycena">
@@ -369,6 +360,24 @@
                 <small>沒有 Agent 自行指定時使用哪個引擎；Agent 的 <code>engine:</code> 覆寫優先於這裡。即使選了不可用的引擎，實際執行時也會自動切換到還可用的那個。</small>
               </label>
             }
+            <label>Claude 執行路徑
+              <input [(ngModel)]="settingsForm.claudeBin" placeholder="claude">
+              <small>留空則自動偵測（建議留空）。僅影響主聊天室／💬 團隊對話／Team Execute，不影響 Team Run 或 HR 自動組隊。</small>
+            </label>
+            <label>Codex 執行路徑
+              <input [(ngModel)]="settingsForm.codexBin" placeholder="codex">
+              <small>留空則自動偵測（建議留空）。僅影響主聊天室／💬 團隊對話／Team Execute，不影響 Team Run 或 HR 自動組隊。</small>
+            </label>
+            <label>Claude API Key 命令（Vault）
+              <input [(ngModel)]="settingsForm.apiKeyCmd"
+                placeholder="留空 = 使用 claude login。例：op read op://vault/item/credential">
+              <small>若填入指令，後端會執行它並把輸出作為 ANTHROPIC_API_KEY。支援 1Password CLI、pass、任意 shell 指令。</small>
+            </label>
+            <label>Codex API Key 命令（Vault）
+              <input [(ngModel)]="settingsForm.codexApiKeyCmd"
+                placeholder="留空 = 使用 codex login。例：op read op://vault/item/credential">
+              <small>若填入指令，後端會執行它並把輸出作為 CODEX_API_KEY。留空則沿用 codex login 的既有登入憑證。</small>
+            </label>
           </div>
         </div>
 

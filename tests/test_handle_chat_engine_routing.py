@@ -101,3 +101,36 @@ async def test_handle_chat_defaults_to_codex_when_no_engine_declared(client, mon
 
     assert len(codex_calls) == 1
     assert not claude_called
+
+
+async def test_handle_chat_passes_resolved_codex_api_key(client, monkeypatch, app, tmp_path):
+    """2026-07-13：_resolve_agent_engine_and_key() 的三選一分支——agent 宣告
+    engine: codex 時，codex_engine.run_turn() 應該收到
+    main._resolve_codex_api_key() 解析出來的值（讀 codexApiKeyCmd 這個獨立
+    的 config key），而不是繼續傳空字串。"""
+    import main
+    _write_agent(main.AGENTS_DIR, "codex-key-agent", engine="codex")
+
+    main.CONFIG_FILE = tmp_path / "claude-desktop-config.json"
+    main.CONFIG_FILE.write_text(
+        json.dumps({"projectDir": "", "claudeHome": str(tmp_path), "codexApiKeyCmd": "echo resolved-codex-key"}),
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    async def fake_codex_run_turn(**kwargs):
+        captured["api_key"] = kwargs.get("api_key")
+        await kwargs["on_text"]("ok")
+        return RunResult(output="ok", session_id="sid-codex-key-test")
+
+    from engines import codex_engine
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+    resp = await client.post("/api/chat", json={
+        "message": "hi", "client_id": "test-client-codex-key", "agent": "codex-key-agent",
+    })
+    assert resp.status == 200
+    await _read_sse_events(resp)
+
+    assert captured["api_key"] == "resolved-codex-key"

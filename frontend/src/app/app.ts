@@ -2910,6 +2910,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       if (!this.settingsForm.apiKeyCmd && c.apiKeyCmd) {
         this.settingsForm.apiKeyCmd = c.apiKeyCmd;
       }
+      if (!this.settingsForm.codexApiKeyCmd && c.codexApiKeyCmd) {
+        this.settingsForm.codexApiKeyCmd = c.codexApiKeyCmd;
+      }
       if (!this.settingsForm.claudeHome && c.claudeHome) {
         this.settingsForm.claudeHome = c.claudeHome;
       }
@@ -2933,6 +2936,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.setConfig({
       projectDir: this.settingsForm.projectDir,
       apiKeyCmd: this.settingsForm.apiKeyCmd,
+      codexApiKeyCmd: this.settingsForm.codexApiKeyCmd,
       claudeHome: this.settingsForm.claudeHome,
       engineMode: this.settingsForm.engineMode,
     }).subscribe({

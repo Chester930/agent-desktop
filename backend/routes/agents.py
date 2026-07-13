@@ -47,6 +47,11 @@ def _claude_bin_and_key():
     return claude_bin, resolve_key
 
 
+def _resolve_codex_key_fn():
+    main = _get_main_module()
+    return getattr(main, "_resolve_codex_api_key", lambda: "") if main else (lambda: "")
+
+
 # ── Agent handlers ────────────────────────────────────────────────────────────
 
 async def handle_agents(request: web.Request) -> web.Response:
@@ -160,6 +165,7 @@ async def _run_hr_agent(task: str, engine_name: str = "") -> dict:
 
     AGENTS_DIR, _ = _dirs()
     _, resolve_key = _claude_bin_and_key()
+    resolve_codex_key = _resolve_codex_key_fn()
     mode = get_engine_mode()
     allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
     preferred_name = resolve_engine_name_gated("", engine_name, mode)
@@ -218,9 +224,13 @@ JSON Schema:
 """
 
     # 跟 routes/teams.py::_agent_run_capture() 同樣的理由：resolve_key() 只
-    # 解析 Anthropic key，只有 claude 引擎適用，避免誤植進 Codex 的
-    # CODEX_API_KEY 蓋掉 codex login 憑證。
-    engine_api_key = resolve_key() if engine.name == "claude" else ""
+    # 解析 Anthropic key、resolve_codex_key() 只解析 Codex key，兩者完全
+    # 分開，避免誤植進對方引擎的環境變數蓋掉正常運作的登入憑證。
+    engine_api_key = (
+        resolve_key() if engine.name == "claude"
+        else resolve_codex_key() if engine.name == "codex"
+        else ""
+    )
 
     async def _noop_on_text(chunk: str) -> None:
         pass

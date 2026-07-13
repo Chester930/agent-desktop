@@ -86,7 +86,9 @@ DEFAULT_PERMISSION_MODE = "workspace-write"
 VALID_PERMISSION_MODES = frozenset({"read-only", "workspace-write", "danger-full-access"})
 
 
-def _codex_bin() -> str:
+def _codex_bin(bin_override: str = "") -> str:
+    if bin_override:
+        return bin_override
     for mod_name in ("main", "backend.main", "__main__"):
         mod = sys.modules.get(mod_name)
         if mod and hasattr(mod, "CODEX_BIN"):
@@ -154,8 +156,10 @@ async def run_turn(
     on_process=None,
     is_cancelled=None,
     attachments: "list[str] | None" = None,
+    bin_override: str = "",   # 新增，預設空字串＝沿用原本 _codex_bin() 行為，
+                              # Team Run／HR 派發的既有呼叫端不用改一行。
 ) -> RunResult:
-    codex_bin = _codex_bin()
+    codex_bin = _codex_bin(bin_override)
     safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
     sandbox_mode = _normalize_sandbox_mode(permission_mode)
     image_attachments, text_attachments = _split_attachments(attachments)

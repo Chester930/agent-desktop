@@ -4,6 +4,7 @@ export interface QuickPrompt { label: string; text: string; }
 
 export interface AppSettings {
   claudeBin: string;
+  codexBin: string;
   workDir: string;
   defaultAgent: string;
   backendPort: number;
@@ -17,6 +18,7 @@ export interface AppSettings {
   permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto';
   projectDir: string;
   apiKeyCmd: string;
+  codexApiKeyCmd: string;
   claudeHome: string;   // override ~/.claude (leave blank for default)
   // #16 Multi-provider（純聊天，走 /api/chat/provider，沒有工具呼叫、
   // 沒有 Agent/Team/Memory——跟下面的 agentEngine 是完全不同的兩個機制，
@@ -45,6 +47,7 @@ export interface AppSettings {
 
 const DEFAULTS: AppSettings = {
   claudeBin: 'claude',
+  codexBin: 'codex',
   workDir: '',
   defaultAgent: '',
   backendPort: 8765,
@@ -63,6 +66,7 @@ const DEFAULTS: AppSettings = {
   permissionMode: 'acceptEdits',
   projectDir: '',
   apiKeyCmd: '',
+  codexApiKeyCmd: '',
   claudeHome: '',
   provider: 'claude',
   providerApiUrl: '',

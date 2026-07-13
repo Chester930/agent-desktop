@@ -192,3 +192,40 @@ async def test_hr_agent_does_not_leak_anthropic_key_into_codex_env(monkeypatch):
     await agents_module._run_hr_agent("build something", engine_name="codex")
 
     assert captured["api_key"] == ""
+
+
+async def test_hr_agent_passes_resolved_codex_api_key(monkeypatch):
+    """2026-07-13：反向驗證——Codex 引擎現在有自己的 resolver
+    （main._resolve_codex_api_key()），這裡確認它解析出來的值真的會被傳給
+    codex_engine.run_turn()，claude 引擎的 resolve_key()（_resolve_api_key()）
+    完全沒被呼叫到。"""
+    agents_dir = _make_agents_dir()
+    import database
+    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+
+    import sys
+    fake_main = type(sys)("fake_main_for_hr_codex_key_passthrough_test")
+    fake_main.CLAUDE_BIN = "claude"
+    claude_resolver_called = {"value": False}
+
+    def _fake_resolve_api_key():
+        claude_resolver_called["value"] = True
+        return "sk-ant-should-not-be-used"
+
+    fake_main._resolve_api_key = _fake_resolve_api_key
+    fake_main._resolve_codex_api_key = lambda: "codex-key-should-be-used"
+    monkeypatch.setitem(sys.modules, "main", fake_main)
+
+    captured = {}
+
+    async def fake_codex_run_turn(**kwargs):
+        from engines.base import RunResult
+        captured["api_key"] = kwargs.get("api_key")
+        return RunResult(output='{"name": "t", "description": "d", "execution_mode": "sequential", "members": []}')
+
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+    await agents_module._run_hr_agent("build something", engine_name="codex")
+
+    assert captured["api_key"] == "codex-key-should-be-used"
+    assert claude_resolver_called["value"] is False

@@ -161,3 +161,41 @@ async def test_agent_run_capture_does_not_leak_anthropic_key_into_codex_env(monk
 
     assert captured["codex_api_key"] == ""
     assert captured["claude_api_key"] == "sk-ant-should-not-leak"
+
+
+async def test_agent_run_capture_passes_resolved_codex_api_key(monkeypatch, tmp_path):
+    """2026-07-13：反向驗證上面那則測試沒覆蓋到的另一半——Codex 引擎現在
+    有自己的 resolver（main._resolve_codex_api_key()），這裡確認它解析出來
+    的值真的會被傳給 codex_engine.run_turn()，而不是繼續傳空字串；同時
+    claude 引擎的 resolve_key()（_resolve_api_key()）完全沒被呼叫到。"""
+    import database
+    agents_dir = tmp_path / "agents"
+    _write_agent(agents_dir, "codex-agent", "codex")
+    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+
+    import sys
+    fake_main = type(sys)("fake_main_for_codex_key_passthrough_test")
+    fake_main.CLAUDE_BIN = "claude"
+    claude_resolver_called = {"value": False}
+
+    def _fake_resolve_api_key():
+        claude_resolver_called["value"] = True
+        return "sk-ant-should-not-be-used"
+
+    fake_main._resolve_api_key = _fake_resolve_api_key
+    fake_main._resolve_codex_api_key = lambda: "codex-key-should-be-used"
+    monkeypatch.setitem(sys.modules, "main", fake_main)
+
+    captured = {}
+
+    async def fake_codex_run_turn(**kwargs):
+        captured["api_key"] = kwargs.get("api_key")
+        return RunResult(output="codex", session_id="sid-codex")
+
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+    teams_module._team_runs["codex-key-passthrough-run"] = {"status": "running"}
+    await teams_module._agent_run_capture("codex-key-passthrough-run", 0, "codex-agent", "hi", "", str(tmp_path))
+
+    assert captured["api_key"] == "codex-key-should-be-used"
+    assert claude_resolver_called["value"] is False

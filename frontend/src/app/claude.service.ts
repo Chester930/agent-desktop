@@ -384,7 +384,7 @@ export class ClaudeService {
     return this.http.get<{ projectDir: string; slug?: string; engineMode?: 'claude' | 'codex' | 'both' }>(`${this.api}/config`);
   }
 
-  setConfig(cfg: { projectDir?: string; apiKeyCmd?: string; claudeHome?: string; engineMode?: 'claude' | 'codex' | 'both' }): Observable<{ ok: boolean; slug: string }> {
+  setConfig(cfg: { projectDir?: string; apiKeyCmd?: string; codexApiKeyCmd?: string; claudeHome?: string; engineMode?: 'claude' | 'codex' | 'both' }): Observable<{ ok: boolean; slug: string }> {
     return this.http.put<{ ok: boolean; slug: string }>(`${this.api}/config`, cfg);
   }
 
@@ -511,6 +511,7 @@ export class ClaudeService {
         client_id: clientId || this.clientId,
         cwd: cwdOverride || s.workDir || undefined,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
+        codex_bin: s.codexBin !== 'codex' ? s.codexBin : undefined,
         attachments,
         model: s.model,
         effort: s.effort,
@@ -562,6 +563,7 @@ export class ClaudeService {
         client_id: clientId || this.clientId,
         cwd: cwdOverride || s.workDir || undefined,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
+        codex_bin: s.codexBin !== 'codex' ? s.codexBin : undefined,
         attachments,
         model: s.model,
         effort: s.effort,
@@ -611,6 +613,7 @@ export class ClaudeService {
         task,
         client_id: clientId || this.clientId,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
+        codex_bin: s.codexBin !== 'codex' ? s.codexBin : undefined,
         model: s.model,
         effort: s.effort,
         permission_mode: s.permissionMode,
