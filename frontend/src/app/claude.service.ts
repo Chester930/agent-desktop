@@ -166,6 +166,13 @@ export class ClaudeService {
   private get api(): string {
     const s = this.settings.get();
     if (s.backendUrl) return s.backendUrl.replace(/\/$/, '') + '/api';
+    // Browser deployments should use the same-origin reverse proxy. This is
+    // compatible with both nginx (production) and Angular's dev proxy, and it
+    // also satisfies the production CSP (`connect-src 'self'`). Electron's
+    // file:// renderer has no same origin, so it still connects by port.
+    if (typeof window !== 'undefined' && ['http:', 'https:'].includes(window.location.protocol)) {
+      return '/api';
+    }
     return `http://localhost:${s.backendPort}/api`;
   }
 
