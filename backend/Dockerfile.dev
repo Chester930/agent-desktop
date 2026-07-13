@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt "watchdog[watchmedo]"
 EXPOSE 8765
 
 # 掛載 ./backend 為 volume 後，watchmedo 偵測到 .py 異動即自動重啟
-CMD ["python", "-u", "/app/watcher.py"]
+CMD ["sh", "/app/docker-entrypoint.sh", "python", "-u", "/app/watcher.py"]

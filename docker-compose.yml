@@ -24,20 +24,23 @@ services:
       - type: bind
         source: ${CLAUDE_HOME}
         target: /root/.claude
-      # Codex CLI 自己的登入憑證/設定（~/.codex，config.toml 跟 OAuth token）。
-      # 沒有這個掛載的話，容器裡就算裝了 codex CLI 二進位檔，也永遠是
-      # 「已安裝但未登入」——跟 CLAUDE_HOME 掛載是同一個理由。CODEX_HOME
-      # 是選用的，沒在 .env 填的話 fallback 回 CLAUDE_HOME 的路徑（一定
-      # 存在），避免沒用到 Codex 的人 docker-compose up 直接掛掉在「bind
-      # mount source 不存在」——fallback 到的目錄裡沒有 codex 的
-      # config.toml，CLI 自己會正確判斷成未登入，不影響任何行為。
+      # 主機 Codex 設定與共用 Agent Skills 保留為 bind mount，供資源同步；
+      # Codex 的 SQLite runtime 則放 Linux named volume，避免 Windows bind
+      # mount 無法支援 SQLite locking。entrypoint 只複製登入與設定檔。
       - type: bind
         source: ${CODEX_HOME:-${CLAUDE_HOME}}
-        target: /root/.codex
+        target: /mnt/host-codex
+      - type: bind
+        source: ${AGENTS_HOME:-${CODEX_HOME:-${CLAUDE_HOME}}}
+        target: /mnt/host-agents
+      - codex_runtime_dev:/root/.codex
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
       - CODEX_BIN=codex
+      - CODEX_HOME=/root/.codex
+      - CODEX_RESOURCE_HOME=/mnt/host-codex
+      - CODEX_SKILLS_HOME=/mnt/host-agents/skills
       # container 需要接受 frontend-dev 透過 compose 內部網路連線，
       # 明確放寬成 0.0.0.0（僅限 container 內部，host 端仍只綁 127.0.0.1，見上）
       - BACKEND_BIND_HOST=0.0.0.0
@@ -90,15 +93,21 @@ services:
       - type: bind
         source: ${CLAUDE_HOME}
         target: /home/appuser/.claude
-      # 同 backend-dev：CODEX_HOME 選用，未設定時 fallback 回 CLAUDE_HOME
-      # 的路徑，避免沒用到 Codex 的人 docker-compose up 直接掛掉。
+      # 同 backend-dev：主機資源目錄與容器 Linux runtime 分離。
       - type: bind
         source: ${CODEX_HOME:-${CLAUDE_HOME}}
-        target: /home/appuser/.codex
+        target: /mnt/host-codex
+      - type: bind
+        source: ${AGENTS_HOME:-${CODEX_HOME:-${CLAUDE_HOME}}}
+        target: /mnt/host-agents
+      - codex_runtime:/home/appuser/.codex
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
       - CODEX_BIN=codex
+      - CODEX_HOME=/home/appuser/.codex
+      - CODEX_RESOURCE_HOME=/mnt/host-codex
+      - CODEX_SKILLS_HOME=/mnt/host-agents/skills
       - BACKEND_BIND_HOST=0.0.0.0
     deploy:
       resources:
@@ -154,3 +163,5 @@ services:
 
 volumes:
   frontend_node_modules:
+  codex_runtime_dev:
+  codex_runtime:

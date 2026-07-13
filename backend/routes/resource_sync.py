@@ -16,8 +16,12 @@ _sync_lock = asyncio.Lock()
 def _service() -> ResourceSyncService:
     import database
 
-    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
-    codex_skills = Path.home() / ".agents" / "skills"
+    codex_home = Path(
+        os.environ.get("CODEX_RESOURCE_HOME", os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    ).expanduser()
+    codex_skills = Path(
+        os.environ.get("CODEX_SKILLS_HOME", Path.home() / ".agents" / "skills")
+    ).expanduser()
     return ResourceSyncService(database.CLAUDE_HOME, codex_home, codex_skills)
 
 

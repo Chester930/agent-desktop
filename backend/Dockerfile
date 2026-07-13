@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # actually booted (ModuleNotFoundError on the first `python main.py`).
 # mcp_sync.py 和 engines/ package（可插拔 Claude/Codex 引擎）是後來加的，
 # 同樣的理由要一起 COPY，不然這個 image 一樣開機就死。
-COPY main.py database.py helpers.py session_pool.py memory_agent.py message_bus.py agency_agents_importer.py mcp_sync.py ./
+COPY main.py database.py helpers.py session_pool.py memory_agent.py message_bus.py agency_agents_importer.py mcp_sync.py codex_usage.py resource_sync.py ./
+COPY docker-entrypoint.sh ./
 COPY routes/ ./routes/
 COPY engines/ ./engines/
 COPY presets/ ./presets/
@@ -36,9 +37,10 @@ RUN existing_group="$(getent group ${DOCKER_GID} | cut -d: -f1)"; \
         existing_group=dockerhost; \
     fi; \
     useradd -m -u 1000 -G "$existing_group" appuser && \
-    chown -R appuser:appuser /app
+    mkdir -p /home/appuser/.codex /home/appuser/.agents/skills && \
+    chown -R appuser:appuser /app /home/appuser/.codex /home/appuser/.agents
 
 USER appuser
 
 EXPOSE 8765
-CMD ["python", "main.py"]
+CMD ["sh", "/app/docker-entrypoint.sh"]
