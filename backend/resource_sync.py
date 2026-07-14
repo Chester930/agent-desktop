@@ -17,7 +17,10 @@ actually installed. Each engine gets its own generated, engine-native copy:
 
 Every generated copy carries a managed marker; anything already present at a
 target that lacks the marker is treated as user-owned and is never overwritten
-(surfaced as a ``conflict`` instead).
+(surfaced as a ``conflict`` instead). When a registry source is deleted, its
+managed copies are pruned (see ``sync()``/``sync_agent()``/``sync_skill()``);
+unmanaged content at the same name is left alone and reported as ``*_only``
+(possibly importable via ``import_native()``) rather than removed.
 """
 
 from __future__ import annotations
@@ -179,6 +182,26 @@ def _skill_entry_hash(source: Path) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _skill_entry_file(directory: Path) -> Path | None:
+    """The single file used for identity/preview of a skill directory."""
+    if not directory.is_dir():
+        return None
+    for candidate in ("SKILL.md", "README.md"):
+        entry = directory / candidate
+        if entry.is_file():
+            return entry
+    return None
+
+
+def _read_text_or_none(path: Path | None) -> str | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 def _write_skill_payload(target: Path, payload: dict[str, bytes]) -> None:
     target.mkdir(parents=True, exist_ok=True)
     for relative, content in payload.items():
@@ -245,6 +268,10 @@ class ResourceSyncService:
             return {}
         return {p.stem: p for p in self.claude_agents.glob("*.md") if p.is_file()}
 
+    def _agent_source(self, name: str) -> Path | None:
+        p = self.claude_agents / f"{name}.md"
+        return p if p.is_file() else None
+
     def _agent_targets(self) -> dict[str, Path]:
         root = self.codex_home / "agents"
         if not root.exists():
@@ -263,6 +290,15 @@ class ResourceSyncService:
             ):
                 result[entry.name] = entry
         return result
+
+    def _skill_source(self, name: str) -> Path | None:
+        f = self.claude_skills / f"{name}.md"
+        if f.is_file():
+            return f
+        d = self.claude_skills / name
+        if d.is_dir() and ((d / "SKILL.md").is_file() or (d / "README.md").is_file()):
+            return d
+        return None
 
     def _skill_targets(self) -> dict[str, Path]:
         if not self.codex_skills.exists():
@@ -302,15 +338,107 @@ class ResourceSyncService:
     def _is_managed_skill(path: Path) -> bool:
         return (path / SKILL_MARKER).is_file()
 
+    # ── per-item render helpers ──────────────────────────────────────────────
+    # Shared by the full sync() sweep and the single-item sync_agent()/
+    # sync_skill() used by CRUD auto-sync, so both stay behaviourally
+    # identical without duplicating the create/update/conflict decision.
+
+    def _render_agent_to_codex(self, source: Path, target: Path, dry_run: bool) -> str | None:
+        if target.is_symlink():
+            return "conflicts"
+        expected = _agent_toml(source)
+        if target.exists() and (
+            target.read_text(encoding="utf-8") == expected or _agent_equivalent(source, target)
+        ):
+            return None
+        if target.exists() and not self._is_managed_agent(target):
+            return "conflicts"
+        action = "updated" if target.exists() else "created"
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(expected, encoding="utf-8")
+        return action
+
+    def _render_agent_to_claude_mirror(self, source: Path, target: Path, dry_run: bool) -> str | None:
+        if target.is_symlink():
+            return "conflicts"
+        if target.exists() and _claude_mirror_equivalent(source, target):
+            return None
+        if target.exists() and not _is_managed_claude_mirror(target):
+            return "conflicts"
+        action = "updated" if target.exists() else "created"
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(_claude_mirror_copy(source), encoding="utf-8")
+        return action
+
+    def _render_skill(self, source: Path, target: Path, dry_run: bool) -> str | None:
+        """Used for both Codex and Claude-mirror skill targets — identical
+        verbatim-payload-copy + marker-file semantics on both sides."""
+        source_hash = _skill_entry_hash(source)
+        target_valid = not target.is_symlink() and target.is_dir() and (target / "SKILL.md").is_file()
+        if target.exists() and target_valid and _skill_entry_hash(target) == source_hash:
+            return None
+        if target.exists() and not self._is_managed_skill(target):
+            return "conflicts"
+        action = "updated" if target.exists() else "created"
+        if not dry_run:
+            payload = _skill_payload(source)
+            if target.exists():
+                shutil.rmtree(target)
+            _write_skill_payload(target, payload)
+        return action
+
+    @staticmethod
+    def _prune_agent_target(target: Path, is_managed_fn, dry_run: bool) -> bool:
+        """Remove a render target whose registry source no longer exists —
+        but only if it's actually one of our own generated copies. Unmanaged
+        content (including symlinks, which we never touch) is left alone; it
+        surfaces as a plain ``*_only`` status entry instead, same as any other
+        engine-native resource with no registry counterpart."""
+        if not target.exists() or target.is_symlink() or not is_managed_fn(target):
+            return False
+        if not dry_run:
+            target.unlink()
+        return True
+
+    @staticmethod
+    def _prune_skill_target(target: Path, is_managed_fn, dry_run: bool) -> bool:
+        if not target.exists() or target.is_symlink() or not is_managed_fn(target):
+            return False
+        if not dry_run:
+            shutil.rmtree(target)
+        return True
+
+    @staticmethod
+    def _split_extra(names: set[str], targets: dict[str, Path], is_managed_fn) -> tuple[list[str], list[str]]:
+        """Split target-only names (no registry source) into genuinely
+        engine-native content (``*_only`` — a real import candidate) vs. a
+        stale copy Agent Desktop generated itself whose source has since been
+        deleted (``orphaned`` — pending cleanup on the next sync, never an
+        import candidate). Mirrors the eligibility check in
+        ``_prune_agent_target``/``_prune_skill_target`` exactly, so status()
+        never disagrees with what the next sync() would actually prune."""
+        foreign, orphaned = [], []
+        for name in sorted(names):
+            target = targets[name]
+            eligible = not target.is_symlink() and is_managed_fn(target)
+            (orphaned if eligible else foreign).append(name)
+        return foreign, orphaned
+
     def status(self) -> dict:
         agent_sources = self._agent_sources()
         agent_targets = self._agent_targets()
         skill_sources = self._skill_sources()
         skill_targets = self._skill_targets()
 
+        agent_extra = set(agent_targets) - set(agent_sources)
+        agent_codex_only, agent_orphaned = self._split_extra(
+            agent_extra, agent_targets, self._is_managed_agent
+        )
         agents = {
             "synced": [], "missing_in_codex": [], "outdated": [],
-            "conflicts": [], "codex_only": sorted(set(agent_targets) - set(agent_sources)),
+            "conflicts": [], "codex_only": agent_codex_only, "orphaned": agent_orphaned,
         }
         for name, source in sorted(agent_sources.items()):
             target = agent_targets.get(name)
@@ -325,9 +453,13 @@ class ResourceSyncService:
             else:
                 agents["conflicts"].append(name)
 
+        skill_extra = set(skill_targets) - set(skill_sources)
+        skill_codex_only, skill_orphaned = self._split_extra(
+            skill_extra, skill_targets, self._is_managed_skill
+        )
         skills = {
             "synced": [], "missing_in_codex": [], "outdated": [],
-            "conflicts": [], "codex_only": sorted(set(skill_targets) - set(skill_sources)),
+            "conflicts": [], "codex_only": skill_codex_only, "orphaned": skill_orphaned,
         }
         for name, source in sorted(skill_sources.items()):
             target = skill_targets.get(name)
@@ -358,9 +490,13 @@ class ResourceSyncService:
         skill_sources = self._skill_sources()
         skill_targets = self._claude_mirror_skill_targets()
 
+        agent_extra = set(agent_targets) - set(agent_sources)
+        agent_claude_only, agent_orphaned = self._split_extra(
+            agent_extra, agent_targets, _is_managed_claude_mirror
+        )
         agents = {
             "synced": [], "missing_in_claude": [], "outdated": [],
-            "conflicts": [], "claude_only": sorted(set(agent_targets) - set(agent_sources)),
+            "conflicts": [], "claude_only": agent_claude_only, "orphaned": agent_orphaned,
         }
         for name, source in sorted(agent_sources.items()):
             target = agent_targets.get(name)
@@ -375,9 +511,13 @@ class ResourceSyncService:
             else:
                 agents["conflicts"].append(name)
 
+        skill_extra = set(skill_targets) - set(skill_sources)
+        skill_claude_only, skill_orphaned = self._split_extra(
+            skill_extra, skill_targets, self._is_managed_skill
+        )
         skills = {
             "synced": [], "missing_in_claude": [], "outdated": [],
-            "conflicts": [], "claude_only": sorted(set(skill_targets) - set(skill_sources)),
+            "conflicts": [], "claude_only": skill_claude_only, "orphaned": skill_orphaned,
         }
         for name, source in sorted(skill_sources.items()):
             target = skill_targets.get(name)
@@ -401,46 +541,34 @@ class ResourceSyncService:
 
     def sync(self, dry_run: bool = False) -> dict:
         result = {
-            "agents": {"created": [], "updated": [], "conflicts": []},
-            "skills": {"created": [], "updated": [], "conflicts": []},
+            "agents": {"created": [], "updated": [], "conflicts": [], "pruned": []},
+            "skills": {"created": [], "updated": [], "conflicts": [], "pruned": []},
         }
+        agent_sources = self._agent_sources()
         agent_targets = self._agent_targets()
-        for name, source in sorted(self._agent_sources().items()):
+        for name, source in sorted(agent_sources.items()):
             target = agent_targets.get(name) or (self.codex_home / "agents" / f"{name}.toml")
-            expected = _agent_toml(source)
-            if target.is_symlink():
-                result["agents"]["conflicts"].append(name)
+            action = self._render_agent_to_codex(source, target, dry_run)
+            if action:
+                result["agents"][action].append(name)
+        for name, target in sorted(agent_targets.items()):
+            if name in agent_sources:
                 continue
-            if target.exists() and (
-                target.read_text(encoding="utf-8") == expected or _agent_equivalent(source, target)
-            ):
-                continue
-            if target.exists() and not self._is_managed_agent(target):
-                result["agents"]["conflicts"].append(name)
-                continue
-            action = "updated" if target.exists() else "created"
-            result["agents"][action].append(name)
-            if not dry_run:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(expected, encoding="utf-8")
+            if self._prune_agent_target(target, self._is_managed_agent, dry_run):
+                result["agents"]["pruned"].append(name)
 
+        skill_sources = self._skill_sources()
         skill_targets = self._skill_targets()
-        for name, source in sorted(self._skill_sources().items()):
+        for name, source in sorted(skill_sources.items()):
             target = skill_targets.get(name) or (self.codex_skills / name)
-            source_hash = _skill_entry_hash(source)
-            target_valid = not target.is_symlink() and target.is_dir() and (target / "SKILL.md").is_file()
-            if target.exists() and target_valid and _skill_entry_hash(target) == source_hash:
+            action = self._render_skill(source, target, dry_run)
+            if action:
+                result["skills"][action].append(name)
+        for name, target in sorted(skill_targets.items()):
+            if name in skill_sources:
                 continue
-            if target.exists() and not self._is_managed_skill(target):
-                result["skills"]["conflicts"].append(name)
-                continue
-            action = "updated" if target.exists() else "created"
-            result["skills"][action].append(name)
-            if not dry_run:
-                payload = _skill_payload(source)
-                if target.exists():
-                    shutil.rmtree(target)
-                _write_skill_payload(target, payload)
+            if self._prune_skill_target(target, self._is_managed_skill, dry_run):
+                result["skills"]["pruned"].append(name)
 
         if self.claude_native_home is not None:
             result["claude_mirror"] = self._sync_claude_mirror(dry_run)
@@ -448,44 +576,163 @@ class ResourceSyncService:
 
     def _sync_claude_mirror(self, dry_run: bool) -> dict:
         result = {
-            "agents": {"created": [], "updated": [], "conflicts": []},
-            "skills": {"created": [], "updated": [], "conflicts": []},
+            "agents": {"created": [], "updated": [], "conflicts": [], "pruned": []},
+            "skills": {"created": [], "updated": [], "conflicts": [], "pruned": []},
         }
+        agent_sources = self._agent_sources()
         agent_targets = self._claude_mirror_agent_targets()
-        for name, source in sorted(self._agent_sources().items()):
+        for name, source in sorted(agent_sources.items()):
             target = agent_targets.get(name) or (self.claude_native_home / "agents" / f"{name}.md")
-            if target.is_symlink():
-                result["agents"]["conflicts"].append(name)
+            action = self._render_agent_to_claude_mirror(source, target, dry_run)
+            if action:
+                result["agents"][action].append(name)
+        for name, target in sorted(agent_targets.items()):
+            if name in agent_sources:
                 continue
-            if target.exists() and _claude_mirror_equivalent(source, target):
+            if self._prune_agent_target(target, _is_managed_claude_mirror, dry_run):
+                result["agents"]["pruned"].append(name)
+
+        skill_sources = self._skill_sources()
+        skill_targets = self._claude_mirror_skill_targets()
+        for name, source in sorted(skill_sources.items()):
+            target = skill_targets.get(name) or (self.claude_native_home / "skills" / name)
+            action = self._render_skill(source, target, dry_run)
+            if action:
+                result["skills"][action].append(name)
+        for name, target in sorted(skill_targets.items()):
+            if name in skill_sources:
                 continue
-            if target.exists() and not _is_managed_claude_mirror(target):
-                result["agents"]["conflicts"].append(name)
-                continue
-            action = "updated" if target.exists() else "created"
-            result["agents"][action].append(name)
+            if self._prune_skill_target(target, self._is_managed_skill, dry_run):
+                result["skills"]["pruned"].append(name)
+        return result
+
+    # ── single-item sync (CRUD auto-sync) ────────────────────────────────────
+    # Renders (or, if the source was just deleted, prunes) exactly one named
+    # Agent/Skill across every render target — no full-directory listing of
+    # the registry or of any engine home, so a single save/delete stays O(1)
+    # in the number of *other* Agents/Skills instead of paying for a full
+    # sync() sweep every time. Behaviourally equivalent to sync() restricted
+    # to this one name (same render/conflict/prune helpers).
+
+    def sync_agent(self, name: str, dry_run: bool = False) -> dict:
+        result: dict[str, str | None] = {"codex": None, "claude_mirror": None}
+        source = self._agent_source(name)
+        codex_target = self.codex_home / "agents" / f"{name}.toml"
+        if source is not None:
+            result["codex"] = self._render_agent_to_codex(source, codex_target, dry_run)
+        elif self._prune_agent_target(codex_target, self._is_managed_agent, dry_run):
+            result["codex"] = "pruned"
+
+        if self.claude_native_home is not None:
+            mirror_target = self.claude_native_home / "agents" / f"{name}.md"
+            if source is not None:
+                result["claude_mirror"] = self._render_agent_to_claude_mirror(source, mirror_target, dry_run)
+            elif self._prune_agent_target(mirror_target, _is_managed_claude_mirror, dry_run):
+                result["claude_mirror"] = "pruned"
+        return result
+
+    def sync_skill(self, name: str, dry_run: bool = False) -> dict:
+        result: dict[str, str | None] = {"codex": None, "claude_mirror": None}
+        source = self._skill_source(name)
+        codex_target = self.codex_skills / name
+        if source is not None:
+            result["codex"] = self._render_skill(source, codex_target, dry_run)
+        elif self._prune_skill_target(codex_target, self._is_managed_skill, dry_run):
+            result["codex"] = "pruned"
+
+        if self.claude_native_home is not None:
+            mirror_target = self.claude_native_home / "skills" / name
+            if source is not None:
+                result["claude_mirror"] = self._render_skill(source, mirror_target, dry_run)
+            elif self._prune_skill_target(mirror_target, self._is_managed_skill, dry_run):
+                result["claude_mirror"] = "pruned"
+        return result
+
+    # ── conflict inspection + explicit single-target resolution ─────────────
+
+    def conflict_preview(self, kind: str, name: str) -> dict:
+        """Raw content of a name's registry source and its Codex / Claude-
+        mirror render targets (whichever exist), so the UI can show the user
+        *why* something is flagged as a conflict before they decide whether
+        to force-overwrite it. For skills, only the entry file (SKILL.md /
+        README.md) is read — a full-tree diff isn't a bounded-size operation
+        worth doing for a UI preview."""
+        if kind == "agent":
+            source = self._agent_source(name)
+            codex_target = self.codex_home / "agents" / f"{name}.toml"
+            mirror_target = (
+                self.claude_native_home / "agents" / f"{name}.md" if self.claude_native_home else None
+            )
+            return {
+                "registry": _read_text_or_none(source),
+                "codex": _read_text_or_none(codex_target),
+                "claude_mirror": _read_text_or_none(mirror_target),
+            }
+        if kind == "skill":
+            source = self._skill_source(name)
+            if source is None:
+                source_entry = None
+            elif source.is_file():
+                source_entry = source
+            else:
+                source_entry = _skill_entry_file(source)
+            codex_entry = _skill_entry_file(self.codex_skills / name)
+            mirror_entry = (
+                _skill_entry_file(self.claude_native_home / "skills" / name) if self.claude_native_home else None
+            )
+            return {
+                "registry": _read_text_or_none(source_entry),
+                "codex": _read_text_or_none(codex_entry),
+                "claude_mirror": _read_text_or_none(mirror_entry),
+            }
+        raise ValueError(f"unknown kind: {kind!r}")
+
+    def resolve_conflict(self, kind: str, name: str, target_engine: str, dry_run: bool = False) -> dict:
+        """Explicit, single-target force-overwrite for an item currently
+        flagged as a conflict. Only ever invoked from a direct user action —
+        never from the automatic CRUD-triggered sync — and only touches the
+        one target the caller names, bypassing the "never overwrite unmanaged
+        content" guard for that target alone so the user can consciously
+        replace their own hand-edited native copy with the registry's render
+        instead of being stuck in conflict forever."""
+        if target_engine not in ("codex", "claude_mirror"):
+            raise ValueError(f"unknown target_engine: {target_engine!r}")
+        if target_engine == "claude_mirror" and self.claude_native_home is None:
+            raise ValueError("claude_mirror target is not enabled for this registry")
+
+        if kind == "agent":
+            source = self._agent_source(name)
+            if source is None:
+                raise ValueError(f"no registry source for agent {name!r}")
+            if target_engine == "codex":
+                target = self.codex_home / "agents" / f"{name}.toml"
+                content = _agent_toml(source)
+            else:
+                target = self.claude_native_home / "agents" / f"{name}.md"
+                content = _claude_mirror_copy(source)
             if not dry_run:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(_claude_mirror_copy(source), encoding="utf-8")
+                target.write_text(content, encoding="utf-8")
+            return {"ok": True, "kind": kind, "name": name, "target": target_engine}
 
-        skill_targets = self._claude_mirror_skill_targets()
-        for name, source in sorted(self._skill_sources().items()):
-            target = skill_targets.get(name) or (self.claude_native_home / "skills" / name)
-            source_hash = _skill_entry_hash(source)
-            target_valid = not target.is_symlink() and target.is_dir() and (target / "SKILL.md").is_file()
-            if target.exists() and target_valid and _skill_entry_hash(target) == source_hash:
-                continue
-            if target.exists() and not self._is_managed_skill(target):
-                result["skills"]["conflicts"].append(name)
-                continue
-            action = "updated" if target.exists() else "created"
-            result["skills"][action].append(name)
+        if kind == "skill":
+            source = self._skill_source(name)
+            if source is None:
+                raise ValueError(f"no registry source for skill {name!r}")
+            root = self.codex_skills if target_engine == "codex" else self.claude_native_home / "skills"
+            target = root / name
             if not dry_run:
                 payload = _skill_payload(source)
-                if target.exists():
+                if target.exists() and not target.is_symlink():
                     shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
                 _write_skill_payload(target, payload)
-        return result
+            return {"ok": True, "kind": kind, "name": name, "target": target_engine}
+
+        raise ValueError(f"unknown kind: {kind!r}")
+
+    # ── one-time adoption of engine-native resources ─────────────────────────
 
     def import_native(self, dry_run: bool = False) -> dict:
         """Adopt engine-native Agents/Skills that have no counterpart in the

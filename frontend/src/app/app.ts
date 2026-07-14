@@ -7,7 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage, ConflictPreview
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -124,8 +124,30 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       ...(mirror?.skills.claude_only ?? []).map(name => ({ name, kind: 'skill' as const, from: 'claude' as const })),
     ];
   });
+  // orphaned：我們自己產生的副本，但來源已從 registry 刪除——下次按「同步」
+  // 就會被自動清掉，純粹是「待清理」提示，跟 codex_only（可匯入）語意不同，
+  // 不該混在同一個數字裡讓使用者誤以為要手動處理。
+  resourceOrphanedNames = computed(() => {
+    const status = this.resourceSyncStatus();
+    if (!status) return [];
+    const mirror = status.claude_mirror;
+    return [
+      ...status.agents.orphaned.map(name => ({ name, kind: 'agent' as const })),
+      ...status.skills.orphaned.map(name => ({ name, kind: 'skill' as const })),
+      ...(mirror?.agents.orphaned ?? []).map(name => ({ name, kind: 'agent' as const })),
+      ...(mirror?.skills.orphaned ?? []).map(name => ({ name, kind: 'skill' as const })),
+    ];
+  });
   resourceSyncDetailsExpanded = signal(false);
   resourceImportLoading = signal(false);
+
+  // 衝突預覽/解決——讓使用者在決定「覆蓋」之前，先看到 registry 內容跟引擎
+  // 端實際內容的差異，而不是只看到一個名字。
+  conflictPreviewOpen = signal(false);
+  conflictPreviewTarget = signal<{ kind: 'agent' | 'skill'; name: string } | null>(null);
+  conflictPreviewData = signal<ConflictPreview | null>(null);
+  conflictPreviewLoading = signal(false);
+  conflictResolveLoading = signal(false);
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
@@ -1653,6 +1675,51 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
+  // 衝突預覽/解決：先看 registry 內容跟引擎端實際內容差在哪，使用者確認後
+  // 才對「這一個名字、這一個引擎目標」強制覆蓋——絕不是自動同步的一部分。
+  openConflictPreview(kind: 'agent' | 'skill', name: string) {
+    this.conflictPreviewTarget.set({ kind, name });
+    this.conflictPreviewData.set(null);
+    this.conflictPreviewOpen.set(true);
+    this.conflictPreviewLoading.set(true);
+    this.claude.getConflictPreview(kind, name).subscribe({
+      next: (preview: ConflictPreview) => {
+        this.conflictPreviewLoading.set(false);
+        this.conflictPreviewData.set(preview);
+      },
+      error: (e) => {
+        this.conflictPreviewLoading.set(false);
+        this.showToast(`讀取衝突內容失敗：${e.error?.error || e.message || e}`, 'error');
+      },
+    });
+  }
+
+  closeConflictPreview() {
+    this.conflictPreviewOpen.set(false);
+    this.conflictPreviewTarget.set(null);
+    this.conflictPreviewData.set(null);
+  }
+
+  resolveConflictWith(target: 'codex' | 'claude_mirror') {
+    const t = this.conflictPreviewTarget();
+    if (!t) return;
+    const targetLabel = target === 'codex' ? 'Codex' : 'Claude';
+    if (!confirm(`用 registry 內容覆蓋 ${targetLabel} 端「${t.name}」的既有內容？這個動作無法復原。`)) return;
+    this.conflictResolveLoading.set(true);
+    this.claude.resolveConflict(t.kind, t.name, target).subscribe({
+      next: (result) => {
+        this.conflictResolveLoading.set(false);
+        this.resourceSyncStatus.set(result.status);
+        this.showToast(`已覆蓋 ${targetLabel} 端「${t.name}」`, 'success');
+        this.closeConflictPreview();
+      },
+      error: (e) => {
+        this.conflictResolveLoading.set(false);
+        this.showToast(`覆蓋失敗：${e.error?.error || e.message || e}`, 'error');
+      },
+    });
+  }
+
   toggleMemViewSection(key: string) {
     this.memViewExpanded.update(m => ({ ...m, [key]: !m[key] }));
   }
@@ -2064,6 +2131,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         next: () => { this.skillEditorOpen.set(false); this.claude.getSkills().subscribe(s => this.skills.set(s)); },
         error: (e) => this.showToast(`儲存 Skill 失敗: ${e.message ?? e}`, 'error'),
       });
+  }
+
+  deleteSkill(id: string) {
+    if (!confirm(`確定刪除 Skill「${id}」？已渲染到 Codex／Claude 的副本也會一併清除。`)) return;
+    this.claude.deleteSkill(id).subscribe({
+      next: () => {
+        this.skillEditorOpen.set(false);
+        this.claude.getSkills().subscribe(s => this.skills.set(s));
+      },
+      error: (e) => this.showToast(`刪除 Skill 失敗: ${e.message ?? e}`, 'error'),
+    });
   }
 
   skillEditorToggleList(field: 'memory' | 'mcp', value: string) {

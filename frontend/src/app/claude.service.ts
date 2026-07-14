@@ -47,6 +47,9 @@ export interface ResourceSyncGroupStatus {
   outdated: string[];
   conflicts: string[];
   codex_only: string[];
+  // 我們自己產生的副本，但來源已從 registry 刪除——下次同步會自動清掉，
+  // 跟 codex_only（引擎原生、可匯入）是兩種完全不同的狀態，不該混在一起顯示。
+  orphaned: string[];
 }
 // claude_mirror 用的是同一套分類邏輯，但欄位名稱對應到「Claude」而非「Codex」
 // （見 backend/resource_sync.py::_claude_mirror_status()）。
@@ -56,6 +59,7 @@ export interface ResourceSyncMirrorGroupStatus {
   outdated: string[];
   conflicts: string[];
   claude_only: string[];
+  orphaned: string[];
 }
 export interface ResourceSyncStatus {
   agents: ResourceSyncGroupStatus;
@@ -67,12 +71,15 @@ export interface ResourceSyncStatus {
     skills: ResourceSyncMirrorGroupStatus;
   };
 }
+export interface ResourceSyncResultGroup {
+  created: string[]; updated: string[]; conflicts: string[]; pruned: string[];
+}
 export interface ResourceSyncResult {
-  agents: { created: string[]; updated: string[]; conflicts: string[] };
-  skills: { created: string[]; updated: string[]; conflicts: string[] };
+  agents: ResourceSyncResultGroup;
+  skills: ResourceSyncResultGroup;
   claude_mirror?: {
-    agents: { created: string[]; updated: string[]; conflicts: string[] };
-    skills: { created: string[]; updated: string[]; conflicts: string[] };
+    agents: ResourceSyncResultGroup;
+    skills: ResourceSyncResultGroup;
   };
   dry_run: boolean;
   status: ResourceSyncStatus;
@@ -81,6 +88,18 @@ export interface ResourceImportResult {
   agents: { imported: string[]; skipped: string[] };
   skills: { imported: string[]; skipped: string[] };
   dry_run: boolean;
+  status: ResourceSyncStatus;
+}
+export interface ConflictPreview {
+  registry: string | null;
+  codex: string | null;
+  claude_mirror: string | null;
+}
+export interface ConflictResolveResult {
+  ok: boolean;
+  kind: 'agent' | 'skill';
+  name: string;
+  target: 'codex' | 'claude_mirror';
   status: ResourceSyncStatus;
 }
 
@@ -229,6 +248,16 @@ export class ClaudeService {
   importNativeResources(dryRun = false): Observable<ResourceImportResult> {
     return this.http.post<ResourceImportResult>(`${this.api}/resource-sync/import`, { dry_run: dryRun });
   }
+  getConflictPreview(kind: 'agent' | 'skill', name: string): Observable<ConflictPreview> {
+    return this.http.get<ConflictPreview>(`${this.api}/resource-sync/conflict/${kind}/${encodeURIComponent(name)}`);
+  }
+  resolveConflict(
+    kind: 'agent' | 'skill', name: string, target: 'codex' | 'claude_mirror'
+  ): Observable<ConflictResolveResult> {
+    return this.http.post<ConflictResolveResult>(
+      `${this.api}/resource-sync/conflict/${kind}/${encodeURIComponent(name)}/resolve`, { target }
+    );
+  }
 
   getEngineStatus(force = false): Observable<Record<string, EngineAvailability>> {
     const q = force ? '?force=1' : '';
@@ -245,6 +274,9 @@ export class ClaudeService {
   getSkill(id: string): Observable<Skill> { return this.http.get<Skill>(`${this.api}/skills/${id}`); }
   updateSkill(id: string, data: Partial<Skill>): Observable<{ ok: boolean }> {
     return this.http.put<{ ok: boolean }>(`${this.api}/skills/${id}`, data);
+  }
+  deleteSkill(id: string): Observable<{ ok: boolean }> {
+    return this.http.delete<{ ok: boolean }>(`${this.api}/skills/${id}`);
   }
   getSessions(q = '', offset = 0): Observable<{ items: Session[]; has_more: boolean }> {
     const params = new URLSearchParams();

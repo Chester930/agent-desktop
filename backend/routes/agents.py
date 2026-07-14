@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re as _re
+import shutil
 from pathlib import Path
 
 from aiohttp import web
@@ -46,14 +47,28 @@ def _dirs():
     return _db.REGISTRY_AGENTS_DIR, _db.REGISTRY_SKILLS_DIR
 
 
-async def _trigger_resource_sync() -> None:
-    """Best-effort auto-render of the registry into every native engine home
-    right after a CRUD write. Never raises — a sync hiccup must not fail the
-    save the user just made; the manual "檢查/同步" button in the sidebar
-    remains available to retry and to surface any conflict that blocked it."""
+async def _trigger_agent_sync(name: str) -> None:
+    """Best-effort auto-render of a single Agent into every native engine home
+    right after a CRUD write (create/update/delete). Never raises — a sync
+    hiccup must not fail the save the user just made; the manual "檢查/同步"
+    button in the sidebar remains available to retry and to surface any
+    conflict that blocked it. Uses sync_agent() rather than a full sync() so
+    one save doesn't pay for a full-registry directory scan — and, since
+    sync_agent() prunes when the source no longer exists, this same call
+    handles delete too instead of leaving orphaned Codex/Claude-mirror copies
+    behind."""
     try:
         from routes.resource_sync import _service
-        await asyncio.to_thread(_service().sync, False)
+        await asyncio.to_thread(_service().sync_agent, name, False)
+    except Exception:
+        pass
+
+
+async def _trigger_skill_sync(name: str) -> None:
+    """Same as ``_trigger_agent_sync`` but for a single Skill."""
+    try:
+        from routes.resource_sync import _service
+        await asyncio.to_thread(_service().sync_skill, name, False)
     except Exception:
         pass
 
@@ -129,7 +144,7 @@ async def handle_agent_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
-    await _trigger_resource_sync()
+    await _trigger_agent_sync(aid)
     return web.json_response({"ok": True})
 
 
@@ -156,7 +171,7 @@ async def handle_agent_post(request: web.Request) -> web.Response:
         f"soul: \nskills: []\nmemory: []\nmcp: []\noutput_memory: []\n{engine_line}---\n\n## {name}\n\n{desc}\n",
         encoding="utf-8"
     )
-    await _trigger_resource_sync()
+    await _trigger_agent_sync(name)
     return web.json_response({"ok": True, "id": name})
 
 
@@ -168,6 +183,10 @@ async def handle_agent_delete(request: web.Request) -> web.Response:
     f = AGENTS_DIR / f"{aid}.md"
     if f.exists():
         f.unlink()
+    # Prune the now-orphaned Codex TOML / Claude-mirror copies too — without
+    # this, a deleted Agent used to keep existing forever on the Codex side
+    # (sync() only ever created/updated, never removed).
+    await _trigger_agent_sync(aid)
     return web.json_response({"ok": True})
 
 
@@ -376,7 +395,25 @@ async def handle_skill_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
-    await _trigger_resource_sync()
+    await _trigger_skill_sync(sid)
+    return web.json_response({"ok": True})
+
+
+async def handle_skill_delete(request: web.Request) -> web.Response:
+    _, SKILLS_DIR = _dirs()
+    sid = request.match_info["id"]
+    if not sid or "/" in sid or "\\" in sid or ".." in sid:
+        return web.json_response({"error": "invalid id"}, status=400)
+    f = SKILLS_DIR / f"{sid}.md"
+    if f.exists():
+        f.unlink()
+    else:
+        d = SKILLS_DIR / sid
+        if d.is_dir():
+            shutil.rmtree(d)
+    # Same reasoning as handle_agent_delete: prune the now-orphaned Codex /
+    # Claude-mirror copies instead of leaving them behind forever.
+    await _trigger_skill_sync(sid)
     return web.json_response({"ok": True})
 
 
@@ -408,3 +445,4 @@ def register_skill_routes(app: web.Application, cors_add) -> None:
     cors_add(app.router.add_get("/api/skills",            handle_skills))
     cors_add(app.router.add_get("/api/skills/{id}",       handle_skill_get))
     cors_add(app.router.add_put("/api/skills/{id}",       handle_skill_put))
+    cors_add(app.router.add_delete("/api/skills/{id}",    handle_skill_delete))

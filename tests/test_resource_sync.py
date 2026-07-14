@@ -1,4 +1,7 @@
+import shutil
 from pathlib import Path
+
+import pytest
 
 from resource_sync import ResourceSyncService
 
@@ -251,3 +254,246 @@ def test_equivalent_unmanaged_codex_agent_is_already_synced(tmp_path):
 
     assert service.status()["agents"]["synced"] == ["planner"]
     assert service.sync(dry_run=True)["agents"]["conflicts"] == []
+
+
+# ── deletion pruning ─────────────────────────────────────────────────────────
+# Deleting a registry Agent/Skill used to leave its Codex TOML / Claude-mirror
+# copy on disk forever (sync() only ever created/updated, never removed).
+# These tests cover the fix: a managed copy whose source has disappeared gets
+# pruned on the next sync(); an unmanaged one (real user content sharing the
+# same name) is left alone and surfaces as a plain "*_only" status entry.
+
+def test_sync_prunes_managed_codex_agent_after_source_deleted(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    source = claude / "agents" / "planner.md"
+    target = codex / "agents" / "planner.toml"
+
+    _write(source, "---\nname: planner\n---\n\nBody\n")
+    service = ResourceSyncService(claude, codex, shared)
+    service.sync()
+    assert target.exists()
+
+    source.unlink()
+    result = service.sync()
+
+    assert result["agents"]["pruned"] == ["planner"]
+    assert not target.exists()
+
+
+def test_sync_prunes_managed_codex_skill_after_source_deleted(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(claude / "skills" / "tdd" / "SKILL.md", "# TDD\n")
+    service = ResourceSyncService(claude, codex, shared)
+    service.sync()
+    assert (shared / "tdd").exists()
+
+    shutil.rmtree(claude / "skills" / "tdd")
+    result = service.sync()
+
+    assert result["skills"]["pruned"] == ["tdd"]
+    assert not (shared / "tdd").exists()
+
+
+def test_sync_never_prunes_unmanaged_codex_copy_after_source_deleted(tmp_path):
+    """A same-named Codex-native agent the user made by hand must survive a
+    registry-side delete — it's not our copy to remove, and it becomes a
+    plain 'codex_only' entry, not a resurrection candidate for import_native()
+    (that distinction is exactly what the managed marker is for)."""
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    source = claude / "agents" / "planner.md"
+    target = codex / "agents" / "planner.toml"
+
+    _write(source, "---\nname: planner\n---\n\nBody\n")
+    _write(target, 'name = "planner"\ndeveloper_instructions = "Hand-written, not ours."\n')
+    service = ResourceSyncService(claude, codex, shared)
+
+    source.unlink()
+    result = service.sync()
+
+    assert result["agents"]["pruned"] == []
+    assert target.read_text(encoding="utf-8") == 'name = "planner"\ndeveloper_instructions = "Hand-written, not ours."\n'
+    assert service.status()["agents"]["codex_only"] == ["planner"]
+
+
+def test_sync_prunes_claude_mirror_copy_after_source_deleted(tmp_path):
+    registry = tmp_path / "registry"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    claude_native = tmp_path / "real-claude"
+
+    source = registry / "agents" / "planner.md"
+    _write(source, "---\nname: planner\n---\n\nBody\n")
+    service = ResourceSyncService(registry, codex, shared, claude_native_home=claude_native)
+    service.sync()
+    mirror_target = claude_native / "agents" / "planner.md"
+    assert mirror_target.exists()
+
+    source.unlink()
+    result = service.sync()
+
+    assert result["claude_mirror"]["agents"]["pruned"] == ["planner"]
+    assert not mirror_target.exists()
+
+
+# ── status(): orphaned vs. genuinely-foreign target-only entries ────────────
+
+def test_status_separates_orphaned_managed_copy_from_codex_only(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(claude / "agents" / "planner.md", "---\nname: planner\n---\n\nBody\n")
+    _write(codex / "agents" / "reviewer.toml", 'name = "reviewer"\n')  # genuinely foreign, unmanaged
+    service = ResourceSyncService(claude, codex, shared)
+    service.sync()
+    (claude / "agents" / "planner.md").unlink()
+
+    status = service.status()
+
+    assert status["agents"]["orphaned"] == ["planner"]
+    assert status["agents"]["codex_only"] == ["reviewer"]
+
+
+# ── single-item sync_agent()/sync_skill(): CRUD auto-sync without a full scan
+
+def test_sync_agent_renders_single_item_without_touching_others(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(claude / "agents" / "planner.md", "---\nname: planner\ndescription: Plans\n---\n\nBody\n")
+    _write(claude / "agents" / "reviewer.md", "---\nname: reviewer\n---\n\nOther body\n")
+    service = ResourceSyncService(claude, codex, shared)
+
+    result = service.sync_agent("planner")
+
+    assert result["codex"] == "created"
+    assert (codex / "agents" / "planner.toml").exists()
+    assert not (codex / "agents" / "reviewer.toml").exists()
+
+
+def test_sync_agent_prunes_when_source_deleted(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    source = claude / "agents" / "planner.md"
+    target = codex / "agents" / "planner.toml"
+
+    _write(source, "---\nname: planner\n---\n\nBody\n")
+    service = ResourceSyncService(claude, codex, shared)
+    service.sync_agent("planner")
+    assert target.exists()
+
+    source.unlink()
+    result = service.sync_agent("planner")
+
+    assert result["codex"] == "pruned"
+    assert not target.exists()
+
+
+def test_sync_skill_renders_single_item_without_touching_others(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(claude / "skills" / "tdd" / "SKILL.md", "# TDD\n")
+    _write(claude / "skills" / "other" / "SKILL.md", "# Other\n")
+    service = ResourceSyncService(claude, codex, shared)
+
+    result = service.sync_skill("tdd")
+
+    assert result["codex"] == "created"
+    assert (shared / "tdd").exists()
+    assert not (shared / "other").exists()
+
+
+def test_sync_agent_single_item_matches_full_sync_across_many_items(tmp_path):
+    """sync_agent(name) must be behaviourally identical to sync() restricted
+    to that one name — this is the contract that makes it safe to use from
+    CRUD routes instead of a full sweep."""
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    for i in range(5):
+        _write(claude / "agents" / f"agent-{i}.md", f"---\nname: agent-{i}\n---\n\nBody {i}\n")
+
+    full_service = ResourceSyncService(claude, codex, shared)
+    full_service.sync()
+
+    targeted_claude = tmp_path / "targeted" / ".claude"
+    targeted_codex = tmp_path / "targeted" / ".codex"
+    targeted_shared = tmp_path / "targeted" / ".agents" / "skills"
+    for i in range(5):
+        _write(targeted_claude / "agents" / f"agent-{i}.md", f"---\nname: agent-{i}\n---\n\nBody {i}\n")
+    targeted_service = ResourceSyncService(targeted_claude, targeted_codex, targeted_shared)
+    for i in range(5):
+        targeted_service.sync_agent(f"agent-{i}")
+
+    for i in range(5):
+        assert (codex / "agents" / f"agent-{i}.toml").read_text(encoding="utf-8") == (
+            targeted_codex / "agents" / f"agent-{i}.toml"
+        ).read_text(encoding="utf-8")
+
+
+# ── conflict preview + explicit single-target resolve ───────────────────────
+
+def test_conflict_preview_returns_registry_and_native_content(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(claude / "agents" / "planner.md", "---\nname: planner\n---\n\nRegistry body\n")
+    _write(codex / "agents" / "planner.toml", 'name = "planner"\ndeveloper_instructions = "Hand-written body"\n')
+    service = ResourceSyncService(claude, codex, shared)
+
+    preview = service.conflict_preview("agent", "planner")
+
+    assert "Registry body" in preview["registry"]
+    assert "Hand-written body" in preview["codex"]
+    assert preview["claude_mirror"] is None
+
+
+def test_resolve_conflict_overwrites_only_the_named_target(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(claude / "agents" / "planner.md", "---\nname: planner\ndescription: Plans\n---\n\nRegistry body\n")
+    _write(codex / "agents" / "planner.toml", 'name = "planner"\ndeveloper_instructions = "Hand-written body"\n')
+    service = ResourceSyncService(claude, codex, shared)
+    assert service.status()["agents"]["conflicts"] == ["planner"]
+
+    result = service.resolve_conflict("agent", "planner", "codex")
+
+    assert result["ok"] is True
+    assert "Registry body" in (codex / "agents" / "planner.toml").read_text(encoding="utf-8")
+    assert service.status()["agents"]["synced"] == ["planner"]
+
+
+def test_resolve_conflict_rejects_unknown_target(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    _write(claude / "agents" / "planner.md", "---\nname: planner\n---\n\nBody\n")
+    service = ResourceSyncService(claude, codex, shared)
+
+    with pytest.raises(ValueError):
+        service.resolve_conflict("agent", "planner", "not-a-real-target")
+
+
+def test_resolve_conflict_rejects_claude_mirror_target_when_not_decoupled(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    _write(claude / "agents" / "planner.md", "---\nname: planner\n---\n\nBody\n")
+    service = ResourceSyncService(claude, codex, shared)
+
+    with pytest.raises(ValueError):
+        service.resolve_conflict("agent", "planner", "claude_mirror")

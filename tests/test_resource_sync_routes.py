@@ -96,3 +96,64 @@ async def test_service_wires_claude_native_home_when_registry_is_decoupled(monke
 
     assert service.claude_home == decoupled_registry
     assert service.claude_native_home == real_claude_home
+
+
+# ── conflict preview + resolve routes ───────────────────────────────────────
+
+class FakeConflictService:
+    def conflict_preview(self, kind, name):
+        assert kind == "agent" and name == "planner"
+        return {"registry": "registry body", "codex": "hand-written", "claude_mirror": None}
+
+    def resolve_conflict(self, kind, name, target, dry_run=False):
+        assert kind == "agent" and name == "planner" and target == "codex"
+        return {"ok": True, "kind": kind, "name": name, "target": target}
+
+    def status(self):
+        return {"agents": {}, "skills": {}}
+
+
+async def test_conflict_preview_route(client, monkeypatch):
+    monkeypatch.setattr(routes, "_service", lambda: FakeConflictService())
+    response = await client.get("/api/resource-sync/conflict/agent/planner")
+    assert response.status == 200
+    body = await response.json()
+    assert body["registry"] == "registry body"
+    assert body["codex"] == "hand-written"
+
+
+async def test_conflict_preview_route_rejects_unknown_kind(client, monkeypatch):
+    monkeypatch.setattr(routes, "_service", lambda: FakeConflictService())
+    response = await client.get("/api/resource-sync/conflict/not-a-kind/planner")
+    assert response.status == 400
+
+
+async def test_conflict_resolve_route(client, monkeypatch):
+    monkeypatch.setattr(routes, "_service", lambda: FakeConflictService())
+    response = await client.post(
+        "/api/resource-sync/conflict/agent/planner/resolve", json={"target": "codex"}
+    )
+    assert response.status == 200
+    body = await response.json()
+    assert body["ok"] is True
+    assert body["status"] == {"agents": {}, "skills": {}}
+
+
+async def test_conflict_resolve_route_rejects_unknown_target(client, monkeypatch):
+    monkeypatch.setattr(routes, "_service", lambda: FakeConflictService())
+    response = await client.post(
+        "/api/resource-sync/conflict/agent/planner/resolve", json={"target": "not-a-target"}
+    )
+    assert response.status == 400
+
+
+async def test_conflict_resolve_route_surfaces_service_value_error(client, monkeypatch):
+    class RaisingService(FakeConflictService):
+        def resolve_conflict(self, kind, name, target, dry_run=False):
+            raise ValueError("no registry source for agent 'planner'")
+
+    monkeypatch.setattr(routes, "_service", lambda: RaisingService())
+    response = await client.post(
+        "/api/resource-sync/conflict/agent/planner/resolve", json={"target": "codex"}
+    )
+    assert response.status == 400

@@ -1405,6 +1405,9 @@
                   @if (resourceImportableNames().length) {
                     · <span style="color:#7aa8d4;cursor:pointer;" (click)="toggleResourceSyncDetails()" title="引擎原生已有、registry 裡還沒有——可以匯入">可匯入 {{ resourceImportableNames().length }}</span>
                   }
+                  @if (resourceOrphanedNames().length) {
+                    · <span style="color:#666;cursor:pointer;" (click)="toggleResourceSyncDetails()" title="來源已從單一來源刪除、但引擎端副本還沒清掉——下次按「同步」會自動清除，不需要手動處理">待清理 {{ resourceOrphanedNames().length }}</span>
+                  }
                 }
               </span>
               <button class="btn-secondary btn-xs" (click)="loadResourceSyncStatus()" [disabled]="resourceSyncLoading()" title="重新比較單一來源與各引擎原生資源">檢查</button>
@@ -1420,7 +1423,9 @@
             @if (resourceSyncDetailsExpanded() && resourceSyncStatus()) {
               <div style="padding:4px 10px 8px 10px;display:flex;flex-direction:column;gap:3px;max-height:160px;overflow-y:auto;">
                 @for (item of resourceSyncConflictNames(); track item.kind + item.name) {
-                  <div style="color:#e07070;">衝突 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }}</div>
+                  <div style="color:#e07070;cursor:pointer;" (click)="openConflictPreview(item.kind, item.name)" title="點擊查看 registry 與引擎端實際內容，並選擇是否覆蓋">
+                    衝突 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }} <span style="color:#888;">（查看）</span>
+                  </div>
                 }
                 @for (item of resourceSyncPendingNames(); track item.kind + item.name) {
                   <div style="color:#d4a853;">待同步 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }}</div>
@@ -1428,7 +1433,10 @@
                 @for (item of resourceImportableNames(); track item.kind + item.name) {
                   <div style="color:#7aa8d4;">可匯入 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }}（來自 {{ item.from === 'codex' ? 'Codex' : 'Claude' }}）</div>
                 }
-                @if (!resourceSyncConflictNames().length && !resourceSyncPendingNames().length && !resourceImportableNames().length) {
+                @for (item of resourceOrphanedNames(); track item.kind + item.name) {
+                  <div style="color:#666;">待清理 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }}（下次同步自動清除）</div>
+                }
+                @if (!resourceSyncConflictNames().length && !resourceSyncPendingNames().length && !resourceImportableNames().length && !resourceOrphanedNames().length) {
                   <div style="color:#666;">已全部同步，沒有待處理項目。</div>
                 }
               </div>
@@ -2579,9 +2587,64 @@
         </div>
       </div>
       <div class="editor-modal-footer">
+        <button class="btn-danger" (click)="deleteSkill(skillEditorData().id!)">刪除</button>
         <div style="flex:1"></div>
         <button class="btn-secondary" (click)="skillEditorOpen.set(false)">取消</button>
         <button class="btn-primary" (click)="saveSkillEditor()">儲存</button>
+      </div>
+    </div>
+  }
+
+  <!-- ── 衝突預覽 / 解決 Modal ─────────────────────────────────────────────── -->
+  @if (conflictPreviewOpen()) {
+    <div class="editor-modal-overlay" (click)="closeConflictPreview()"></div>
+    <div class="editor-modal" (click)="$event.stopPropagation()">
+      <div class="editor-modal-header">
+        <span class="editor-modal-title">
+          衝突內容比對 · {{ conflictPreviewTarget()?.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ conflictPreviewTarget()?.name }}
+        </span>
+        <button class="usage-modal-close" (click)="closeConflictPreview()">✕</button>
+      </div>
+      <div class="editor-modal-body">
+        @if (conflictPreviewLoading()) {
+          <div style="color:#888;padding:12px 0;">載入中…</div>
+        } @else if (conflictPreviewData()) {
+          <div style="color:#888;font-size:11px;margin-bottom:8px;">
+            單一來源（registry）的內容 vs. 各引擎端實際擁有的內容——同名但內容不同才會被判定為衝突，選擇要覆蓋哪一邊，或直接取消保留現狀。
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <div style="color:#aaa;font-size:11px;margin-bottom:3px;">Registry（單一來源）</div>
+              <pre style="background:#111;padding:8px;border-radius:4px;max-height:140px;overflow:auto;white-space:pre-wrap;font-size:11px;">{{ conflictPreviewData()?.registry ?? '（不存在）' }}</pre>
+            </div>
+            <div>
+              <div style="display:flex;align-items:center;gap:8px;color:#aaa;font-size:11px;margin-bottom:3px;">
+                <span style="flex:1;">Codex 端實際內容</span>
+                @if (conflictPreviewData()?.codex !== null) {
+                  <button class="btn-secondary btn-xs" [disabled]="conflictResolveLoading()" (click)="resolveConflictWith('codex')" title="用 registry 內容覆蓋 Codex 端這個副本">
+                    覆蓋 Codex
+                  </button>
+                }
+              </div>
+              <pre style="background:#111;padding:8px;border-radius:4px;max-height:140px;overflow:auto;white-space:pre-wrap;font-size:11px;">{{ conflictPreviewData()?.codex ?? '（不存在）' }}</pre>
+            </div>
+            @if (conflictPreviewData()?.claude_mirror !== null) {
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;color:#aaa;font-size:11px;margin-bottom:3px;">
+                  <span style="flex:1;">Claude 鏡像端實際內容</span>
+                  <button class="btn-secondary btn-xs" [disabled]="conflictResolveLoading()" (click)="resolveConflictWith('claude_mirror')" title="用 registry 內容覆蓋 Claude 鏡像端這個副本">
+                    覆蓋 Claude
+                  </button>
+                </div>
+                <pre style="background:#111;padding:8px;border-radius:4px;max-height:140px;overflow:auto;white-space:pre-wrap;font-size:11px;">{{ conflictPreviewData()?.claude_mirror }}</pre>
+              </div>
+            }
+          </div>
+        }
+      </div>
+      <div class="editor-modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn-secondary" (click)="closeConflictPreview()">關閉</button>
       </div>
     </div>
   }

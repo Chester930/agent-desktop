@@ -265,6 +265,23 @@ class TestAgentCRUD:
         assert resp.status == 200
         assert not (tmp_claude_home / "agents" / "to-delete.md").exists()
 
+    async def test_delete_agent_prunes_codex_copy(self, client, tmp_claude_home):
+        """回歸測試：刪除 Agent 後，之前渲染到 Codex 的 TOML 副本不該永遠留在
+        硬碟上——handle_agent_delete 現在會呼叫 sync_agent() 清掉孤兒副本。"""
+        import os
+        import main
+        main.AGENTS_DIR = tmp_claude_home / "agents"
+        payload = {"name": "to-delete-2", "description": "要刪除"}
+        resp = await client.post("/api/agents", json=payload)
+        assert resp.status == 200
+
+        codex_target = Path(os.environ["CODEX_RESOURCE_HOME"]) / "agents" / "to-delete-2.toml"
+        assert codex_target.exists()
+
+        resp = await client.delete("/api/agents/to-delete-2")
+        assert resp.status == 200
+        assert not codex_target.exists()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Phase 1 — Skill CRUD
@@ -304,6 +321,36 @@ class TestSkillCRUD:
         resp = await client.get("/api/skills/test-skill")
         body = await resp.json()
         assert "output_memory" in body
+
+    async def test_delete_skill(self, client, tmp_claude_home):
+        import main
+        main.SKILLS_DIR = tmp_claude_home / "skills"
+        skill_dir = tmp_claude_home / "skills" / "to-delete-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# To delete\n", encoding="utf-8")
+
+        resp = await client.delete("/api/skills/to-delete-skill")
+        assert resp.status == 200
+        assert not skill_dir.exists()
+
+    async def test_delete_skill_prunes_codex_copy(self, client, tmp_claude_home):
+        """回歸測試：對應 test_delete_agent_prunes_codex_copy，Skill 端也要在
+        刪除後清掉之前渲染到 Codex 的目錄副本。"""
+        import os
+        import main
+        main.SKILLS_DIR = tmp_claude_home / "skills"
+        skill_dir = tmp_claude_home / "skills" / "to-delete-skill-2"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# To delete 2\n", encoding="utf-8")
+
+        resp = await client.put("/api/skills/to-delete-skill-2", json={"description": "trigger sync"})
+        assert resp.status == 200
+        codex_target = Path(os.environ["CODEX_SKILLS_HOME"]) / "to-delete-skill-2"
+        assert codex_target.exists()
+
+        resp = await client.delete("/api/skills/to-delete-skill-2")
+        assert resp.status == 200
+        assert not codex_target.exists()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
