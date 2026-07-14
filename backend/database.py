@@ -30,8 +30,29 @@ SESSION_NAMES_FILE = CLAUDE_HOME / "session_names.json"
 SOUL_FILE          = CLAUDE_HOME / "soul.md"
 SOULS_DIR          = CLAUDE_HOME / "souls"
 
+
+def _resolve_registry_home(default: Path) -> Path:
+    """Agent/Skill 的單一來源（registry）預設等於 claudeHome（向後相容、零成本
+    升級：既有使用者的 Agent/Skill 位置完全不變）。使用者若不想讓資源綁在
+    Claude Code 的原生目錄底下（例如只用 Codex），可以透過設定裡的
+    registryHome 指到獨立路徑；此時 Claude 端會改由 resource sync 產生鏡像
+    副本，而不是直接讀寫同一份檔案。"""
+    try:
+        raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("registryHome", "").strip()
+        if raw:
+            p = Path(raw).expanduser()
+            if p.is_dir():
+                return p
+    except Exception:
+        pass
+    return default
+
+REGISTRY_HOME       = _resolve_registry_home(CLAUDE_HOME)
+REGISTRY_AGENTS_DIR = REGISTRY_HOME / "agents"
+REGISTRY_SKILLS_DIR = REGISTRY_HOME / "skills"
+
 def update_paths(value: Path):
-    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR, LOCAL_MCP_CONFIG_FILE, MCP_SERVERS_FILE, _INDEX_DB
+    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR, LOCAL_MCP_CONFIG_FILE, MCP_SERVERS_FILE, _INDEX_DB, REGISTRY_HOME, REGISTRY_AGENTS_DIR, REGISTRY_SKILLS_DIR
     CLAUDE_HOME = value
     AGENTS_DIR = value / "agents"
     SKILLS_DIR = value / "skills"
@@ -44,6 +65,9 @@ def update_paths(value: Path):
     LOCAL_MCP_CONFIG_FILE = value / "claude-desktop-local-mcps.json"
     MCP_SERVERS_FILE = value / "claude-desktop-mcp-servers.json"
     _INDEX_DB = value / "claude-desktop-index.db"
+    REGISTRY_HOME = _resolve_registry_home(CLAUDE_HOME)
+    REGISTRY_AGENTS_DIR = REGISTRY_HOME / "agents"
+    REGISTRY_SKILLS_DIR = REGISTRY_HOME / "skills"
 
 def _safe_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
     """原子寫入檔案，避免寫入中途崩潰時造成設定檔損毀"""

@@ -546,16 +546,16 @@ class TestHRAgent:
 
     async def test_agents_registry_empty_when_no_agents(self, client, tmp_claude_home):
         """如果 agents 目錄下沒有 .md 檔，回傳空列表"""
-        import main
-        # 暫時指向空目錄
+        import database
+        # 暫時指向空目錄（CRUD/registry 讀寫已改走 REGISTRY_AGENTS_DIR，見 ADR-003）
         empty_dir = tmp_claude_home / "agents_empty"
         empty_dir.mkdir(exist_ok=True)
-        original = main.AGENTS_DIR
-        main.AGENTS_DIR = empty_dir
+        original = database.REGISTRY_AGENTS_DIR
+        database.REGISTRY_AGENTS_DIR = empty_dir
         resp = await client.get("/api/agents/registry")
         body = await resp.json()
         assert body == []
-        main.AGENTS_DIR = original
+        database.REGISTRY_AGENTS_DIR = original
 
     async def test_hr_dispatch_requires_task(self, client):
         """POST /api/hr/dispatch 不帶 task 應回傳 400"""
@@ -566,18 +566,18 @@ class TestHRAgent:
 
     async def test_hr_dispatch_no_agents_500(self, client, tmp_claude_home):
         """沒有任何 agent 時 HR dispatch 應回傳錯誤（不需要呼叫 Claude CLI）"""
-        import main
+        import database
         empty_dir = tmp_claude_home / "agents_empty"
         empty_dir.mkdir(exist_ok=True)
-        original = main.AGENTS_DIR
-        main.AGENTS_DIR = empty_dir
+        original = database.REGISTRY_AGENTS_DIR
+        database.REGISTRY_AGENTS_DIR = empty_dir
         resp = await client.post("/api/hr/dispatch", json={"task": "任意任務"})
         body = await resp.json()
         # 預期 500 + error 含有「尚未建立」
         assert resp.status == 500
         assert "error" in body
         assert "Agent" in body["error"] or "agent" in body["error"].lower()
-        main.AGENTS_DIR = original
+        database.REGISTRY_AGENTS_DIR = original
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -93,6 +93,39 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!status) return 0;
     return status.agents.conflicts.length + status.skills.conflicts.length;
   });
+  // 衝突/待同步的實際名稱（不只是數字），讓使用者知道具體是哪個 Agent/Skill 卡住
+  resourceSyncConflictNames = computed(() => {
+    const status = this.resourceSyncStatus();
+    if (!status) return [];
+    return [
+      ...status.agents.conflicts.map(name => ({ name, kind: 'agent' as const })),
+      ...status.skills.conflicts.map(name => ({ name, kind: 'skill' as const })),
+    ];
+  });
+  resourceSyncPendingNames = computed(() => {
+    const status = this.resourceSyncStatus();
+    if (!status) return [];
+    return [
+      ...status.agents.missing_in_codex.map(name => ({ name, kind: 'agent' as const })),
+      ...status.agents.outdated.map(name => ({ name, kind: 'agent' as const })),
+      ...status.skills.missing_in_codex.map(name => ({ name, kind: 'skill' as const })),
+      ...status.skills.outdated.map(name => ({ name, kind: 'skill' as const })),
+    ];
+  });
+  // codex_only：Codex 原生已有、但 registry 裡還沒有對應項目——可以「匯入」
+  resourceImportableNames = computed(() => {
+    const status = this.resourceSyncStatus();
+    if (!status) return [];
+    const mirror = status.claude_mirror;
+    return [
+      ...status.agents.codex_only.map(name => ({ name, kind: 'agent' as const, from: 'codex' as const })),
+      ...status.skills.codex_only.map(name => ({ name, kind: 'skill' as const, from: 'codex' as const })),
+      ...(mirror?.agents.claude_only ?? []).map(name => ({ name, kind: 'agent' as const, from: 'claude' as const })),
+      ...(mirror?.skills.claude_only ?? []).map(name => ({ name, kind: 'skill' as const, from: 'claude' as const })),
+    ];
+  });
+  resourceSyncDetailsExpanded = signal(false);
+  resourceImportLoading = signal(false);
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
@@ -1589,6 +1622,33 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       error: (e) => {
         this.resourceSyncLoading.set(false);
         this.showToast(`同步失敗：${e.error?.error || e.message || e}`, 'error');
+      },
+    });
+  }
+
+  toggleResourceSyncDetails() {
+    this.resourceSyncDetailsExpanded.update(v => !v);
+  }
+
+  importNativeResources() {
+    const importable = this.resourceImportableNames();
+    if (!importable.length) {
+      this.showToast('沒有可匯入的原生 Agent／Skill。', 'info');
+      return;
+    }
+    if (!confirm(`將 ${importable.length} 個引擎原生 Agent／Skill 匯入單一來源（registry）。已存在同名項目會略過，不會覆蓋，是否繼續？`)) return;
+    this.resourceImportLoading.set(true);
+    this.claude.importNativeResources(false).subscribe({
+      next: result => {
+        this.resourceImportLoading.set(false);
+        this.resourceSyncStatus.set(result.status);
+        const imported = result.agents.imported.length + result.skills.imported.length;
+        const skipped = result.agents.skipped.length + result.skills.skipped.length;
+        this.showToast(`已匯入 ${imported} 個項目${skipped ? `；略過 ${skipped} 個（registry 已有同名項目）` : ''}`, 'success', 4500);
+      },
+      error: (e) => {
+        this.resourceImportLoading.set(false);
+        this.showToast(`匯入失敗：${e.error?.error || e.message || e}`, 'error');
       },
     });
   }

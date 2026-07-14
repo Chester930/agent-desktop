@@ -153,3 +153,15 @@ def _mock_engine_availability(monkeypatch):
         }
 
     monkeypatch.setattr(availability, "get_status", _fake_get_status)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_codex_resource_sync(monkeypatch, tmp_path):
+    """routes/agents.py 的 CRUD handler 現在會在每次存檔後自動觸發一次
+    resource sync（見 ADR-003：registry 寫入後自動渲染到已啟用的引擎），
+    若不特別隔離，跑測試就會真的寫進執行測試那台機器的 ~/.codex，不論那台
+    機器有沒有裝 Codex CLI。這裡把 Codex 端目標目錄導向本次測試自己的暫存
+    目錄——效果等同 test_service_uses_container_resource_paths 原本只在單一
+    測試裡手動做的事，改成全域 autouse 版本，涵蓋所有會觸發 CRUD 的測試。"""
+    monkeypatch.setenv("CODEX_RESOURCE_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("CODEX_SKILLS_HOME", str(tmp_path / "codex-skills"))

@@ -1391,20 +1391,48 @@
         }
 
         @if (['agents','skills'].includes(activeTab())) {
-          <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #2b2b2b;background:#171717;font-size:11px;">
-            <span style="color:#888;flex:1;min-width:0;">
-              Claude 共用來源 → Codex
-              @if (resourceSyncStatus()) {
-                · 待同步 <strong style="color:#d4a853">{{ resourceSyncPending() }}</strong>
-                @if (resourceSyncConflicts()) {
-                  · <span style="color:#e07070" [title]="'同名但內容不同，為避免覆蓋已略過'">衝突 {{ resourceSyncConflicts() }}</span>
+          <div style="border-bottom:1px solid #2b2b2b;background:#171717;font-size:11px;">
+            <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;">
+              <span style="color:#888;flex:1;min-width:0;">
+                單一來源 → 各引擎
+                @if (resourceSyncStatus()) {
+                  · <span style="cursor:pointer;" (click)="toggleResourceSyncDetails()" title="展開查看實際名稱">
+                    待同步 <strong style="color:#d4a853">{{ resourceSyncPending() }}</strong>
+                  </span>
+                  @if (resourceSyncConflicts()) {
+                    · <span style="color:#e07070;cursor:pointer;" (click)="toggleResourceSyncDetails()" title="同名但內容不同，為避免覆蓋已略過——點擊查看是哪些項目">衝突 {{ resourceSyncConflicts() }}</span>
+                  }
+                  @if (resourceImportableNames().length) {
+                    · <span style="color:#7aa8d4;cursor:pointer;" (click)="toggleResourceSyncDetails()" title="引擎原生已有、registry 裡還沒有——可以匯入">可匯入 {{ resourceImportableNames().length }}</span>
+                  }
                 }
+              </span>
+              <button class="btn-secondary btn-xs" (click)="loadResourceSyncStatus()" [disabled]="resourceSyncLoading()" title="重新比較單一來源與各引擎原生資源">檢查</button>
+              @if (resourceImportableNames().length) {
+                <button class="btn-secondary btn-xs" (click)="importNativeResources()" [disabled]="resourceImportLoading()" title="把引擎原生已有、但單一來源裡還沒有的 Agent／Skill 匯入進來">
+                  {{ resourceImportLoading() ? '匯入中…' : '匯入' }}
+                </button>
               }
-            </span>
-            <button class="btn-secondary btn-xs" (click)="loadResourceSyncStatus()" [disabled]="resourceSyncLoading()" title="重新比較 Claude 與 Codex 原生資源">檢查</button>
-            <button class="btn-secondary btn-xs" (click)="syncResourcesToCodex()" [disabled]="resourceSyncLoading() || resourceSyncPending() === 0" title="建立或更新由 Agent Desktop 管理的 Codex Agent／Skill 副本">
-              {{ resourceSyncLoading() ? '同步中…' : '同步到 Codex' }}
-            </button>
+              <button class="btn-secondary btn-xs" (click)="syncResourcesToCodex()" [disabled]="resourceSyncLoading() || resourceSyncPending() === 0" title="把單一來源渲染成各引擎可用的原生副本">
+                {{ resourceSyncLoading() ? '同步中…' : '同步' }}
+              </button>
+            </div>
+            @if (resourceSyncDetailsExpanded() && resourceSyncStatus()) {
+              <div style="padding:4px 10px 8px 10px;display:flex;flex-direction:column;gap:3px;max-height:160px;overflow-y:auto;">
+                @for (item of resourceSyncConflictNames(); track item.kind + item.name) {
+                  <div style="color:#e07070;">衝突 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }}</div>
+                }
+                @for (item of resourceSyncPendingNames(); track item.kind + item.name) {
+                  <div style="color:#d4a853;">待同步 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }}</div>
+                }
+                @for (item of resourceImportableNames(); track item.kind + item.name) {
+                  <div style="color:#7aa8d4;">可匯入 · {{ item.kind === 'agent' ? 'Agent' : 'Skill' }} · {{ item.name }}（來自 {{ item.from === 'codex' ? 'Codex' : 'Claude' }}）</div>
+                }
+                @if (!resourceSyncConflictNames().length && !resourceSyncPendingNames().length && !resourceImportableNames().length) {
+                  <div style="color:#666;">已全部同步，沒有待處理項目。</div>
+                }
+              </div>
+            }
           </div>
         }
 
