@@ -48,13 +48,38 @@ export interface ResourceSyncGroupStatus {
   conflicts: string[];
   codex_only: string[];
 }
+// claude_mirror 用的是同一套分類邏輯，但欄位名稱對應到「Claude」而非「Codex」
+// （見 backend/resource_sync.py::_claude_mirror_status()）。
+export interface ResourceSyncMirrorGroupStatus {
+  synced: string[];
+  missing_in_claude: string[];
+  outdated: string[];
+  conflicts: string[];
+  claude_only: string[];
+}
 export interface ResourceSyncStatus {
   agents: ResourceSyncGroupStatus;
   skills: ResourceSyncGroupStatus;
+  // 只有在 registryHome 被設定成跟 Claude Code 原生家目錄不同路徑時才會出現
+  // （見 ADR-003）：此時 Claude 也變成一個渲染目標，而不是直接讀寫同一份檔案。
+  claude_mirror?: {
+    agents: ResourceSyncMirrorGroupStatus;
+    skills: ResourceSyncMirrorGroupStatus;
+  };
 }
 export interface ResourceSyncResult {
   agents: { created: string[]; updated: string[]; conflicts: string[] };
   skills: { created: string[]; updated: string[]; conflicts: string[] };
+  claude_mirror?: {
+    agents: { created: string[]; updated: string[]; conflicts: string[] };
+    skills: { created: string[]; updated: string[]; conflicts: string[] };
+  };
+  dry_run: boolean;
+  status: ResourceSyncStatus;
+}
+export interface ResourceImportResult {
+  agents: { imported: string[]; skipped: string[] };
+  skills: { imported: string[]; skipped: string[] };
   dry_run: boolean;
   status: ResourceSyncStatus;
 }
@@ -200,6 +225,9 @@ export class ClaudeService {
   }
   syncResources(dryRun = false): Observable<ResourceSyncResult> {
     return this.http.post<ResourceSyncResult>(`${this.api}/resource-sync`, { dry_run: dryRun });
+  }
+  importNativeResources(dryRun = false): Observable<ResourceImportResult> {
+    return this.http.post<ResourceImportResult>(`${this.api}/resource-sync/import`, { dry_run: dryRun });
   }
 
   getEngineStatus(force = false): Observable<Record<string, EngineAvailability>> {

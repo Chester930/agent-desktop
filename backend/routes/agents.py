@@ -1,9 +1,15 @@
 """
 routes/agents.py — Agent + Skill CRUD route handlers.
 
-All pure I/O logic; shared mutable state (AGENTS_DIR, SKILLS_DIR)
+All pure I/O logic; shared mutable state (REGISTRY_AGENTS_DIR, REGISTRY_SKILLS_DIR)
 is read from the database module via sys.modules['__main__'] at call time
-so it respects dynamic re-configuration (claudeHome changes).
+so it respects dynamic re-configuration (claudeHome/registryHome changes).
+
+Every mutating handler writes to the registry (which defaults to CLAUDE_HOME,
+so for most installs this is unchanged) and then fires a best-effort resource
+sync so Codex — and, once registryHome has been decoupled from Claude Code's
+own home, Claude itself — sees the change without the user having to remember
+to click "sync" by hand.
 """
 
 from __future__ import annotations
@@ -37,7 +43,19 @@ def _get_main_module():
 
 def _dirs():
     import database as _db
-    return _db.AGENTS_DIR, _db.SKILLS_DIR
+    return _db.REGISTRY_AGENTS_DIR, _db.REGISTRY_SKILLS_DIR
+
+
+async def _trigger_resource_sync() -> None:
+    """Best-effort auto-render of the registry into every native engine home
+    right after a CRUD write. Never raises — a sync hiccup must not fail the
+    save the user just made; the manual "檢查/同步" button in the sidebar
+    remains available to retry and to surface any conflict that blocked it."""
+    try:
+        from routes.resource_sync import _service
+        await asyncio.to_thread(_service().sync, False)
+    except Exception:
+        pass
 
 
 def _claude_bin_and_key():
@@ -111,6 +129,7 @@ async def handle_agent_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
+    await _trigger_resource_sync()
     return web.json_response({"ok": True})
 
 
@@ -137,6 +156,7 @@ async def handle_agent_post(request: web.Request) -> web.Response:
         f"soul: \nskills: []\nmemory: []\nmcp: []\noutput_memory: []\n{engine_line}---\n\n## {name}\n\n{desc}\n",
         encoding="utf-8"
     )
+    await _trigger_resource_sync()
     return web.json_response({"ok": True, "id": name})
 
 
@@ -356,6 +376,7 @@ async def handle_skill_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
+    await _trigger_resource_sync()
     return web.json_response({"ok": True})
 
 

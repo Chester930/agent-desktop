@@ -3395,9 +3395,12 @@ async def handle_config_get(request: web.Request) -> web.Response:
     cfg = _load_config()
     cfg.setdefault("projectDir", "")
     cfg.setdefault("claudeHome", "")
+    cfg.setdefault("registryHome", "")
     cfg.setdefault("engineMode", "both")
     cfg.setdefault("codexApiKeyCmd", "")
     cfg["_resolvedClaudeHome"] = str(CLAUDE_HOME)   # read-only info for UI
+    import database
+    cfg["_resolvedRegistryHome"] = str(database.REGISTRY_HOME)   # read-only info for UI
     # 健檢第二輪修復：這是驗證 LINE webhook 簽章的 HMAC secret，外洩等於能
     # 偽造合法 webhook 請求繞過簽章驗證。前端 settings 表單目前不會讀回這個
     # 欄位（只有 apiKeyCmd 會被讀回填入表單），拿掉不影響既有功能。
@@ -3422,6 +3425,8 @@ async def handle_config_put(request: web.Request) -> web.Response:
         cfg["codexApiKeyCmd"] = data["codexApiKeyCmd"].strip()
     if "claudeHome" in data:
         cfg["claudeHome"] = data["claudeHome"].strip()
+    if "registryHome" in data:
+        cfg["registryHome"] = data["registryHome"].strip()
     if "engineMode" in data:
         mode = data["engineMode"]
         if mode not in ("claude", "codex", "both"):

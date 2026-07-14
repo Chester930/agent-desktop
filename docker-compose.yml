@@ -33,6 +33,13 @@ services:
       - type: bind
         source: ${AGENTS_HOME:-${CODEX_HOME:-${CLAUDE_HOME}}}
         target: /mnt/host-agents
+      # Agent/Skill 單一來源（registry，見 ADR-003）——選用，預設沿用
+      # CLAUDE_HOME（跟上面 /root/.claude 掛同一個主機目錄，行為不變）。只有
+      # 想讓 registry 獨立於 Claude Code 家目錄（例如 Codex-only 部署）才需要
+      # 在 .env 另外設 REGISTRY_HOME 指到別的主機路徑。
+      - type: bind
+        source: ${REGISTRY_HOME:-${CLAUDE_HOME}}
+        target: /mnt/host-registry
       - codex_runtime_dev:/root/.codex
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -41,6 +48,7 @@ services:
       - CODEX_HOME=/root/.codex
       - CODEX_RESOURCE_HOME=/mnt/host-codex
       - CODEX_SKILLS_HOME=/mnt/host-agents/skills
+      - REGISTRY_HOME=/mnt/host-registry
       # container 需要接受 frontend-dev 透過 compose 內部網路連線，
       # 明確放寬成 0.0.0.0（僅限 container 內部，host 端仍只綁 127.0.0.1，見上）
       - BACKEND_BIND_HOST=0.0.0.0
@@ -100,6 +108,10 @@ services:
       - type: bind
         source: ${AGENTS_HOME:-${CODEX_HOME:-${CLAUDE_HOME}}}
         target: /mnt/host-agents
+      # 同 backend-dev：Agent/Skill 單一來源，選用，預設沿用 CLAUDE_HOME。
+      - type: bind
+        source: ${REGISTRY_HOME:-${CLAUDE_HOME}}
+        target: /mnt/host-registry
       - codex_runtime:/home/appuser/.codex
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -108,6 +120,7 @@ services:
       - CODEX_HOME=/home/appuser/.codex
       - CODEX_RESOURCE_HOME=/mnt/host-codex
       - CODEX_SKILLS_HOME=/mnt/host-agents/skills
+      - REGISTRY_HOME=/mnt/host-registry
       - BACKEND_BIND_HOST=0.0.0.0
     deploy:
       resources:
