@@ -164,7 +164,9 @@ async def _agent_run_capture(
     skills_content = ""
     if _is_safe_id(agent_id) and agent_file.exists():
         try:
-            raw_text = agent_file.read_text(encoding="utf-8")
+            raw_text = agent_file.read_text(encoding="utf-8-sig")
+            if raw_text.startswith("\ufeff"):
+                raw_text = raw_text[1:]
             if raw_text.startswith("---"):
                 parts = raw_text.split("---", 2)
                 agent_body = parts[2].strip() if len(parts) >= 3 else ""
@@ -767,6 +769,7 @@ async def handle_team_post(request: web.Request) -> web.Response:
         "leader": data.get("leader", ""),
         "members": data.get("members", []),
         "execution_mode": data.get("execution_mode", "parallel"),
+        "favorite": bool(data.get("favorite", False)),
     })
     return web.json_response({"ok": True, "id": tid})
 
@@ -787,6 +790,7 @@ async def handle_team_put(request: web.Request) -> web.Response:
         "leader":         data.get("leader", current.get("leader", "")),
         "members":        data.get("members", current["members"]),
         "execution_mode": data.get("execution_mode", current.get("execution_mode", "parallel")),
+        "favorite":       bool(data.get("favorite", current.get("favorite", False))),
     }
     _write_team_yaml(f, payload)
     return web.json_response({"ok": True})

@@ -311,6 +311,57 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
     await expect(teamsTab).toBeVisible();
   });
 
+  test('Team 卡片可以切換最愛', async ({ page }) => {
+    let favoritePayload: unknown = null;
+    await page.route('**/api/teams', async route => {
+      if (route.request().method() !== 'GET') {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'team-alpha',
+            name: 'Alpha Team',
+            description: 'Front-end test team',
+            leader: 'agent-a',
+            members: [{ agent: 'agent-a', role: 'Lead' }],
+            execution_mode: 'parallel',
+            favorite: false,
+          },
+        ]),
+      });
+    });
+    await page.route('**/api/teams/team-alpha', async route => {
+      if (route.request().method() !== 'PUT') {
+        await route.fallback();
+        return;
+      }
+      favoritePayload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true }),
+      });
+    });
+
+    await page.goto('/');
+    await page.locator('.tab-bar button', { hasText: /Team/i }).click();
+
+    const card = page.locator('.panel-card', { hasText: 'Alpha Team' });
+    await expect(card).toBeVisible();
+    const favoriteButton = card.locator('.team-fav-btn');
+    await expect(favoriteButton).toContainText('☆');
+
+    await favoriteButton.click();
+
+    expect(favoritePayload).toEqual({ favorite: true });
+    await expect(favoriteButton).toContainText('⭐');
+    await expect(favoriteButton).toHaveClass(/active/);
+  });
+
   test('Scheduling 頁籤存在', async ({ page }) => {
     await page.goto('/');
     const schedulingTab = page.locator('.tab-bar button', { hasText: /Scheduling/i });

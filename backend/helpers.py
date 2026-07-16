@@ -14,6 +14,8 @@ from pathlib import Path
 
 def _parse_frontmatter_desc(text: str) -> str:
     """Return the description: value from YAML frontmatter, or '' if absent."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return ""
@@ -45,7 +47,7 @@ def _parse_frontmatter_desc(text: str) -> str:
 
 def _desc_from_md_file(path: Path) -> str:
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
         desc = _parse_frontmatter_desc(text)
         if desc:
             return desc
@@ -70,7 +72,9 @@ def _desc_from_skill_dir(skill_dir: Path) -> str:
 def _read_agent_body(agent_file: Path) -> str:
     """讀取 agent .md 的 body（跳過 YAML frontmatter）。"""
     try:
-        text = agent_file.read_text(encoding="utf-8")
+        text = agent_file.read_text(encoding="utf-8-sig")
+        if text.startswith("\ufeff"):
+            text = text[1:]
         if text.startswith("---"):
             parts = text.split("---", 2)
             return parts[2].strip() if len(parts) >= 3 else text
@@ -168,9 +172,11 @@ def _parse_yaml_list(lines: list, start: int):
 def _parse_full_frontmatter(path: Path) -> dict:
     """Parse all key/value pairs from YAML frontmatter of a .md file."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except Exception:
         return {}
+    if text.startswith("\ufeff"):
+        text = text[1:]
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
@@ -415,6 +421,7 @@ def _team_dict(f: Path) -> dict:
         "leader":         raw.get("leader", "") or default_leader,
         "members":        members,
         "execution_mode": raw.get("execution_mode", "parallel"),
+        "favorite":       bool(raw.get("favorite", False)),
     }
 
 

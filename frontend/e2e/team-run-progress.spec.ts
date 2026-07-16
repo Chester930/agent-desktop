@@ -63,7 +63,10 @@ test.describe('Team Run 進度顯示（發現 6 修復驗證）', () => {
     await page.route(`**/api/team/run/${RUN_ID}/stream`, async (route) => {
       await route.fulfill({
         status: 200,
-        contentType: 'text/event-stream',
+        headers: {
+          'content-type': 'text/event-stream',
+          'access-control-allow-origin': '*',
+        },
         body: SSE_BODY,
       });
     });
@@ -71,7 +74,10 @@ test.describe('Team Run 進度顯示（發現 6 修復驗證）', () => {
     await page.route('**/api/team/run/*/artifacts', async (route) => {
       await route.fulfill({
         status: 200,
-        contentType: 'application/json',
+        headers: {
+          'content-type': 'application/json',
+          'access-control-allow-origin': '*',
+        },
         body: JSON.stringify({ run_id: RUN_ID, artifacts: [] }),
       });
     });

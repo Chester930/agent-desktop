@@ -30,17 +30,18 @@ from pathlib import Path
 
 import yaml
 
-
 MANAGED_MARKER = "# Managed by Agent Desktop resource sync."
 SKILL_MARKER = ".agent-desktop-sync.json"
 CLAUDE_MIRROR_MARKER = "<!-- Managed by Agent Desktop resource sync."
 
 
 def _frontmatter_and_body(path: Path) -> tuple[dict, str]:
-    return _frontmatter_and_body_text(path.read_text(encoding="utf-8"))
+    return _frontmatter_and_body_text(path.read_text(encoding="utf-8-sig"))
 
 
 def _frontmatter_and_body_text(text: str) -> tuple[dict, str]:
+    if text.startswith("\ufeff"):
+        text = text[1:]
     if not text.startswith("---"):
         return {}, text.strip()
     lines = text.splitlines()
@@ -54,13 +55,19 @@ def _frontmatter_and_body_text(text: str) -> tuple[dict, str]:
         metadata = {}
     if not isinstance(metadata, dict):
         metadata = {}
-    return metadata, "\n".join(lines[end + 1 :]).strip()
+
+    body = "\n".join(lines[end + 1 :]).strip()
+    return metadata, body
 
 
 def _agent_toml(source: Path) -> str:
     metadata, body = _frontmatter_and_body(source)
     name = str(metadata.get("name") or source.stem)
     description = str(metadata.get("description") or "")
+    if not description.strip():
+        description = name
+    if not body.strip():
+        body = f"You are {name}."
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     # JSON strings are valid TOML basic strings and safely handle arbitrary
     # Markdown backslashes/quotes without hand-written TOML escaping.
@@ -80,7 +87,7 @@ def _toml_agent_to_markdown(source: Path) -> str:
     than a hand-authored registry agent (no tools/skills/mcp/etc.) — that's an
     inherent format gap, not a bug in the conversion."""
     try:
-        data = tomllib.loads(source.read_text(encoding="utf-8"))
+        data = tomllib.loads(source.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         data = {}
     name = str(data.get("name") or source.stem)
@@ -97,13 +104,19 @@ def _toml_agent_to_markdown(source: Path) -> str:
 
 def _agent_equivalent(source: Path, target: Path) -> bool:
     metadata, body = _frontmatter_and_body(source)
+    name = str(metadata.get("name") or source.stem)
+    description = str(metadata.get("description") or "")
+    if not description.strip():
+        description = name
+    if not body.strip():
+        body = f"You are {name}."
     expected = {
-        "name": str(metadata.get("name") or source.stem),
-        "description": str(metadata.get("description") or ""),
+        "name": name,
+        "description": description,
         "developer_instructions": body,
     }
     try:
-        actual = tomllib.loads(target.read_text(encoding="utf-8"))
+        actual = tomllib.loads(target.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return False
     return all(actual.get(key) == value for key, value in expected.items())
@@ -118,9 +131,11 @@ def _claude_mirror_copy(source: Path) -> str:
     this app's) requires the file to start with ``---``, so a leading
     comment line would silently break the copy for real use, not just for
     our own sync bookkeeping."""
-    text = source.read_text(encoding="utf-8")
+    text = source.read_text(encoding="utf-8-sig")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     marker = f"{MANAGED_MARKER}\n# source-sha256: {digest}\n"
+    if text.startswith("\ufeff"):
+        text = text[1:]
     if text.startswith("---"):
         head, _, rest = text.partition("\n")
         return f"{head}\n{marker}{rest}"
@@ -130,9 +145,11 @@ def _claude_mirror_copy(source: Path) -> str:
 
 def _is_managed_claude_mirror(path: Path) -> bool:
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except OSError:
         return False
+    if text.startswith("\ufeff"):
+        text = text[1:]
     lines = text.splitlines()
     if len(lines) >= 2 and lines[0] == "---" and lines[1] == MANAGED_MARKER:
         return True
@@ -141,7 +158,7 @@ def _is_managed_claude_mirror(path: Path) -> bool:
 
 def _claude_mirror_equivalent(source: Path, target: Path) -> bool:
     try:
-        target_text = target.read_text(encoding="utf-8")
+        target_text = target.read_text(encoding="utf-8-sig")
     except OSError:
         return False
     return target_text == _claude_mirror_copy(source)
@@ -274,7 +291,13 @@ class ResourceSyncService:
     def _skill_targets(self) -> dict[str, Path]:
         if not self.codex_skills.exists():
             return {}
-        return {p.name: p for p in self.codex_skills.iterdir()}
+        result: dict[str, Path] = {}
+        for entry in self.codex_skills.iterdir():
+            name = entry.stem if entry.is_file() and entry.suffix.lower() == ".md" else entry.name
+            existing = result.get(name)
+            if existing is None or (entry.is_dir() and not existing.is_dir()):
+                result[name] = entry
+        return result
 
     def _claude_mirror_agent_targets(self) -> dict[str, Path]:
         if self.claude_native_home is None:
@@ -303,7 +326,7 @@ class ResourceSyncService:
     @staticmethod
     def _is_managed_agent(path: Path) -> bool:
         try:
-            return path.read_text(encoding="utf-8").startswith(MANAGED_MARKER)
+            return path.read_text(encoding="utf-8-sig").startswith(MANAGED_MARKER)
         except OSError:
             return False
 
@@ -327,7 +350,7 @@ class ResourceSyncService:
                 agents["missing_in_codex"].append(name)
             elif target.is_symlink():
                 agents["conflicts"].append(name)
-            elif target.read_text(encoding="utf-8") == _agent_toml(source) or _agent_equivalent(source, target):
+            elif target.read_text(encoding="utf-8-sig") == _agent_toml(source) or _agent_equivalent(source, target):
                 agents["synced"].append(name)
             elif self._is_managed_agent(target):
                 agents["outdated"].append(name)
@@ -344,7 +367,11 @@ class ResourceSyncService:
             if target is None:
                 skills["missing_in_codex"].append(name)
                 continue
-            if target.is_symlink() or not target.is_dir() or not (target / "SKILL.md").is_file():
+            target_valid = (
+                (target.is_file() and target.suffix.lower() == ".md")
+                or (target.is_dir() and (target / "SKILL.md").is_file())
+            )
+            if target.is_symlink() or not target_valid:
                 bucket = "outdated" if self._is_managed_skill(target) else "conflicts"
                 skills[bucket].append(name)
                 continue
@@ -451,7 +478,7 @@ class ResourceSyncService:
                 result["agents"]["conflicts"].append(name)
                 continue
             if target.exists() and (
-                target.read_text(encoding="utf-8") == expected or _agent_equivalent(source, target)
+                target.read_text(encoding="utf-8-sig") == expected or _agent_equivalent(source, target)
             ):
                 continue
             if target.exists() and not self._is_managed_agent(target):

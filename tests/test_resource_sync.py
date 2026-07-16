@@ -57,6 +57,21 @@ def test_sync_creates_codex_agent_and_skill_without_overwriting_conflicts(tmp_pa
     assert result["skills"]["conflicts"] == ["keep"]
 
 
+def test_status_matches_legacy_md_skill_targets_by_stem(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(claude / "skills" / "translator.md", "---\nname: translator\n---\n\nTranslate text.\n")
+    _write(shared / "translator.md", "---\nname: translator\n---\n\nTranslate text.\n")
+
+    status = ResourceSyncService(claude, codex, shared).status()
+
+    assert status["skills"]["synced"] == ["translator"]
+    assert status["skills"]["codex_only"] == []
+    assert status["skills"]["conflicts"] == []
+
+
 def test_sync_updates_only_managed_codex_agent(tmp_path):
     claude = tmp_path / ".claude"
     codex = tmp_path / ".codex"
@@ -264,6 +279,22 @@ def test_import_native_adopts_codex_only_agent_and_skill_into_registry(tmp_path)
     assert (registry / "skills" / "foreign" / "SKILL.md").read_text(encoding="utf-8") == "# Foreign skill\n"
 
 
+def test_import_native_adopts_codex_only_md_skill_by_stem(tmp_path):
+    registry = tmp_path / "registry"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    _write(shared / "translator.md", "# Translator\n")
+
+    service = ResourceSyncService(registry, codex, shared)
+    status = service.status()
+    result = service.import_native()
+
+    assert status["skills"]["codex_only"] == ["translator"]
+    assert result["skills"]["imported"] == ["translator"]
+    assert (registry / "skills" / "translator" / "SKILL.md").read_text(encoding="utf-8") == "# Translator\n"
+
+
 def test_import_native_skips_orphaned_managed_copies_and_existing_registry_names(tmp_path):
     registry = tmp_path / "registry"
     codex = tmp_path / ".codex"
@@ -355,3 +386,86 @@ def test_equivalent_unmanaged_codex_agent_is_already_synced(tmp_path):
 
     assert service.status()["agents"]["synced"] == ["planner"]
     assert service.sync(dry_run=True)["agents"]["conflicts"] == []
+
+
+def test_sync_with_utf8_bom_agent(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    # 寫入帶有 BOM (\ufeff) 的 Markdown 檔案
+    bom_content = "\ufeff---\nname: bom-agent\ndescription: Has BOM\n---\n\nBody with BOM\n"
+    (claude / "agents").mkdir(parents=True, exist_ok=True)
+    (claude / "agents" / "bom-agent.md").write_text(bom_content, encoding="utf-8")
+
+    service = ResourceSyncService(claude, codex, shared)
+    result = service.sync()
+
+    assert result["agents"]["created"] == ["bom-agent"]
+    target_toml = codex / "agents" / "bom-agent.toml"
+    assert target_toml.exists()
+
+    toml_content = target_toml.read_text(encoding="utf-8")
+    assert 'description = "Has BOM"' in toml_content
+    assert 'developer_instructions = "Body with BOM"' in toml_content
+
+
+def test_sync_with_blank_description_agent(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    # 寫入一個 description 為空的 Agent Markdown 檔案
+    content = "---\nname: blank-desc\ndescription: ''\n---\n\nBody\n"
+    (claude / "agents").mkdir(parents=True, exist_ok=True)
+    (claude / "agents" / "blank-desc.md").write_text(content, encoding="utf-8")
+
+    service = ResourceSyncService(claude, codex, shared)
+    result = service.sync()
+
+    assert result["agents"]["created"] == ["blank-desc"]
+    target_toml = codex / "agents" / "blank-desc.toml"
+    assert target_toml.exists()
+
+    toml_content = target_toml.read_text(encoding="utf-8")
+    # description 應該 fallback 為 name 的值 ("blank-desc")
+    assert 'description = "blank-desc"' in toml_content
+
+
+def test_sync_with_blank_body_agent(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    # 寫入一個 body 為空的 Agent Markdown 檔案
+    content = "---\nname: blank-body\ndescription: Has description\n---\n"
+    (claude / "agents").mkdir(parents=True, exist_ok=True)
+    (claude / "agents" / "blank-body.md").write_text(content, encoding="utf-8")
+
+    service = ResourceSyncService(claude, codex, shared)
+    result = service.sync()
+
+    assert result["agents"]["created"] == ["blank-body"]
+    target_toml = codex / "agents" / "blank-body.toml"
+    assert target_toml.exists()
+
+    toml_content = target_toml.read_text(encoding="utf-8")
+    # developer_instructions 應該 fallback 為 "You are {name}." ("You are blank-body.")
+    assert 'developer_instructions = "You are blank-body."' in toml_content
+
+
+def test_agent_frontmatter_supports_yaml_folded_description(tmp_path):
+    claude = tmp_path / ".claude"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+
+    content = "---\nname: planner\ndescription: >\n  Plans work\n  carefully\n---\n\nBody\n"
+    (claude / "agents").mkdir(parents=True, exist_ok=True)
+    (claude / "agents" / "planner.md").write_text(content, encoding="utf-8")
+
+    service = ResourceSyncService(claude, codex, shared)
+    result = service.sync()
+
+    assert result["agents"]["created"] == ["planner"]
+    toml_content = (codex / "agents" / "planner.toml").read_text(encoding="utf-8")
+    assert 'description = "Plans work carefully"' in toml_content

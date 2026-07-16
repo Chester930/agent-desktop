@@ -452,7 +452,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   inputText = '';
   isStreaming = signal(false);
   isRecording = signal(false);
-  recognition: any = null;
+  isTranscribing = signal(false);
+  private mediaRecorder: MediaRecorder | null = null;
+  private mediaStream: MediaStream | null = null;
+  private audioChunks: Blob[] = [];
+  readonly speechOutputSupported =
+    typeof window !== 'undefined'
+    && 'speechSynthesis' in window
+    && 'SpeechSynthesisUtterance' in window;
+  speakingMessageIndex = signal<number | null>(null);
+  private currentUtterance: SpeechSynthesisUtterance | null = null;
   selectedAgent = signal('');
   activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp' | 'memview'>('teams');
   sessionSearch = '';
@@ -466,7 +475,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   readonly Math = Math;
 
   // Claude Code 用量
-  usage = signal<{ fiveHour: number; fiveHourReset: string; sevenDay: number; sevenDayReset: string } | null>(null);
+  usage = signal<{ fiveHour: number; fiveHourReset: string | number | null; sevenDay: number; sevenDayReset: string | number | null } | null>(null);
   codexUsage = signal<CodexUsage | null>(null);
   private usageTimer: any = null;
 
@@ -480,6 +489,21 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   codexResetMillis(seconds: number | null | undefined): number | null {
     return seconds ? seconds * 1000 : null;
+  }
+
+  claudeResetMillis(value: string | number | null | undefined): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number') {
+      return value > 10_000_000_000 ? value : value * 1000;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isNaN(parsed) ? null : parsed;
   }
 
   // Attachments
@@ -965,92 +989,204 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   toggleMic() {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      this.showToast('瀏覽器或系統不支援 Web Speech API 語音識別', 'error');
+    if (this.isRecording()) {
+      this.stopAudioRecording();
       return;
     }
 
-    if (this.isRecording()) {
-      if (this.recognition) {
-        this.recognition.stop();
-      }
+    this.startAudioRecording();
+  }
+
+  async startAudioRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      this.showToast('此環境不支援麥克風錄音；無法使用語音輸入', 'error');
       return;
     }
 
     try {
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true;
-      this.recognition.interimResults = true;
-      this.recognition.lang = this.settings.get().lang === 'en' ? 'en-US' : 'zh-TW';
-
-      this.recognition.onstart = () => {
-        this.isRecording.set(true);
-        this.showToast('🎙️ 語音輸入中，請開始說話...', 'success');
+      this.audioChunks = [];
+      // 這裡不是通話應用，沒有喇叭播放需要回音消除的「遠端聲音」可以參照；
+      // 瀏覽器預設開啟的 echoCancellation/noiseSuppression 在沒有遠端參考訊號
+      // 時常會誤判、把麥克風收到的人聲一併壓低，錄出來的音量明顯變小。
+      // 關掉這兩項、只留 autoGainControl 補償收音較小聲的麥克風。
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: true,
+        },
+      });
+      const mimeType = this.pickAudioMimeType();
+      this.mediaRecorder = new MediaRecorder(
+        this.mediaStream,
+        mimeType ? { mimeType } : undefined,
+      );
+      this.mediaRecorder.ondataavailable = event => {
+        if (event.data.size > 0) this.audioChunks.push(event.data);
       };
-
-      this.recognition.onerror = (event: any) => {
-        console.error('Speech recognition error:', event.error);
-        if (event.error !== 'aborted') {
-          this.showToast(`語音輸入出錯: ${event.error}`, 'error');
-        }
-        this.isRecording.set(false);
-        this.recognition = null;
+      this.mediaRecorder.onerror = event => {
+        console.error('Audio recording error:', event);
+        this.showToast('語音錄製失敗', 'error');
+        this.cleanupAudioRecording();
       };
-
-      this.recognition.onend = () => {
-        this.isRecording.set(false);
-        this.recognition = null;
-        this.showToast('🎙️ 語音輸入已結束', 'info');
+      this.mediaRecorder.onstop = () => {
+        const type = this.mediaRecorder?.mimeType || mimeType || 'audio/webm';
+        const audio = new Blob(this.audioChunks, { type });
+        this.cleanupAudioRecording();
+        this.transcribeRecordedAudio(audio, type);
       };
-
-      // `baseText` anchors whatever was in the box before/independent of this
-      // recognition session; `finalSoFar`/`lastRecognizedText` track what WE
-      // last wrote so we can tell manual edits apart from our own writes.
-      let baseText = this.inputText;
-      let finalSoFar = '';
-      let lastRecognizedText = '';
-
-      this.recognition.onresult = (event: any) => {
-        // If the textarea no longer matches what we last wrote, the user
-        // edited it manually mid-recording — adopt the current text as the
-        // new anchor instead of clobbering their edit on the next update.
-        if (this.inputText !== baseText + lastRecognizedText) {
-          baseText = this.inputText;
-          finalSoFar = '';
-          lastRecognizedText = '';
-        }
-
-        let interimTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalSoFar += event.results[i][0].transcript;
-          } else {
-            interimTranscript += event.results[i][0].transcript;
-          }
-        }
-
-        const recognizedText = finalSoFar + interimTranscript;
-        this.inputText = baseText + recognizedText;
-        lastRecognizedText = recognizedText;
-
-        setTimeout(() => {
-          if (this.inputRef?.nativeElement) {
-            const el = this.inputRef.nativeElement;
-            el.style.height = 'auto';
-            el.style.height = el.scrollHeight + 'px';
-          }
-        }, 50);
-      };
-
-      this.recognition.start();
+      this.mediaRecorder.start();
+      this.isRecording.set(true);
+      this.showToast('語音錄製中，停止後會自動轉成文字', 'success');
     } catch (e: any) {
-      console.error('Failed to start speech recognition:', e);
-      this.showToast('啟動語音識別失敗', 'error');
-      this.isRecording.set(false);
+      console.error('Failed to start audio recording:', e);
+      const denied = e?.name === 'NotAllowedError' || e?.name === 'SecurityError';
+      this.showToast(denied ? '麥克風權限被拒絕' : '啟動語音錄製失敗', 'error');
+      this.cleanupAudioRecording();
     }
   }
+
+  stopAudioRecording() {
+    if (!this.mediaRecorder) {
+      this.cleanupAudioRecording();
+      return;
+    }
+    try {
+      if (this.mediaRecorder.state !== 'inactive') {
+        this.mediaRecorder.stop();
+      }
+    } catch (e) {
+      console.error('Failed to stop audio recording:', e);
+      this.cleanupAudioRecording();
+    }
+  }
+
+  private pickAudioMimeType(): string {
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+    ];
+    return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+  }
+
+  private cleanupAudioRecording() {
+    this.isRecording.set(false);
+    this.mediaStream?.getTracks().forEach(track => track.stop());
+    this.mediaStream = null;
+    this.mediaRecorder = null;
+  }
+
+  private transcribeRecordedAudio(audio: Blob, mimeType: string) {
+    if (!audio.size) {
+      this.audioChunks = [];
+      this.showToast('沒有錄到音訊', 'info');
+      return;
+    }
+    const ext = mimeType.includes('mp4') ? 'm4a' : 'webm';
+    this.isTranscribing.set(true);
+    this.showToast('語音轉文字中...', 'info');
+    this.claude.transcribeAudio(audio, `recording.${ext}`)
+      .then(result => {
+        const text = result.text?.trim();
+        if (!text) {
+          this.showToast('沒有辨識到文字', 'info');
+          return;
+        }
+        this.appendInputText(text);
+        this.showToast('語音已轉成文字', 'success');
+      })
+      .catch(err => {
+        console.error('Transcription failed:', err);
+        const msg = String(err?.message ?? err);
+        if (msg.includes('missing provider API key')) {
+          this.showToast('語音輸入尚未設定 API Key，請至「設定 → AI Provider」填入（用於 Whisper 語音轉文字）', 'error', 5000);
+          this.openSettings();
+        } else {
+          this.showToast(`語音轉文字失敗: ${msg}`, 'error');
+        }
+      })
+      .finally(() => {
+        this.audioChunks = [];
+        this.isTranscribing.set(false);
+      });
+  }
+
+  private appendInputText(text: string) {
+    const current = this.inputText.trimEnd();
+    this.inputText = current ? `${current} ${text}` : text;
+    this.saveCurrentTab();
+    setTimeout(() => {
+      const el = this.inputRef?.nativeElement;
+      if (!el) return;
+      el.focus();
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }, 50);
+  }
+
+  isSpeakingMessage(index: number): boolean {
+    return this.speakingMessageIndex() === index;
+  }
+
+  speakMessage(text: string, index: number) {
+    if (!this.speechOutputSupported) {
+      this.showToast('此環境不支援語音輸出', 'error');
+      return;
+    }
+    if (this.isSpeakingMessage(index)) {
+      this.stopSpeaking();
+      return;
+    }
+
+    const content = this.textForSpeech(text);
+    if (!content) {
+      this.showToast('沒有可朗讀的文字', 'info');
+      return;
+    }
+
+    this.stopSpeaking(false);
+    const utterance = new SpeechSynthesisUtterance(content);
+    utterance.lang = this.settings.get().lang === 'en' ? 'en-US' : 'zh-TW';
+    utterance.rate = 1;
+    utterance.onend = () => this.clearSpeechState(utterance);
+    utterance.onerror = (event: SpeechSynthesisErrorEvent) => {
+      this.clearSpeechState(utterance);
+      if (event.error !== 'canceled' && event.error !== 'interrupted') {
+        this.showToast(`語音輸出失敗: ${event.error}`, 'error');
+      }
+    };
+
+    this.currentUtterance = utterance;
+    this.speakingMessageIndex.set(index);
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }
+
+  stopSpeaking(resetIndex = true) {
+    if (this.speechOutputSupported) {
+      window.speechSynthesis.cancel();
+    }
+    this.currentUtterance = null;
+    if (resetIndex) this.speakingMessageIndex.set(null);
+  }
+
+  private clearSpeechState(utterance: SpeechSynthesisUtterance) {
+    if (this.currentUtterance !== utterance) return;
+    this.currentUtterance = null;
+    this.speakingMessageIndex.set(null);
+  }
+
+  private textForSpeech(text: string): string {
+    return text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/[#>*_~|]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   cycleEffort() {
     const idx = (this.EFFORT_OPTIONS.indexOf(this.effort() as any) + 1) % this.EFFORT_OPTIONS.length;
     const v = this.EFFORT_OPTIONS[idx]; this.effort.set(v); this.settings.save({ effort: v });
@@ -2076,6 +2212,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   teamEditorIsNew = signal(false);
   teamEditorData  = signal<Partial<Team>>({});
 
+  sortedTeams = computed(() => {
+    const q = this.rightPanelFilter().toLowerCase();
+    let list = [...this.teams()];
+    if (q) {
+      list = list.filter(t => t.name.toLowerCase().includes(q) || t.description?.toLowerCase().includes(q));
+    }
+    return list.sort((a, b) => {
+      if (!!a.favorite !== !!b.favorite) return a.favorite ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  });
+
   loadTeams() {
     this.claude.getTeams().subscribe(t => this.teams.set(t));
   }
@@ -2142,6 +2290,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.deleteTeam(id).subscribe({
       next: () => this.loadTeams(),
       error: (e) => this.showToast(`刪除 Team 失敗: ${e.message ?? e}`, 'error'),
+    });
+  }
+
+  toggleTeamFavorite(team: Team) {
+    const next = !team.favorite;
+    this.claude.updateTeam(team.id, { favorite: next }).subscribe({
+      next: () => {
+        this.teams.update(list => list.map(t => t.id === team.id ? { ...t, favorite: next } : t));
+        this.showToast(next ? `⭐ ${team.name} 已加入最愛` : `☆ ${team.name} 已取消最愛`, 'success');
+      },
+      error: (e) => this.showToast(`更新 Team 最愛失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
@@ -3112,15 +3271,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
     for (const fn of this.tabStopFns.values()) fn();
     this.tabStopFns.clear();
-    if (this.recognition) {
-      // Detach handlers first so onend/onerror can't fire after the component is gone.
-      this.recognition.onstart = null;
-      this.recognition.onresult = null;
-      this.recognition.onerror = null;
-      this.recognition.onend = null;
-      try { this.recognition.stop(); } catch { /* already stopped */ }
-      this.recognition = null;
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      this.mediaRecorder.ondataavailable = null;
+      this.mediaRecorder.onerror = null;
+      this.mediaRecorder.onstop = null;
+      try { this.mediaRecorder.stop(); } catch { /* already stopped */ }
     }
+    this.cleanupAudioRecording();
+    this.stopSpeaking();
   }
 
   // T03 — Ctrl+V 截圖貼上

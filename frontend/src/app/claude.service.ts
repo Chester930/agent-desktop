@@ -138,7 +138,7 @@ export interface TeamMember {
   input_memory?: string[];   // P2-B2: per-member memory keys to read
   output_memory?: string[];  // P2-B2: per-member memory keys to write
 }
-export interface Team { id: string; name: string; description: string; leader?: string; members: TeamMember[]; execution_mode?: 'parallel' | 'sequential'; }
+export interface Team { id: string; name: string; description: string; leader?: string; members: TeamMember[]; execution_mode?: 'parallel' | 'sequential'; favorite?: boolean; }
 export interface TeamRunStep {
   agent: string;
   role: string;
@@ -339,10 +339,8 @@ export class ClaudeService {
     onDone: () => void,
     onError: (e: any) => void,
   ): () => void {
-    const s = this.settings.get();
-    const api = s.backendUrl ? s.backendUrl.replace(/\/$/, '') + '/api' : `http://localhost:${s.backendPort}/api`;
     const controller = new AbortController();
-    fetch(`${api}/team/run/${runId}/stream`, { signal: controller.signal })
+    fetch(`${this.api}/team/run/${runId}/stream`, { signal: controller.signal })
       .then(async (res) => {
         if (!res.body) { onError(new Error('no response body')); return; }
         const reader = res.body.getReader();
@@ -399,6 +397,28 @@ export class ClaudeService {
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
+  }
+
+  transcribeAudio(audio: Blob, filename = 'recording.webm'): Promise<{ text: string }> {
+    const s = this.settings.get();
+    const PRESET_URLS: Record<string, string> = {
+      openai:     'https://api.openai.com/v1',
+      openrouter: 'https://openrouter.ai/api/v1',
+      gemini:     'https://generativelanguage.googleapis.com/v1beta/openai',
+    };
+    const form = new FormData();
+    form.append('file', audio, filename);
+    form.append('apiUrl', s.providerApiUrl || PRESET_URLS[s.provider] || 'https://api.openai.com/v1');
+    form.append('apiKey', s.providerApiKey || '');
+    form.append('model', 'whisper-1');
+    form.append('language', s.lang === 'en' ? 'en' : 'zh');
+
+    return fetch(`${this.api}/audio/transcriptions`, { method: 'POST', body: form })
+      .then(async res => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || 'Transcription failed');
+        return body;
+      });
   }
 
   resumeSession(sessionId: string): Observable<any> {

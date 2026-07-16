@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 
+from aiohttp import FormData
 import pytest
 
 
@@ -127,6 +128,33 @@ class TestHealthCheck:
         assert resp.status == 200
         body = await resp.json()
         assert "_resolvedClaudeHome" in body
+
+
+class TestAudioTranscription:
+    """POST /api/audio/transcriptions"""
+
+    async def test_transcription_requires_audio_file(self, client):
+        form = FormData()
+        form.add_field("apiKey", "test-key", content_type="text/plain")
+
+        resp = await client.post("/api/audio/transcriptions", data=form)
+        assert resp.status == 400
+        body = await resp.json()
+        assert body["error"] == "missing audio file"
+
+    async def test_transcription_requires_provider_api_key(self, client):
+        form = FormData()
+        form.add_field(
+            "file",
+            b"mock-audio",
+            filename="recording.webm",
+            content_type="audio/webm",
+        )
+
+        resp = await client.post("/api/audio/transcriptions", data=form)
+        assert resp.status == 400
+        body = await resp.json()
+        assert body["error"] == "missing provider API key"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -409,6 +437,18 @@ class TestTeamsCRUD:
         assert resp.status == 200
         body = await resp.json()
         assert body["ok"] is True
+
+    async def test_update_team_favorite_round_trip(self, client, tmp_claude_home):
+        import main
+        main.TEAMS_DIR = tmp_claude_home / "teams"
+
+        resp = await client.put("/api/teams/test-team", json={"favorite": True})
+        assert resp.status == 200
+
+        got = await client.get("/api/teams/test-team")
+        assert got.status == 200
+        body = await got.json()
+        assert body["favorite"] is True
 
     async def test_delete_team(self, client, tmp_claude_home):
         import main

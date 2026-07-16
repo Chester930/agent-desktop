@@ -59,4 +59,28 @@ describe('App', () => {
     expect(compiled.querySelector('.sidebar')).not.toBeNull();
     expect(compiled.querySelector('.chat-input')).not.toBeNull();
   });
+
+  it('should prepare assistant markdown for speech output', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    const app = fixture.componentInstance as any;
+
+    const spoken = app.textForSpeech('## Result\nUse `npm test`.\n```ts\nconsole.log("skip");\n```\n[Docs](https://example.com)');
+
+    expect(spoken).toBe('Result Use npm test. Docs');
+  });
+
+  it('should normalize Claude Code reset timestamps', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    const app = fixture.componentInstance;
+
+    expect(app.claudeResetMillis('2026-07-16T08:00:00Z')).toBe(Date.parse('2026-07-16T08:00:00Z'));
+    expect(app.claudeResetMillis(1784188800)).toBe(1784188800000);
+    expect(app.claudeResetMillis(1784188800000)).toBe(1784188800000);
+    expect(app.claudeResetMillis('')).toBeNull();
+    expect(app.claudeResetMillis('not-a-date')).toBeNull();
+  });
 });

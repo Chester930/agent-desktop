@@ -160,6 +160,9 @@
               <div class="usage-progress-fill" [style.width.%]="100 - usage()!.fiveHour"></div>
             </div>
             <span class="usage-remain">{{ 100 - usage()!.fiveHour }}%</span>
+            @if (claudeResetMillis(usage()!.fiveHourReset); as resetAt) {
+              <span class="usage-reset-time">↺ {{ resetAt | date:'M/d HH:mm' }}</span>
+            }
           </div>
           <span class="usage-divider">|</span>
           <div class="usage-slot" [class.low]="(100 - usage()!.sevenDay) <= 20">
@@ -168,6 +171,9 @@
               <div class="usage-progress-fill" [style.width.%]="100 - usage()!.sevenDay"></div>
             </div>
             <span class="usage-remain">{{ 100 - usage()!.sevenDay }}%</span>
+            @if (claudeResetMillis(usage()!.sevenDayReset); as resetAt) {
+              <span class="usage-reset-time">↺ {{ resetAt | date:'M/d HH:mm' }}</span>
+            }
           </div>
         }
         @if (usage() && codexUsage()?.primary) { <span class="usage-divider provider-divider">│</span> }
@@ -325,21 +331,22 @@
               </select>
               <small>除 Claude 外均透過 OpenAI-compatible API 呼叫，不使用本機 CLI。</small>
             </label>
+            <label>API Key
+              <input type="password" [(ngModel)]="settingsForm.providerApiKey"
+                placeholder="sk-...">
+              <small>{{ settingsForm.provider === 'claude' ? '選用；只有語音輸入（Whisper 語音轉文字）需要此金鑰，聊天本身走本機 Claude Code CLI 不需要。' : '用於此 Provider 的聊天請求，也會作為語音輸入（Whisper）的金鑰。' }}</small>
+            </label>
             @if (settingsForm.provider !== 'claude') {
-              <label>API Key
-                <input type="password" [(ngModel)]="settingsForm.providerApiKey"
-                  placeholder="sk-...">
-              </label>
               <label>Model
                 <input [(ngModel)]="settingsForm.providerModel"
                   placeholder="例：gpt-4o-mini / claude-3-5-sonnet / gemini-1.5-flash">
               </label>
-              @if (settingsForm.provider === 'custom') {
-                <label>API Base URL
-                  <input type="url" [(ngModel)]="settingsForm.providerApiUrl"
-                    placeholder="https://api.openai.com/v1">
-                </label>
-              }
+            }
+            @if (settingsForm.provider === 'custom') {
+              <label>API Base URL
+                <input type="url" [(ngModel)]="settingsForm.providerApiUrl"
+                  placeholder="https://api.openai.com/v1">
+              </label>
             }
           </div>
         </div>
@@ -737,7 +744,23 @@
             <div class="usage-provider-card">
               <div class="usage-provider-card-title"><span class="usage-provider claude">Claude</span><span>Claude Code</span></div>
               <div class="usage-row"><span class="usage-label">5 小時</span><span class="usage-val usage-total">剩餘 {{ 100 - usage()!.fiveHour }}%</span></div>
+              <div class="usage-row">
+                <span class="usage-label">5 小時重置</span>
+                @if (claudeResetMillis(usage()!.fiveHourReset); as resetAt) {
+                  <span class="usage-val">{{ resetAt | date:'yyyy/M/d HH:mm' }}</span>
+                } @else {
+                  <span class="usage-val">未提供</span>
+                }
+              </div>
               <div class="usage-row"><span class="usage-label">7 天</span><span class="usage-val usage-total">剩餘 {{ 100 - usage()!.sevenDay }}%</span></div>
+              <div class="usage-row">
+                <span class="usage-label">7 天重置</span>
+                @if (claudeResetMillis(usage()!.sevenDayReset); as resetAt) {
+                  <span class="usage-val">{{ resetAt | date:'yyyy/M/d HH:mm' }}</span>
+                } @else {
+                  <span class="usage-val">未提供</span>
+                }
+              </div>
             </div>
           }
           @if (codexUsage(); as codex) {
@@ -1080,6 +1103,11 @@
                           </div>
                           @if (!msg.isStreaming && msg.text) {
                             <div class="msg-action-row">
+                              @if (speechOutputSupported) {
+                                <button class="msg-action-btn" (click)="speakMessage(msg.text, $index)" [title]="isSpeakingMessage($index) ? '停止朗讀' : '朗讀此回覆'">
+                                  {{ isSpeakingMessage($index) ? '■ 停止朗讀' : '▶ 朗讀' }}
+                                </button>
+                              }
                               <button class="msg-action-btn" (click)="copyMessageWithFeedback($event, msg.text)" title="複製此回覆的完整內容">⎘ 複製回覆</button>
                               <button class="msg-action-btn" (click)="retryLast()" title="重新生成此回覆">↺ 重試</button>
                             </div>
@@ -1340,8 +1368,8 @@
               <input type="file" accept="image/*,.txt,.md,.py,.ts,.js,.json" multiple
                 (change)="pickFile($event)" style="display:none">
             </label>
-            <button class="sb-btn mic-btn" [class.recording]="isRecording()" (click)="toggleMic()" [title]="isRecording() ? '正在語音輸入...點擊停止' : '語音輸入'">
-              🎙️
+            <button class="sb-btn mic-btn" [class.recording]="isRecording()" (click)="toggleMic()" [disabled]="isTranscribing()" [title]="isTranscribing() ? '語音轉文字中...' : isRecording() ? '正在錄音...點擊停止並轉文字' : '語音輸入'">
+              {{ isTranscribing() ? '...' : '🎙️' }}
             </button>
             @if (!activeChat?.teamId) {
               <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
@@ -1547,12 +1575,17 @@
           
 @if (activeTab() === 'teams') {
             <div class="panel-list">
-              @for (t of teams(); track t.id) {
+              @for (t of sortedTeams(); track t.id) {
                 <div class="panel-card" (click)="toggleTeamExpanded(t.id)" style="cursor: pointer; user-select: none;">
                   <div class="card-header-row">
                     <span class="card-name">{{ t.name }}</span>
                     <div class="agent-action-btns" (click)="$event.stopPropagation()">
                       <button class="agent-activate-btn" style="background: linear-gradient(135deg, #6366f1, #28a745); color:white;" (click)="selectTeamLeader(t)" title="與整個團隊對話（各成員依序序列執行任務）">💬 團隊對話</button>
+                      <button class="agent-fav-btn team-fav-btn" (click)="$event.stopPropagation(); toggleTeamFavorite(t)"
+                        [class.active]="t.favorite"
+                        [title]="t.favorite ? '已加入 Team 最愛（點擊取消）' : '加入 Team 最愛'">
+                        {{ t.favorite ? '⭐' : '☆' }}
+                      </button>
                       <button class="agent-edit-btn" (click)="openTeamEditor(t)" title="編輯 Team">✎</button>
                     </div>
                   </div>

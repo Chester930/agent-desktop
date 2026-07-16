@@ -590,7 +590,9 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             agent_file = _registry_agents_dir() / f"{agent}.md"
             if agent_file.exists():
                 try:
-                    text = agent_file.read_text(encoding="utf-8")
+                    text = agent_file.read_text(encoding="utf-8-sig")
+                    if text.startswith("\ufeff"):
+                        text = text[1:]
                     body = text
                     if text.startswith("---"):
                         parts = text.split("---", 2)
@@ -2115,6 +2117,69 @@ async def handle_upload(request: web.Request) -> web.Response:
     dest = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
     dest.write_bytes(raw_bytes)
     return web.json_response({"path": str(dest), "name": name})
+
+
+async def handle_audio_transcription(request: web.Request) -> web.Response:
+    reader = await request.multipart()
+    audio_bytes = b""
+    filename = "recording.webm"
+    content_type = "audio/webm"
+    fields: dict[str, str] = {}
+
+    while True:
+        field = await reader.next()
+        if field is None:
+            break
+        if field.name == "file":
+            audio_bytes = await field.read()
+            filename = Path(field.filename or filename).name
+            content_type = field.headers.get("Content-Type", content_type)
+        else:
+            fields[field.name or ""] = (await field.text()).strip()
+
+    if not audio_bytes:
+        return web.json_response({"error": "missing audio file"}, status=400)
+    if len(audio_bytes) > _UPLOAD_MAX_BYTES:
+        return web.json_response({"error": "audio file too large (max 20 MB)"}, status=413)
+
+    api_url = fields.get("apiUrl", "https://api.openai.com/v1").rstrip("/")
+    api_key = fields.get("apiKey", "")
+    model = fields.get("model") or "whisper-1"
+    language = fields.get("language", "")
+
+    if not api_key:
+        return web.json_response({"error": "missing provider API key"}, status=400)
+
+    form = aiohttp.FormData()
+    form.add_field("model", model)
+    if language:
+        form.add_field("language", language)
+    form.add_field(
+        "file",
+        audio_bytes,
+        filename=filename,
+        content_type=content_type,
+    )
+
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"{api_url}/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as upstream:
+                data = await upstream.json(content_type=None)
+                if upstream.status >= 400:
+                    return web.json_response(
+                        {"error": f"Provider {upstream.status}: {json.dumps(data, ensure_ascii=False)[:500]}"},
+                        status=502,
+                    )
+    except Exception as e:
+        return web.json_response({"error": f"transcription request failed: {e}"}, status=502)
+
+    text = data.get("text", "") if isinstance(data, dict) else ""
+    return web.json_response({"text": text})
 
 
 async def handle_translate(request: web.Request) -> web.Response:
@@ -3651,6 +3716,7 @@ def build_app() -> web.Application:
         ("POST",   "/api/restore",         handle_restore),
         ("DELETE", "/api/soul",            handle_soul_reset),
         ("POST",   "/api/upload",         handle_upload),
+        ("POST",   "/api/audio/transcriptions", handle_audio_transcription),
         ("POST",   "/api/translate",      handle_translate),
         ("PUT",    "/api/memory/{key}",    handle_memory_put),
         ("DELETE", "/api/memory/{key}",   handle_memory_delete),
