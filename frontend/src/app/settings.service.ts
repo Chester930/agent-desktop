@@ -27,6 +27,11 @@ export interface AppSettings {
   providerApiUrl: string;
   providerApiKey: string;
   providerModel: string;
+  // 語音輸入引擎：'local' 走後端 faster-whisper（不需要 API Key，第一次用
+  // 會下載模型到本機快取，之後離線可用）；'cloud' 走上面的 provider
+  // API Key 打 Whisper-compatible 端點。預設 local，這樣不設定任何 provider
+  // 也能用語音輸入。
+  sttMode: 'local' | 'cloud';
   // 2026-07-12：「執行引擎範圍」鎖定新增後，這個欄位語意窄化成「範圍選
   // 『兩者都開放』時，沒有 agent 自行指定／沒有 request 層級覆寫時的預設
   // 引擎」——回答的是「兩者都開放時偏好哪個」，不是「允許哪些」。「允許
@@ -72,6 +77,7 @@ const DEFAULTS: AppSettings = {
   providerApiUrl: '',
   providerApiKey: '',
   providerModel: '',
+  sttMode: 'local',
   agentEngine: 'codex',
   engineMode: 'both',
   lang: 'zh',

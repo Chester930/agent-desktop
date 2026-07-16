@@ -408,6 +408,7 @@ export class ClaudeService {
     };
     const form = new FormData();
     form.append('file', audio, filename);
+    form.append('mode', s.sttMode || 'local');
     form.append('apiUrl', s.providerApiUrl || PRESET_URLS[s.provider] || 'https://api.openai.com/v1');
     form.append('apiKey', s.providerApiKey || '');
     form.append('model', 'whisper-1');

@@ -334,7 +334,7 @@
             <label>API Key
               <input type="password" [(ngModel)]="settingsForm.providerApiKey"
                 placeholder="sk-...">
-              <small>{{ settingsForm.provider === 'claude' ? '選用；只有語音輸入（Whisper 語音轉文字）需要此金鑰，聊天本身走本機 Claude Code CLI 不需要。' : '用於此 Provider 的聊天請求，也會作為語音輸入（Whisper）的金鑰。' }}</small>
+              <small>{{ settingsForm.provider === 'claude' ? '選用；聊天本身走本機 Claude Code CLI 不需要。只有語音輸入切換成「雲端」時才會用到這把金鑰。' : '用於此 Provider 的聊天請求；語音輸入若切換成「雲端」也會用同一把金鑰。' }}</small>
             </label>
             @if (settingsForm.provider !== 'claude') {
               <label>Model
@@ -348,6 +348,22 @@
                   placeholder="https://api.openai.com/v1">
               </label>
             }
+          </div>
+        </div>
+
+        <!-- 語音輸入引擎：預設本機 faster-whisper（不需要 API Key，第一次使用
+             會下載模型到本機快取，之後離線可用），可切換成雲端 Whisper-compatible
+             API（沿用上面 AI Provider 的 API Key）。 -->
+        <div class="modal-section">
+          <div class="modal-section-header">語音輸入</div>
+          <div class="modal-form">
+            <label>轉錄引擎
+              <select [(ngModel)]="settingsForm.sttMode">
+                <option value="local">本機（faster-whisper，預設，不需要 API Key）</option>
+                <option value="cloud">雲端 API（用上面 AI Provider 的 API Key）</option>
+              </select>
+              <small>{{ settingsForm.sttMode === 'local' ? '第一次使用會自動下載語音模型到本機快取（約 1.6GB），之後完全離線可用，不會呼叫任何雲端服務。' : '會把錄音送到上面設定的 Provider API，需要先填好 API Key。' }}</small>
+            </label>
           </div>
         </div>
 

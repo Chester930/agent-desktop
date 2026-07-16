@@ -144,6 +144,7 @@ class TestAudioTranscription:
 
     async def test_transcription_requires_provider_api_key(self, client):
         form = FormData()
+        form.add_field("mode", "cloud")
         form.add_field(
             "file",
             b"mock-audio",
@@ -155,6 +156,49 @@ class TestAudioTranscription:
         assert resp.status == 400
         body = await resp.json()
         assert body["error"] == "missing provider API key"
+
+    async def test_transcription_defaults_to_local_mode(self, client, monkeypatch):
+        import main
+
+        async def fake_transcribe_local(audio_bytes, language=""):
+            assert audio_bytes == b"mock-audio"
+            return "本機辨識結果"
+
+        monkeypatch.setattr(main.stt, "transcribe_local", fake_transcribe_local)
+
+        form = FormData()
+        form.add_field(
+            "file",
+            b"mock-audio",
+            filename="recording.webm",
+            content_type="audio/webm",
+        )
+        # 沒帶 mode 欄位 —— 預設要走本機，不需要任何 apiKey
+        resp = await client.post("/api/audio/transcriptions", data=form)
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["text"] == "本機辨識結果"
+
+    async def test_transcription_local_mode_unavailable(self, client, monkeypatch):
+        import main
+
+        async def fake_transcribe_local(audio_bytes, language=""):
+            raise main.stt.LocalSttUnavailable("faster-whisper 未安裝")
+
+        monkeypatch.setattr(main.stt, "transcribe_local", fake_transcribe_local)
+
+        form = FormData()
+        form.add_field("mode", "local")
+        form.add_field(
+            "file",
+            b"mock-audio",
+            filename="recording.webm",
+            content_type="audio/webm",
+        )
+        resp = await client.post("/api/audio/transcriptions", data=form)
+        assert resp.status == 503
+        body = await resp.json()
+        assert "faster-whisper" in body["error"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

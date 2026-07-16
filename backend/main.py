@@ -152,6 +152,7 @@ _codex_usage_cache: dict = {"data": None, "expires": 0.0}
 # Local MCP config (Docker metadata, compose paths, etc.)
 
 from helpers import _read_agent_body, _read_skills_content, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
+import stt
 
 import atexit
 import signal
@@ -2142,10 +2143,21 @@ async def handle_audio_transcription(request: web.Request) -> web.Response:
     if len(audio_bytes) > _UPLOAD_MAX_BYTES:
         return web.json_response({"error": "audio file too large (max 20 MB)"}, status=413)
 
+    language = fields.get("language", "")
+    mode = fields.get("mode") or "local"
+
+    if mode == "local":
+        try:
+            text = await stt.transcribe_local(audio_bytes, language)
+        except stt.LocalSttUnavailable as e:
+            return web.json_response({"error": str(e)}, status=503)
+        except Exception as e:
+            return web.json_response({"error": f"local transcription failed: {e}"}, status=500)
+        return web.json_response({"text": text})
+
     api_url = fields.get("apiUrl", "https://api.openai.com/v1").rstrip("/")
     api_key = fields.get("apiKey", "")
     model = fields.get("model") or "whisper-1"
-    language = fields.get("language", "")
 
     if not api_key:
         return web.json_response({"error": "missing provider API key"}, status=400)

@@ -3,3 +3,4 @@ aiohttp-cors>=0.7
 croniter>=2.0
 PyYAML>=6.0
 claude-agent-sdk>=0.2.110
+faster-whisper>=1.0.0

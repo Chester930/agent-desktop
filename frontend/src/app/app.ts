@@ -1084,8 +1084,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       return;
     }
     const ext = mimeType.includes('mp4') ? 'm4a' : 'webm';
+    const isLocal = (this.settings.get().sttMode ?? 'local') === 'local';
     this.isTranscribing.set(true);
-    this.showToast('語音轉文字中...', 'info');
+    this.showToast(isLocal ? '語音轉文字中...（本機模型第一次使用需要先下載，可能要等一下）' : '語音轉文字中...', 'info');
     this.claude.transcribeAudio(audio, `recording.${ext}`)
       .then(result => {
         const text = result.text?.trim();
@@ -1101,6 +1102,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         const msg = String(err?.message ?? err);
         if (msg.includes('missing provider API key')) {
           this.showToast('語音輸入尚未設定 API Key，請至「設定 → AI Provider」填入（用於 Whisper 語音轉文字）', 'error', 5000);
+          this.openSettings();
+        } else if (msg.includes('faster-whisper') || msg.includes('本機語音模型')) {
+          this.showToast(`本機語音模型無法使用：${msg}（可到「設定 → 語音輸入」切換成雲端 API）`, 'error', 6000);
           this.openSettings();
         } else {
           this.showToast(`語音轉文字失敗: ${msg}`, 'error');
