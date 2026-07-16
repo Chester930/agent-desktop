@@ -1926,6 +1926,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
+  toggleFavorite(agent: Agent) {
+    const next = !agent.favorite;
+    this.claude.updateAgent(agent.id, { favorite: next }).subscribe({
+      next: () => {
+        this.agents.update(list => list.map(a => a.id === agent.id ? { ...a, favorite: next } : a));
+        this.showToast(next ? `⭐ ${agent.name} 已同步到 Claude Code CLI` : `☆ ${agent.name} 已從 Claude Code CLI 移除`, 'success');
+      },
+      error: (e) => this.showToast(`更新最愛失敗: ${e.message ?? e}`, 'error'),
+    });
+  }
+
   activateAgent(agent: Agent) {
     // 設定 soul
     if (agent.soul) {

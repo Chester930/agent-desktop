@@ -4281,6 +4281,20 @@ body[style*="ns-resize"] .mcp-divider-grip {
   &:hover { background: rgba(255,255,255,0.07); color: #ccc; }
 }
 
+.agent-fav-btn {
+  font-size: 13px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: none;
+  color: #555;
+  cursor: pointer;
+  transition: color 0.15s, transform 0.1s;
+  &:hover { color: #d4a853; transform: scale(1.15); }
+  &.active { color: #d4a853; }
+}
+
+
 .agent-skill-badge {
   font-size: 10px;
   padding: 1px 5px;

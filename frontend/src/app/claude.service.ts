@@ -8,6 +8,7 @@ export interface Agent {
   id: string; name: string; description: string;
   soul: string; skills: string[]; memory: string[]; mcp: string[]; output_memory: string[]; tools: string;
   engine?: string;
+  favorite?: boolean;
 }
 export interface Skill {
   id: string; name: string; description: string; type?: string;

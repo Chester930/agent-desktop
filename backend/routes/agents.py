@@ -1,4 +1,4 @@
-"""
+﻿"""
 routes/agents.py — Agent + Skill CRUD route handlers.
 
 All pure I/O logic; shared mutable state (REGISTRY_AGENTS_DIR, REGISTRY_SKILLS_DIR)
@@ -125,10 +125,21 @@ async def handle_agent_put(request: web.Request) -> web.Response:
         if data["engine"] not in ENGINES:
             return web.json_response({"error": "invalid engine"}, status=400)
     fm = _parse_full_frontmatter(f)
-    for field in ("name", "description", "soul", "skills", "memory", "mcp", "output_memory", "tools", "engine"):
+    for field in ("name", "description", "soul", "skills", "memory", "mcp", "output_memory", "tools", "engine", "favorite"):
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
+    # 最愛標籤同步：favorite=true → 複製到 CLAUDE_HOME/agents/，false → 移除
+    if "favorite" in data:
+        import database as _db
+        import shutil
+        claude_agents_dir = _db.CLAUDE_HOME / "agents"
+        claude_agents_dir.mkdir(parents=True, exist_ok=True)
+        dest = claude_agents_dir / f"{aid}.md"
+        if data["favorite"]:
+            shutil.copy2(str(f), str(dest))
+        else:
+            dest.unlink(missing_ok=True)
     await _trigger_resource_sync(agent_ids={aid})
     return web.json_response({"ok": True})
 

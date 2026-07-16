@@ -1451,6 +1451,11 @@
                         [title]="activeAgentId() === a.id ? '已啟動' : '啟動此 Agent（套用 Soul/Skills/MCP/Memory）'">
                         {{ activeAgentId() === a.id ? '◉ 啟動中' : '▶ 啟動' }}
                       </button>
+                      <button class="agent-fav-btn" (click)="toggleFavorite(a)"
+                        [class.active]="a.favorite"
+                        [title]="a.favorite ? '⭐ 已同步到 Claude Code CLI（點擊取消）' : '☆ 加入最愛，同步到 Claude Code CLI'">
+                        {{ a.favorite ? '⭐' : '☆' }}
+                      </button>
                       <button class="agent-edit-btn" (click)="openAgentEditor(a)" title="編輯 Agent 映射">✎</button>
                     </div>
                   </div>

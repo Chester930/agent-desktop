@@ -29,15 +29,14 @@ def _service() -> ResourceSyncService:
     codex_skills = Path(
         os.environ.get("CODEX_SKILLS_HOME", Path.home() / ".agents" / "skills")
     ).expanduser()
-    # database.REGISTRY_HOME is the single source of truth (defaults to
-    # database.CLAUDE_HOME — zero-cost for existing installs). Passing
-    # CLAUDE_HOME as claude_native_home unconditionally is safe: the service
-    # itself treats it as a no-op whenever the two paths resolve to the same
-    # directory, which is the default case where Claude Code already reads
-    # the registry directly.
+    
+    # 支援透過環境變數關閉自動同步到 Claude Code CLI
+    disable_auto_sync = os.environ.get("DISABLE_AUTO_SYNC", "").lower() in ("true", "1", "yes")
+    native_home = None if disable_auto_sync else database.CLAUDE_HOME
+    
     return ResourceSyncService(
         database.REGISTRY_HOME, codex_home, codex_skills,
-        claude_native_home=database.CLAUDE_HOME,
+        claude_native_home=native_home,
     )
 
 
