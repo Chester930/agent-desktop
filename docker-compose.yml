@@ -42,6 +42,12 @@ services:
         target: /mnt/host-registry
       - codex_runtime_dev:/root/.codex
       - /var/run/docker.sock:/var/run/docker.sock
+      # 本機語音辨識（faster-whisper）第一次使用會下載 ~1.6GB 模型到
+      # Hugging Face 快取；沒有這個 volume 的話每次 container 重建都要
+      # 重新下載一次，container 內的對外頻寬也不一定跟 host 一樣好。
+      # 用 named volume 而不是直接 bind mount host 的快取目錄，避免
+      # Windows 路徑權限/符號連結那些跨平台雷。
+      - stt_model_cache_dev:/root/.cache/huggingface
     environment:
       - CLAUDE_BIN=claude
       - CODEX_BIN=codex
@@ -116,6 +122,9 @@ services:
         target: /mnt/host-registry
       - codex_runtime:/home/appuser/.codex
       - /var/run/docker.sock:/var/run/docker.sock
+      # 同 backend-dev：本機語音辨識模型快取，避免每次重建 image/container
+      # 都要重新下載 ~1.6GB。
+      - stt_model_cache:/home/appuser/.cache/huggingface
     environment:
       - CLAUDE_BIN=claude
       - CODEX_BIN=codex
@@ -182,3 +191,5 @@ volumes:
   frontend_node_modules:
   codex_runtime_dev:
   codex_runtime:
+  stt_model_cache_dev:
+  stt_model_cache:
