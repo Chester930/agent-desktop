@@ -1,0 +1,17 @@
+<!-- Agency Agents Importer -->
+<div class="modal-section">
+  <div class="modal-section-header">Agency Agents 導入</div>
+  <div class="modal-form">
+    <small style="color:#aaa; display:block; margin-bottom:8px;">
+      自 <code>msitarzewski/agency-agents</code> 專案導入 140+ 個專業的 AI 代理人，並自動建立對應的部門團隊（TEAMS）。
+    </small>
+    <div style="display:flex;gap:12px;align-items:center;">
+      <button class="btn-primary btn-sm" (click)="importAgencyAgents()" [disabled]="importingAgency()">
+        {{ importingAgency() ? '正在導入…' : '開始自動導入' }}
+      </button>
+      @if (importResult()) {
+        <span style="font-size:12px; color:#d4a853; flex:1;">{{ importResult() }}</span>
+      }
+    </div>
+  </div>
+</div>

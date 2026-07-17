@@ -132,6 +132,20 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
   拆成子區塊逐步搬，不整塊搬）。
 - 每抽一個區塊：建元件 → 搬 template/邏輯 → 需要跨頁狀態的改注入
   service → 跑完整 e2e → commit。不做大爆炸式重寫。
+- **進度（持續更新，接手前先看這裡）**：
+  - ✅ `backendLogs` + `doctorRunning`（合併抽成
+    `DiagnosticsPanelComponent`，兩者本來就是同一塊 UI 且互不跨頁）。
+  - ✅ `importAgencyAgents`（抽成 `AgencyImportPanelComponent`，
+    `imported` 事件往上通知 `app.ts` 呼叫既有的 `reload()` /
+    `loadTeams()`）。
+  - ⬜ 下一個：`recentWorkDirs`（3 refs）→ `telegramSaving`
+    （6 refs）→ `memEditContent`（8 refs）→ `settingsForm`
+    （63 refs，分段拆）。
+  - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm`
+    等 settings modal 共用樣式已搬到 `src/styles.scss`（global）——
+    Angular 的 emulated encapsulation 讓子元件收不到 `app.scss`
+    裡的 component-scoped 樣式，每抽一個新元件如果用到這些 class
+    不用再重複搬。
 - memview/schedules 分頁、teams/skills 側欄、chat 主畫面的 lazy
   route 化維持原規劃，在 settings 相關的小區塊都驗證完拆分模式可行
   之後再進行（這幾塊本身就是路由層級，天然比 settings modal 內部

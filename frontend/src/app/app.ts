@@ -6,6 +6,7 @@ import { FormsModule } from '@angular/forms';
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { DiagnosticsPanelComponent } from './components/diagnostics-panel/diagnostics-panel';
+import { AgencyImportPanelComponent } from './components/agency-import-panel/agency-import-panel';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -46,7 +47,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -3049,8 +3050,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   resolvedClaudeHome = signal('');
   skillGenBusy = signal(false);
   skillGenResult = signal<string | null>(null);
-  importingAgency = signal(false);
-  importResult = signal<string | null>(null);
 
   // ── Onboarding wizard ────────────────────────────────
   showOnboarding = signal(false);
@@ -4256,27 +4255,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // T09 — claude doctor: extracted into components/diagnostics-panel (Phase 2)
-
-  importAgencyAgents() {
-    this.importingAgency.set(true);
-    this.importResult.set('正在下載並導入 Agency Agents，這可能需要一至兩分鐘，請稍候…');
-    this.claude.importAgencyAgents().subscribe({
-      next: (res) => {
-        this.importingAgency.set(false);
-        if (res.ok) {
-          this.importResult.set(res.message);
-          this.reload();
-          this.loadTeams();
-        } else {
-          this.importResult.set(`導入失敗: ${res.message}`);
-        }
-      },
-      error: (err) => {
-        this.importingAgency.set(false);
-        this.importResult.set(`導入出錯: ${err?.error?.message || err?.message || err || '網路或伺服器錯誤'}`);
-      }
-    });
-  }
+  // Agency Agents importer: extracted into components/agency-import-panel (Phase 2)
 
   // T10 — MCP 管理
   mcpList = signal<string>('');
