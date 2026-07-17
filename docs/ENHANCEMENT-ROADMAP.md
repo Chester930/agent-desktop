@@ -1,9 +1,15 @@
 # 全面強化路線圖（Enhancement Roadmap）
 
 > 建立日期：2026-07-17。
-> 目的：以 2026 年 agent 生態系的兩個既有標準（ACP、AG-UI）為參照，
+> 目的：以 2026 年 agent 生態系的兩個既有標準（ACP、AG-UI）為**借鏡**，
 > 對照本專案現況，列出分階段的強化任務。每個階段獨立可交付、可驗證，
 > 依序執行；跨多個 session 的長期任務以此文件為單一事實來源。
+>
+> **定位（重要）**：Claude Code 與 Codex CLI 是且仍然是本專案的核心
+> 引擎。以下所有階段都是**優化既有 Claude/Codex 整合的體驗與架構**
+> ——參照這些標準的設計模式，不是引入它們來取代現有引擎。唯一涉及
+> 「新增引擎」的 ACP 項目被明確列為最後的選配（Phase 4），且它是
+> 純增量：完全不動 claude_engine / codex_engine 的既有路徑。
 
 ## 一、生態系研究結論（2026-07 查證）
 
@@ -52,33 +58,12 @@
 
 ## 三、分階段任務
 
-### Phase 1 — ACP 引擎（agent CLI 架構對齊）
+### Phase 1 — 型別化串流事件層（優化 Claude/Codex 串流體驗）
 
-**目標**：新增 `backend/engines/acp_engine.py`，以 ACP（JSON-RPC 2.0
-over stdio）對接任何 ACP 相容 agent，Gemini CLI 為第一個驗證對象。
-
-- 遵循 `engines/base.py` 的既有約定：提供 `name`、
-  `DEFAULT_PERMISSION_MODE`、`async run_turn(...) -> RunResult`，
-  呼叫端（`routes/teams.py::_agent_run_capture`）零改動。
-- JSON-RPC 流程：`initialize`（協商能力）→ `session/new` →
-  `session/prompt`；`session/update` notifications 映射到 `on_text`
-  callback；`session/request_permission` 依 permission mode 自動回覆。
-- 註冊進 `engines/registry.py` 的 `ENGINES`，engineMode 鎖定邏輯
-  （`resolve_engine_name_gated`）自然涵蓋。
-- **測試策略**：單元/整合測試用「假 ACP agent」（一個 Python 小腳本，
-  照協定回應 JSON-RPC）驗證握手、串流、權限、錯誤、取消五條路徑——
-  不依賴真實 CLI；端到端驗證用升級後的 Gemini CLI（本機現裝 0.1.9，
-  需升級到含 `--experimental-acp` 的版本）。
-- 風險：ACP 權限模型與本專案 permission mode 字彙對映需要實測校準；
-  Windows 上 npm shim（`gemini.cmd`）需沿用 `helpers.wrap_cmd()` 的
-  既有處理。
-
-**驗收**：假 ACP agent 的整合測試全綠；真實 Gemini CLI 能作為 team
-成員完成一輪 team run；`/api/engines/status` 正確回報第三引擎。
-
-### Phase 2 — 型別化串流事件層（前端適配對齊）
-
-**目標**：後端輸出、前端消費統一為 AG-UI 風格的型別化事件。
+**目標**：後端輸出、前端消費統一為 AG-UI 風格的型別化事件。這直接
+優化既有 Claude Code / Codex 的使用體驗——兩個 CLI 的輸出裡本來就有
+工具呼叫、用量、子任務進度等結構化資訊，目前不是被丟掉就是用字串
+前綴塞在文字流裡；型別化之後前端能忠實呈現。
 
 - 定義事件模型（參照 AG-UI 的 17 種事件挑本專案用得到的子集）：
   `run_started` / `text_delta` / `tool_call_start` / `tool_call_end` /
@@ -93,7 +78,7 @@ over stdio）對接任何 ACP 相容 agent，Gemini CLI 為第一個驗證對象
 **驗收**：既有 e2e 全綠；chat 與 team run 的前端解析共用同一套
 reducer；工具呼叫進度不再依賴文字前綴約定。
 
-### Phase 3 — 前端分解與延遲載入
+### Phase 2 — 前端分解與延遲載入
 
 **目標**：把 `app.ts`（約 4,400 行）按分頁拆成 feature 元件，
 非首屏分頁改為 lazy route，降低初始 bundle 與變更偵測成本。
@@ -104,7 +89,7 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw）；所有 e2e 綠。
 
-### Phase 4 — 後端模組化收尾
+### Phase 3 — 後端模組化收尾
 
 **目標**：把 main.py 剩餘的 handler（souls、memory、schedules、
 sessions、upload、translate、audio）依既有 routes/ 模式抽出，
@@ -112,13 +97,36 @@ main.py 只留 app 組裝與生命週期。
 
 **驗收**：main.py 行數減半以上；`pytest tests/` 全綠；路由行為零變化。
 
+### Phase 4（選配）— ACP 引擎（純增量的第三引擎）
+
+**定位**：**不取代 Claude Code / Codex**。這是一個純增量選項——
+新增 `backend/engines/acp_engine.py`，以 ACP（JSON-RPC 2.0 over
+stdio）對接 ACP 相容 agent（Gemini CLI 為驗證對象），讓 team 成員
+多一種引擎可選；claude_engine / codex_engine 的既有路徑一行不動，
+engineMode 鎖定邏輯（`resolve_engine_name_gated`）自然涵蓋。
+是否執行由使用者屆時決定。
+
+- 遵循 `engines/base.py` 的既有約定：提供 `name`、
+  `DEFAULT_PERMISSION_MODE`、`async run_turn(...) -> RunResult`，
+  呼叫端（`routes/teams.py::_agent_run_capture`）零改動。
+- **測試策略**：單元/整合測試用「假 ACP agent」（一個 Python 小腳本，
+  照協定回應 JSON-RPC）驗證握手、串流、權限、錯誤、取消五條路徑——
+  不依賴真實 CLI；端到端驗證用升級後的 Gemini CLI（本機現裝 0.1.9，
+  需升級到含 `--experimental-acp` 的版本）。
+- 風險：ACP 權限模型與本專案 permission mode 字彙對映需要實測校準；
+  Windows 上 npm shim（`gemini.cmd`）需沿用 `helpers.wrap_cmd()` 的
+  既有處理。
+
+**驗收**：假 ACP agent 的整合測試全綠；真實 Gemini CLI 能作為 team
+成員完成一輪 team run；`/api/engines/status` 正確回報第三引擎。
+
 ## 四、執行順序與依賴
 
 ```
-Phase 1（ACP 引擎）──────► 獨立，優先執行（外部價值最高）
-Phase 2（事件層）─────────► 獨立於 Phase 1
-Phase 3（前端分解）───────► 建議在 Phase 2 之後（reducer 統一後拆分更乾淨）
-Phase 4（後端模組化）─────► 隨時可插隊，與其他 Phase 無衝突
+Phase 1（事件層）─────────► 優先執行（直接優化 Claude/Codex 體驗）
+Phase 2（前端分解）───────► 在 Phase 1 之後（reducer 統一後拆分更乾淨）
+Phase 3（後端模組化）─────► 隨時可插隊，與其他 Phase 無衝突
+Phase 4（ACP 引擎，選配）──► 最後；純增量，是否執行由使用者決定
 ```
 
 ## 五、參考資料
