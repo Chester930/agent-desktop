@@ -9,12 +9,20 @@
 單例，只載入一次、重複使用；真正的推論（CPU-bound）丟到 executor 跑，避免
 卡住 event loop。
 
-實測踩到的兩個坑（32-core i9-13900HX 上量出來的，不是理論值）：
+實測踩到的三個坑（32-core i9-13900HX、以及跑在只配額 2 顆 CPU 的 Docker
+container 裡各測過一輪，不是理論值）：
 - WhisperModel 不帶 cpu_threads 參數時，ctranslate2 內部預設值明顯沒有把
   多核心用起來——一段 7.5 秒的錄音要跑 123 秒（~16x realtime，完全不能用）。
   明確帶 cpu_threads 之後同一段錄音降到 19 秒左右（實測比較過 8/16/32，16
-  最快，再往上因為執行緒排程開銷反而變慢）。cpu_threads 用 os.cpu_count()
-  夾在 4~16 之間，讓少核心機器也能拿到合理下限、多核心機器不會過度超訂。
+  最快，再往上因為執行緒排程開銷反而變慢）。
+- os.cpu_count() 在 Docker container 裡回報的是「host 實體核心數」，不是
+  container 實際配額到的 CPU（例如這個專案的 backend service 用
+  deploy.resources.limits.cpus 限制在 2 顆，container 裡 os.cpu_count()
+  卻還是回報 host 的 32）。照 os.cpu_count() 開 16 個執行緒去搶 cgroup
+  只分到的 2 顆 CPU 額度，執行緒排程開銷只會更慢，不會更快。改成直接讀
+  cgroup（v2 的 cpu.max，或 v1 的 cpu.cfs_quota_us/cpu.cfs_period_us）
+  拿到「真正」可用的 CPU 額度，沒有 cgroup 限制（一般桌面版）才退回
+  os.cpu_count()。
 - faster-whisper 的中文輸出一律是簡體字，跟 language='zh'/'zh-TW' 這些
   代碼無關——這個 app 全部介面文字都是繁體中文，直接把簡體丟回輸入框，
   使用者第一眼看到滿螢幕簡體字會覺得「完全不能用」，即使辨識內容其實是對
@@ -29,8 +37,42 @@ import io
 import os
 import threading
 
+
+def _cgroup_cpu_quota() -> "float | None":
+    """回傳 cgroup 實際配額到的 CPU 數（可能是小數，例如 2.0），偵測不到
+    或沒有限制（"max"）就回傳 None，讓呼叫端退回 os.cpu_count()。"""
+    try:
+        v2 = "/sys/fs/cgroup/cpu.max"
+        if os.path.exists(v2):
+            quota_str, period_str = open(v2).read().split()
+            if quota_str == "max":
+                return None
+            return int(quota_str) / int(period_str)
+        quota_file = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
+        period_file = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
+        if os.path.exists(quota_file) and os.path.exists(period_file):
+            quota = int(open(quota_file).read().strip())
+            period = int(open(period_file).read().strip())
+            if quota <= 0:
+                return None
+            return quota / period
+    except Exception:
+        pass
+    return None
+
+
+def _pick_cpu_threads() -> int:
+    quota = _cgroup_cpu_quota()
+    available = quota if quota is not None else (os.cpu_count() or 4)
+    # 無條件進位（2.0 顆額度不該只給 1 個執行緒），下限 2、上限 16——
+    # 16 是實測 large-v3-turbo 在多核心機器上的甜蜜點，再往上執行緒排程
+    # 開銷反而拖慢速度。
+    import math
+    return max(2, min(math.ceil(available), 16))
+
+
 MODEL_SIZE = "large-v3-turbo"
-_CPU_THREADS = max(4, min(os.cpu_count() or 4, 16))
+_CPU_THREADS = _pick_cpu_threads()
 
 _model = None
 _model_lock = threading.Lock()
