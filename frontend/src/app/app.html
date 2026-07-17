@@ -323,21 +323,12 @@
           <div style="margin:0 20px;font-size:11px;color:#888;">載入中…</div>
         }
 
-        <!-- 語音輸入引擎：預設本機 faster-whisper（不需要 API Key，第一次使用
-             會下載模型到本機快取，之後離線可用），可切換成雲端 Whisper-compatible
-             API（沿用上面 AI Provider 的 API Key）。 -->
-        <div class="modal-section">
-          <div class="modal-section-header">語音輸入</div>
-          <div class="modal-form">
-            <label>轉錄引擎
-              <select [(ngModel)]="settingsForm.sttMode">
-                <option value="local">本機（faster-whisper，預設，不需要 API Key）</option>
-                <option value="cloud">雲端 API（用上面 AI Provider 的 API Key）</option>
-              </select>
-              <small>{{ settingsForm.sttMode === 'local' ? '第一次使用會自動下載語音模型到本機快取（約 1.6GB），之後完全離線可用，不會呼叫任何雲端服務。' : '會把錄音送到上面設定的 Provider API，需要先填好 API Key。' }}</small>
-            </label>
-          </div>
-        </div>
+        <!-- 語音輸入引擎（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
+        @defer (on immediate) {
+          <app-stt-settings [settingsForm]="settingsForm" />
+        } @placeholder {
+          <div style="margin:0 20px;font-size:11px;color:#888;">載入中…</div>
+        }
 
         <!-- Pluggable agent engine（Team Run 等協作功能實際執行任務用的 CLI） -->
         <div class="modal-section">

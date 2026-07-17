@@ -201,10 +201,12 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
       到表單的暫存值，後者是簽入生效中的值，不要搞混）。這塊要嘛用
       `@Input` 各傳一份唯讀快照，要嘛先做 `AppStateService`——目前
       還沒決定，下一個接手的人要先選一個。
-    - ⬜ 待拆：語音輸入（`sttMode`）區塊、快速提示編輯區塊（
-      `quickPromptsForm`/`showQuickPromptsEdit`，這組是獨立陣列狀態
-      不是 `settingsForm` 欄位，但同樣卡在settings modal 裡，可以
-      一併考慮）。
+    - ✅ 語音輸入（`SttSettingsComponent`：只有 `settingsForm.sttMode`
+      單一欄位，本來就是獨立 `.modal-section`，沒有跨頁依賴，比
+      AI Provider 還單純）。
+    - ⬜ 待拆：快速提示編輯區塊（`quickPromptsForm`/
+      `showQuickPromptsEdit`，這組是獨立陣列狀態，不是 `settingsForm`
+      欄位，但同樣卡在 settings modal 裡，可以一併考慮）。
   - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm` /
     `.toggle-label` / `.tg-status-chip` / `.memview-textarea` 等
     settings modal 共用樣式已搬到 `src/styles.scss`（global）——
