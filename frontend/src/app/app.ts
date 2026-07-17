@@ -456,6 +456,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   private mediaRecorder: MediaRecorder | null = null;
   private mediaStream: MediaStream | null = null;
   private audioChunks: Blob[] = [];
+  // 靜音自動停止錄音：用「這次錄音目前為止的音量峰值」當基準（不是固定
+  // 閾值——每個人講話音量、麥克風靈敏度都不一樣，固定閾值容易對某些人
+  // 太敏感、對某些人完全沒反應）。要先偵測到「有講話」才會開始算靜音
+  // 時間，不然開口前的安靜狀態會被誤判成靜音直接停止。
+  private audioContext: AudioContext | null = null;
+  private audioAnalyser: AnalyserNode | null = null;
+  private volumeMonitorTimer: any = null;
+  private recordingPeakVolume = 0;
+  private speechDetectedInRecording = false;
+  private silenceStartedAt: number | null = null;
+  private static readonly SILENCE_RATIO = 0.3;
+  private static readonly SILENCE_DURATION_MS = 2000;
+  private static readonly SPEECH_FLOOR = 0.02;
   readonly speechOutputSupported =
     typeof window !== 'undefined'
     && 'speechSynthesis' in window
@@ -1038,11 +1051,70 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.mediaRecorder.start();
       this.isRecording.set(true);
       this.showToast('語音錄製中，停止後會自動轉成文字', 'success');
+      this.startVolumeMonitor(this.mediaStream);
     } catch (e: any) {
       console.error('Failed to start audio recording:', e);
       const denied = e?.name === 'NotAllowedError' || e?.name === 'SecurityError';
       this.showToast(denied ? '麥克風權限被拒絕' : '啟動語音錄製失敗', 'error');
       this.cleanupAudioRecording();
+    }
+  }
+
+  private startVolumeMonitor(stream: MediaStream) {
+    this.recordingPeakVolume = 0;
+    this.speechDetectedInRecording = false;
+    this.silenceStartedAt = null;
+    try {
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      this.audioContext = new AudioContextCtor();
+      const source = this.audioContext.createMediaStreamSource(stream);
+      this.audioAnalyser = this.audioContext.createAnalyser();
+      this.audioAnalyser.fftSize = 2048;
+      source.connect(this.audioAnalyser);
+      const data = new Uint8Array(this.audioAnalyser.frequencyBinCount);
+
+      this.volumeMonitorTimer = setInterval(() => {
+        if (!this.audioAnalyser) return;
+        this.audioAnalyser.getByteTimeDomainData(data);
+        let sumSquares = 0;
+        for (let i = 0; i < data.length; i++) {
+          const normalized = (data[i] - 128) / 128;
+          sumSquares += normalized * normalized;
+        }
+        const rms = Math.sqrt(sumSquares / data.length);
+
+        if (rms > this.recordingPeakVolume) this.recordingPeakVolume = rms;
+        if (!this.speechDetectedInRecording && this.recordingPeakVolume > App.SPEECH_FLOOR) {
+          this.speechDetectedInRecording = true;
+        }
+        if (!this.speechDetectedInRecording) return;
+
+        if (rms < this.recordingPeakVolume * App.SILENCE_RATIO) {
+          if (this.silenceStartedAt === null) this.silenceStartedAt = Date.now();
+          else if (Date.now() - this.silenceStartedAt >= App.SILENCE_DURATION_MS) {
+            this.showToast('偵測到安靜，自動停止錄音', 'info');
+            this.stopAudioRecording();
+          }
+        } else {
+          this.silenceStartedAt = null;
+        }
+      }, 100);
+    } catch (e) {
+      // 音量監控是加分功能，建立失敗（例如瀏覽器不支援 AudioContext）
+      // 不該讓錄音本身也跟著失敗，安靜略過、退回純手動停止。
+      console.error('Failed to start volume monitor:', e);
+    }
+  }
+
+  private stopVolumeMonitor() {
+    if (this.volumeMonitorTimer) {
+      clearInterval(this.volumeMonitorTimer);
+      this.volumeMonitorTimer = null;
+    }
+    this.audioAnalyser = null;
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {});
+      this.audioContext = null;
     }
   }
 
@@ -1072,6 +1144,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   private cleanupAudioRecording() {
     this.isRecording.set(false);
+    this.stopVolumeMonitor();
     this.mediaStream?.getTracks().forEach(track => track.stop());
     this.mediaStream = null;
     this.mediaRecorder = null;

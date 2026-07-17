@@ -45,6 +45,31 @@ test.beforeEach(async ({ page }) => {
       value: MockMediaRecorder,
     });
 
+    // 可控制的假 AudioContext/AnalyserNode，讓測試能「喊話」（高音量）跟
+    // 「安靜」（低音量）之間切換，驗證靜音自動停止錄音的邏輯。
+    (window as any).__setMockVolume = (v: number) => { (window as any).__mockVolume = v; };
+    (window as any).__mockVolume = 0;
+
+    class MockAnalyserNode {
+      fftSize = 2048;
+      get frequencyBinCount() { return this.fftSize; }
+      getByteTimeDomainData(arr: Uint8Array) {
+        const v = Math.max(0, Math.min(127, (window as any).__mockVolume || 0));
+        for (let i = 0; i < arr.length; i++) {
+          arr[i] = 128 + (i % 2 === 0 ? v : -v);
+        }
+      }
+    }
+    class MockAudioContext {
+      createMediaStreamSource() { return { connect: () => undefined }; }
+      createAnalyser() { return new MockAnalyserNode() as unknown as AnalyserNode; }
+      close() { return Promise.resolve(); }
+    }
+    Object.defineProperty(window, 'AudioContext', {
+      configurable: true,
+      value: MockAudioContext,
+    });
+
     Object.defineProperty(window, 'speechSynthesis', {
       configurable: true,
       value: {
@@ -96,6 +121,43 @@ test.describe('Agent Desktop — 語音功能', () => {
 
     const micButton = page.locator('.mic-btn');
     await micButton.click();
+    await expect(micButton).toHaveClass(/recording/);
+
+    await micButton.click();
+    const input = page.locator('.chat-input');
+    await expect(input).toHaveValue('這是語音輸入測試');
+  });
+
+  test('音量低於峰值 30% 持續兩秒會自動停止錄音並轉文字', async ({ page }) => {
+    await page.goto('/');
+
+    const micButton = page.locator('.mic-btn');
+    // 先模擬「講話」：音量夠高，才會偵測到有講話、啟動靜音倒數的判斷
+    await page.evaluate(() => (window as any).__setMockVolume(100));
+    await micButton.click();
+    await expect(micButton).toHaveClass(/recording/);
+    await page.waitForTimeout(300);
+
+    // 切成「安靜」：音量遠低於剛剛峰值的 30%
+    await page.evaluate(() => (window as any).__setMockVolume(2));
+
+    // 靜音超過 2 秒後應該會自動停止（不用手動再點一次）並開始轉文字
+    await expect(micButton).not.toHaveClass(/recording/, { timeout: 4000 });
+    const input = page.locator('.chat-input');
+    await expect(input).toHaveValue('這是語音輸入測試');
+  });
+
+  test('沒偵測到講話（音量一直很低）不會誤觸發自動停止', async ({ page }) => {
+    await page.goto('/');
+
+    const micButton = page.locator('.mic-btn');
+    // 音量全程都很低（低於 SPEECH_FLOOR），代表從沒偵測到講話——
+    // 靜音倒數邏輯不該啟動，錄音要一直保持中，直到手動停止
+    await page.evaluate(() => (window as any).__setMockVolume(1));
+    await micButton.click();
+    await expect(micButton).toHaveClass(/recording/);
+
+    await page.waitForTimeout(2500);
     await expect(micButton).toHaveClass(/recording/);
 
     await micButton.click();
