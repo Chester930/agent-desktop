@@ -206,7 +206,16 @@ def _parse_full_frontmatter(path: Path) -> dict:
             result[key] = [x.strip().strip("\"'") for x in val.strip("[]").split(",") if x.strip()]
             i += 1
         else:
-            result[key] = val.strip("\"'")
+            stripped = val.strip("\"'")
+            # bool 欄位（例如 favorite）用 Python str() 寫回去會是
+            # "True"/"False"；這裡沒特判的話，下次讀回來 bool("False")
+            # 在 Python 裡還是 True（非空字串一律 truthy），等於「取消收藏」
+            # 永遠寫不進去、重整後又跑回來。同時容忍 YAML 慣用的小寫
+            # true/false，兩種大小寫都要能正確還原成布林值。
+            if stripped.lower() in ("true", "false"):
+                result[key] = stripped.lower() == "true"
+            else:
+                result[key] = stripped
             i += 1
     return result
 
@@ -234,6 +243,8 @@ def _write_frontmatter(path: Path, fm: dict) -> None:
                     parts.append(f"  - {item}\n")
             else:
                 parts.append(f"{key}: []\n")
+        elif isinstance(val, bool):
+            parts.append(f"{key}: {'true' if val else 'false'}\n")
         else:
             parts.append(f"{key}: {val}\n")
     parts.append("---\n")
@@ -354,7 +365,11 @@ def _parse_yaml_simple(text: str) -> dict:
             result[key] = [x.strip().strip("\"'") for x in val[1:-1].split(",") if x.strip()]
             i += 1
         else:
-            result[key] = val.strip("\"'")
+            stripped = val.strip("\"'")
+            if stripped.lower() in ("true", "false"):
+                result[key] = stripped.lower() == "true"
+            else:
+                result[key] = stripped
             i += 1
     return result
 

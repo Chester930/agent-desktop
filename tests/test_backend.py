@@ -260,6 +260,28 @@ class TestAgentCRUD:
         body2 = await resp2.json()
         assert body2["description"] == "更新後的描述"
 
+    async def test_update_agent_favorite_round_trip(self, client, sample_agent, tmp_claude_home, monkeypatch):
+        """健檢：favorite 用 bool(fm.get('favorite', False)) 判斷，但舊版
+        _write_frontmatter 是用 Python str(False) 寫回 frontmatter（"False"
+        大寫），下次讀回來變成非空字串 "False"，bool("False") 在 Python 裡
+        還是 True——等於「取消收藏」永遠寫不進去，重整後又跑回來。"""
+        import database
+        monkeypatch.setattr(database, "CLAUDE_HOME", tmp_claude_home)
+        try:
+            resp = await client.put("/api/agents/test-agent", json={"favorite": True})
+            assert resp.status == 200
+            resp2 = await client.get("/api/agents/test-agent")
+            body2 = await resp2.json()
+            assert body2["favorite"] is True
+
+            resp3 = await client.put("/api/agents/test-agent", json={"favorite": False})
+            assert resp3.status == 200
+            resp4 = await client.get("/api/agents/test-agent")
+            body4 = await resp4.json()
+            assert body4["favorite"] is False
+        finally:
+            await client.put("/api/agents/test-agent", json={"favorite": False})
+
     async def test_update_agent_skills(self, client, sample_agent):
         """sample_agent 是 session-scoped fixture，共用同一份 test-agent.md
         物理檔案——同樣的理由見 test_update_agent_engine 的說明，用

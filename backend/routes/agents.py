@@ -129,17 +129,23 @@ async def handle_agent_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
-    # 最愛標籤同步：favorite=true → 複製到 CLAUDE_HOME/agents/，false → 移除
+    # 最愛標籤同步：favorite=true → 複製到 CLAUDE_HOME/agents/，false → 移除。
+    # 預設安裝沒有另外設定 registryHome 時，registry（f 所在目錄）本來就
+    # 是 CLAUDE_HOME/agents ——這時候 dest 跟 f 是同一個檔案，取消收藏會
+    # 變成 unlink() 剛剛才寫好的 registry 檔案本身，直接把整個 agent 刪掉，
+    # 而不只是清掉 favorite 欄位。這種單一來源設定下，frontmatter 早就
+    # 直接是「同一份」，不需要另外複製/刪除。
     if "favorite" in data:
         import database as _db
         import shutil
         claude_agents_dir = _db.CLAUDE_HOME / "agents"
         claude_agents_dir.mkdir(parents=True, exist_ok=True)
         dest = claude_agents_dir / f"{aid}.md"
-        if data["favorite"]:
-            shutil.copy2(str(f), str(dest))
-        else:
-            dest.unlink(missing_ok=True)
+        if dest.resolve() != f.resolve():
+            if data["favorite"]:
+                shutil.copy2(str(f), str(dest))
+            else:
+                dest.unlink(missing_ok=True)
     # 在背景非同步執行資源同步，避免 Windows Docker 掛載的慢速磁碟 I/O 阻塞 API 回應
     asyncio.create_task(_trigger_resource_sync(agent_ids={aid}))
     return web.json_response({"ok": True})
