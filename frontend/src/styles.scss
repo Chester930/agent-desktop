@@ -102,6 +102,59 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   }
 }
 
+/* ── modal-body's label styling (must be global: the settings modal's */
+/* top labels now render via GeneralSettingsComponent — Phase 2). Kept as */
+/* its own block rather than merged with .modal-section above: the two */
+/* have subtly different scope (input/select/textarea nested under label */
+/* here vs. directly under .modal-section there) and .modal-section's */
+/* version adds width:100%, which .modal-body's original didn't have. ── */
+.modal-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #888;
+  font-weight: 500;
+
+  input, select, textarea {
+    background: #1f1f1f;
+    border: 1px solid #2a2a2a;
+    color: #e8e8e8;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    outline: none;
+    font-family: inherit;
+    appearance: none;
+    -webkit-appearance: none;
+    &:focus { border-color: #d4a853; }
+  }
+
+  select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+    cursor: pointer;
+    option { background: #1e1e2e; color: #e8e8e8; }
+  }
+
+  input[type="checkbox"] {
+    appearance: auto;
+    -webkit-appearance: auto;
+    width: 14px; height: 14px;
+    accent-color: #d4a853;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  small {
+    font-size: 11px;
+    color: #888;
+    opacity: 0.7;
+  }
+}
+
 .modal-section-header {
   display: flex;
   justify-content: space-between;

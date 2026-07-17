@@ -182,14 +182,44 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     - ✅ AI Provider（#16，`ProviderSettingsComponent`：`provider`/
       `providerApiKey`/`providerModel`/`providerApiUrl` 4 個欄位，
       本來就是獨立 `.modal-section`，沒有跨頁依賴，是最單純的一塊）。
-    - ⬜ 待拆：`.modal-body` 最上面那組沒包在 `.modal-section` 裡的
-      標籤（`projectDir`/`claudeHome`/`workDir`/`backendPort`/
-      `backendUrl`/`defaultAgent`/`theme`/`lang`/`enterToSend`/
-      `openAtLogin`）——這組比較麻煩，因為裡面混了
-      `pickProjectDir()`/`pickClaudeHome()`（開檔案選擇器）、
-      `resolvedClaudeHome()`（跨頁 signal，做法同 memory-editor 用
-      `@Input`）、`dropdownAgents()`、`isElectron`，拆之前要先決定
-      要不要連同這些方法一起搬，或用 `@Input`/`@Output` 傳。
+    - ✅ `.modal-body` 最上面那組沒包在 `.modal-section` 裡的標籤
+      （`GeneralSettingsComponent`：`projectDir`/`claudeHome`/
+      `workDir`/`backendPort`/`backendUrl`/`defaultAgent`/`theme`/
+      `lang`/`enterToSend`/`openAtLogin`，連同巢狀的
+      `<app-recent-work-dirs>` 一起搬）。混在裡面的幾個依賴分別這樣
+      處理：
+      - `pickProjectDir()`/`pickClaudeHome()`：純粹讀寫
+        `settingsForm` 的方法，整個搬進新元件（只需要注入
+        `ClaudeService`）。
+      - `resolvedClaudeHome()`：跨頁 signal，同 memory-editor 的作法用
+        `@Input resolvedClaudeHome`。
+      - `dropdownAgents()`：`App` 自己在別處（agent 相關程式碼）還在
+        用這個 computed，所以留在 `App`，用
+        `@Input dropdownAgents: Agent[]` 傳唯讀快照。
+      - `isElectron`：純環境判斷式（`!!(window as any).electronAPI`），
+        不是 app state，新元件自己算一份就好，不用 `@Input`——這也讓
+        `App` 裡原本的 `isElectron` 欄位變成死碼，順手一併移除（這是
+        這次搬移直接造成的死碼，不是搬移前就存在的技術債，所以清掉
+        跟前幾次「發現既有死碼但不清」的原則不衝突）。
+      - CSS 踩坑：`.modal-body` 這個包裹 `<div>` 本身還留在 `App`
+        自己的 template 裡（沒有整個搬走，只搬了裡面的 `<label>`
+        內容），但巢狀選擇器 `.modal-body { label { ... } }`
+        （scoped 在 `app.scss`）在新元件渲染出的 `<label>` 上會失效
+        ——因為 Angular 的 emulated encapsulation 是靠比對 content
+        attribute，不是單純比對 DOM 祖先關係，子元件渲染的元素不帶
+        `App` 的 attribute。解法：把巢狀的 `label {...}` 規則獨立成
+        一個純粹的全域 `.modal-body label {...}` 選擇器搬進
+        `src/styles.scss`（純 CSS 選擇器只看 DOM 結構，不管 Angular
+        attribute，所以子元件渲染的 `<label>` 一樣吃得到）；`.modal-
+        body` 外層的 padding/flex 排版本身不用動，因為那個 `<div>`
+        還是 `App` 自己渲染的。注意這個規則跟已經是全域的
+        `.modal-section { label {...} }` **不是**同一份、故意沒有合併
+        ——兩者巢狀範圍不同（`.modal-section` 版本的
+        `input/select/textarea` 直接掛在 section 底下、還多一個
+        `width:100%`，`.modal-body` 版本是掛在 `label` 底下、沒有
+        `width:100%`），合併會悄悄改變其中一邊的樣式，所以維持兩份
+        獨立規則。用 `page.evaluate` 讀 computed style 驗證過顏色/
+        字重/背景色都跟搬移前的 scss 定義完全一致，不是肉眼猜的。
     - ⬜ 待拆：「執行引擎範圍」區塊（`settingsForm.engineMode`/
       `settingsForm.agentEngine`/`claudeBin`/`codexBin`/`apiKeyCmd`/
       `codexApiKeyCmd`）——這塊讀了兩個 app-wide signal，注意兩個是

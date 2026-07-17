@@ -7,12 +7,12 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { DiagnosticsPanelComponent } from './components/diagnostics-panel/diagnostics-panel';
 import { AgencyImportPanelComponent } from './components/agency-import-panel/agency-import-panel';
-import { RecentWorkDirsComponent } from './components/recent-work-dirs/recent-work-dirs';
 import { TelegramSettingsComponent } from './components/telegram-settings/telegram-settings';
 import { MemoryEditorComponent } from './components/memory-editor/memory-editor';
 import { ProviderSettingsComponent } from './components/provider-settings/provider-settings';
 import { SttSettingsComponent } from './components/stt-settings/stt-settings';
 import { QuickPromptsEditComponent } from './components/quick-prompts-edit/quick-prompts-edit';
+import { GeneralSettingsComponent } from './components/general-settings/general-settings';
 import { SettingsService, AppSettings } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -53,7 +53,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -62,7 +62,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('inputRef') inputRef!: ElementRef;
   @ViewChild('scrollArea') scrollArea!: ElementRef;
 
-  readonly isElectron = !!(window as any).electronAPI;
+  // isElectron: extracted into components/general-settings (Phase 2) —
+  // that component computes its own copy (pure environment check).
 
   agents = signal<Agent[]>([]);
   dropdownAgents = computed(() => {
@@ -1325,15 +1326,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  async pickProjectDir() {
-    const dir = await this.claude.pickDirectory();
-    if (dir) this.settingsForm.projectDir = dir;
-  }
-
-  async pickClaudeHome() {
-    const dir = await this.claude.pickDirectory();
-    if (dir) this.settingsForm.claudeHome = dir;
-  }
+  // pickProjectDir / pickClaudeHome: extracted into
+  // components/general-settings (Phase 2)
 
   // T07 — Dashboard stats
   stats = signal<{

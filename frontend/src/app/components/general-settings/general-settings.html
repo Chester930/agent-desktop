@@ -1,0 +1,75 @@
+<label>預設工作目錄（全域）
+  <div style="display:flex;gap:6px;align-items:center;">
+    <input style="flex:1" [(ngModel)]="settingsForm.projectDir"
+      placeholder="例：C:\Users\666\Desktop（留空則自動偵測）">
+    <button class="btn-secondary" style="flex-shrink:0;font-size:11px;padding:4px 8px"
+      (click)="pickProjectDir()">選擇…</button>
+  </div>
+  <small>
+    新對話的預設起始目錄。每個對話欄可個別覆蓋（點 📁）。
+    記憶、排程、靈魂等資料固定存放於 <code>~/.claude/</code>，與此設定無關。
+  </small>
+</label>
+<label>資料根目錄（claudeHome）
+  <div style="display:flex;gap:6px;align-items:center;">
+    <input style="flex:1" [(ngModel)]="settingsForm.claudeHome"
+      placeholder="留空 = 自動使用 ~/.claude">
+    <button class="btn-secondary" style="flex-shrink:0;font-size:11px;padding:4px 8px"
+      (click)="pickClaudeHome()">選擇…</button>
+  </div>
+  <small>
+    App 的共用資料根目錄（Agent、Skill、Team、靈魂設定、對話紀錄），Claude 與 Codex 引擎共用同一份，並非僅供 Claude 使用。
+    留空則使用作業系統預設的 <code>~/.claude</code>。
+    @if (resolvedClaudeHome) {
+      目前生效：<code style="color:#d4a853">{{ resolvedClaudeHome }}</code>
+    }
+  </small>
+</label>
+<label>工作目錄
+  <input [(ngModel)]="settingsForm.workDir" placeholder="C:\Users\mycena">
+  <small>Claude 執行時的起始目錄</small>
+  <!-- 最近使用的工作目錄（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
+  @defer (on immediate) {
+    <app-recent-work-dirs (select)="settingsForm.workDir = $event" />
+  } @placeholder {
+    <small style="color:#888;">載入中…</small>
+  }
+</label>
+<label>後端連接埠
+  <input type="number" [(ngModel)]="settingsForm.backendPort" min="1024" max="65535">
+</label>
+<label>遠端後端 URL <small>（選填，填寫後覆蓋連接埠設定）</small>
+  <input type="url" [(ngModel)]="settingsForm.backendUrl"
+    placeholder="例：http://192.168.1.100:8765 或 https://my-server.com">
+  <small>留空則使用 localhost:{{ settingsForm.backendPort }}</small>
+</label>
+<label>預設代理人
+  <select [(ngModel)]="settingsForm.defaultAgent">
+    <option value="">（無）</option>
+    @for (a of dropdownAgents; track a.id) {
+      <option [value]="a.id">{{ a.name }}</option>
+    }
+  </select>
+</label>
+<label>介面主題
+  <select [(ngModel)]="settingsForm.theme">
+    <option value="dark">深色（預設）</option>
+    <option value="light">淺色</option>
+  </select>
+</label>
+<label>介面語言 / Language  <small>(#19 i18n)</small>
+  <select [(ngModel)]="settingsForm.lang">
+    <option value="zh">繁體中文</option>
+    <option value="en">English</option>
+  </select>
+</label>
+<label class="toggle-label">
+  <input type="checkbox" [(ngModel)]="settingsForm.enterToSend">
+  Enter 鍵直接傳送（Shift+Enter 換行）
+</label>
+@if (isElectron) {
+  <label class="toggle-label">
+    <input type="checkbox" [(ngModel)]="settingsForm.openAtLogin">
+    開機自動啟動（最小化至系統匣）
+  </label>
+}
