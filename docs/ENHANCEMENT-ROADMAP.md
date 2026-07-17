@@ -10,6 +10,13 @@
 > ——參照這些標準的設計模式，不是引入它們來取代現有引擎。唯一涉及
 > 「新增引擎」的 ACP 項目被明確列為最後的選配（Phase 4），且它是
 > 純增量：完全不動 claude_engine / codex_engine 的既有路徑。
+>
+> **產品定位（2026-07-17 與專案擁有者確認）**：本專案目標是
+> **發佈給其他使用者、包裝成可安裝軟體**（NSIS installer、GitHub
+> Releases、Docker），不只是個人工作站。所有優化取捨以「零設定
+> 開箱即用」優先於「單機效能極限」——例如語音的本機模型自動下載、
+> GPU 自動偵測失敗退回 CPU、Docker 的 opt-in GPU overlay，都是
+> 這個原則的既有先例，新工作應沿用同樣思路。
 
 ## 一、生態系研究結論（2026-07 查證）
 
@@ -129,7 +136,32 @@ Phase 3（後端模組化）─────► 隨時可插隊，與其他 Phase
 Phase 4（ACP 引擎，選配）──► 最後；純增量，是否執行由使用者決定
 ```
 
-## 五、參考資料
+## 五、實作共通注意事項（給接手的實作者，2026-07 實測踩過的坑）
+
+1. **測試跑法**：後端 `python -m pytest tests/`（完整套件是文件記載的
+   標準跑法；單獨跑個別測試類別已可行——conftest 的
+   CONFIG_FILE/CLAUDE_HOME 順序 bug 已在 PR #28 修掉）。前端
+   `npx tsc --noEmit` + `npx ng build` + `npx ng test --watch=false` +
+   `npx playwright test`。
+2. **Playwright 的 port 4200 陷阱**：`playwright.config.ts` 的
+   `reuseExistingServer` 會直接沿用已佔用 4200 的服務——本機 Docker
+   前端（nginx）也綁 4200，e2e 會默默測到它服務的**舊靜態檔案**而
+   不是最新原始碼。改前端程式碼後要嘛停掉 container、要嘛
+   `npx ng build --base-href ./` 後把產物複製進主 checkout 的
+   `frontend/dist/frontend/browser/`（nginx bind mount 讀那裡）。
+3. **backend 新模組的兩個雷**：(a) `.gitignore` 有 `backend/local_*.py`
+   規則，新檔案不要取 `local_` 開頭的名字（stt.py 當初就中招）；
+   (b) `backend/Dockerfile` 的 COPY 是白名單，新增 .py 模組必須加進
+   那行 COPY，不然 Docker 版直接 ModuleNotFoundError。
+4. **工作流程**：在 worktree 開發 → 全部測試綠 → conventional commit
+   → push → `gh pr create` → 合併前確認 `mergeable`。CRLF 警告在
+   Windows 上是正常噪音。
+5. **Docker 重建**：改後端後 `docker compose --profile prod build
+   backend && docker compose -f docker-compose.yml -f
+   docker-compose.gpu.yml --profile prod up -d backend`（GPU overlay
+   是 opt-in；模型快取在 named volume `stt_model_cache`，重建不丟）。
+
+## 六、參考資料
 
 - ACP 官方：<https://zed.dev/acp>
 - ACP registry：<https://zed.dev/blog/acp-registry>
