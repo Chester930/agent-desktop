@@ -63,8 +63,15 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: "2"
+          # 本機語音辨識（faster-whisper large-v3-turbo）是 CPU 密集的工作，
+          # 實測過 cpu_threads 跟實際可用核心數強相關（2 顆 vs 16 顆，同一段
+          # 錄音差了 6~7 倍）。這裡從 2 顆調高到 6 顆，讓語音輸入在 Docker
+          # 部署下也有堪用的速度；host 通常有更多核心（例如 32 核），這個
+          # 上限主要是避免這個 container 把其他同機服務的 CPU 都吃光，不是
+          # 因為語音辨識真的只需要這麼多。記憶體同步從 2G 調到 4G，避免模型
+          # （int8 量化後常駐記憶體加上其他請求）逼近舊上限。
+          memory: 4G
+          cpus: "6"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status')"]
       interval: 10s
@@ -138,8 +145,15 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: "2"
+          # 本機語音辨識（faster-whisper large-v3-turbo）是 CPU 密集的工作，
+          # 實測過 cpu_threads 跟實際可用核心數強相關（2 顆 vs 16 顆，同一段
+          # 錄音差了 6~7 倍）。這裡從 2 顆調高到 6 顆，讓語音輸入在 Docker
+          # 部署下也有堪用的速度；host 通常有更多核心（例如 32 核），這個
+          # 上限主要是避免這個 container 把其他同機服務的 CPU 都吃光，不是
+          # 因為語音辨識真的只需要這麼多。記憶體同步從 2G 調到 4G，避免模型
+          # （int8 量化後常駐記憶體加上其他請求）逼近舊上限。
+          memory: 4G
+          cpus: "6"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status')"]
       interval: 10s
