@@ -13,6 +13,7 @@ import { ProviderSettingsComponent } from './components/provider-settings/provid
 import { SttSettingsComponent } from './components/stt-settings/stt-settings';
 import { QuickPromptsEditComponent } from './components/quick-prompts-edit/quick-prompts-edit';
 import { GeneralSettingsComponent } from './components/general-settings/general-settings';
+import { EngineSettingsComponent } from './components/engine-settings/engine-settings';
 import { SettingsService, AppSettings } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -53,7 +54,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })

@@ -171,7 +171,7 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     （global）；`.memview-empty`/`.memview-path-row`/
     `.memview-proj-row`/`.memview-label`/`.memview-edit-actions`
     同樣是死 CSS，沒有搬動也沒有清理，維持原狀）。
-  - 🔶 `settingsForm`（63 refs）進行中，分段拆，不整塊搬。
+  - ✅ `settingsForm`（63 refs）分段拆完成，不整塊搬。
     `settingsForm` 是 `AppSettings` 一般物件（非 signal），拆分策略：
     子元件用 `@Input() settingsForm!: AppSettings` 接住同一個物件
     參考，`[(ngModel)]` 直接 mutate 它——因為是同一個物件參考，不需要
@@ -220,17 +220,26 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
         `width:100%`），合併會悄悄改變其中一邊的樣式，所以維持兩份
         獨立規則。用 `page.evaluate` 讀 computed style 驗證過顏色/
         字重/背景色都跟搬移前的 scss 定義完全一致，不是肉眼猜的。
-    - ⬜ 待拆：「執行引擎範圍」區塊（`settingsForm.engineMode`/
-      `settingsForm.agentEngine`/`claudeBin`/`codexBin`/`apiKeyCmd`/
-      `codexApiKeyCmd`）——這塊讀了兩個 app-wide signal，注意兩個是
-      不同東西：`engineStatus()`（roadmap 最早點名的那個，onboarding
-      流程 55-66 行、chat 區 633 行都在用，表示「這個引擎裝了沒/能不
-      能用」）和 `engineMode()`（後端權威的鎖定狀態，agent 編輯區
-      2322-2342 行在用，表示「目前只准用哪個引擎」，跟
-      `settingsForm.engineMode` 是同名但不同的兩個東西——前者是簽出
-      到表單的暫存值，後者是簽入生效中的值，不要搞混）。這塊要嘛用
-      `@Input` 各傳一份唯讀快照，要嘛先做 `AppStateService`——目前
-      還沒決定，下一個接手的人要先選一個。
+    - ✅ 「執行引擎範圍」區塊（`EngineSettingsComponent`：
+      `settingsForm.engineMode`/`settingsForm.agentEngine`/
+      `claudeBin`/`codexBin`/`apiKeyCmd`/`codexApiKeyCmd`）。決定不做
+      `AppStateService`，用 `@Input engineStatus` 傳
+      `engineStatus()` 的唯讀快照（純物件，不是 signal）——因為
+      `engineOptionDisabled()`/`engineOptionLabel()` 這兩個方法
+      **在別處也用到**（agent 編輯區的個別引擎覆寫選單，原 2235-2236
+      行），所以 `App` 自己那份不能刪，新元件裡複製一份小的純函式版本
+      （改讀 `this.engineStatus[name]` 而非 `this.engineStatus()[name]`，
+      因為現在是 plain object 不是 signal call），連同兩個靜態 label
+      對照表 `ENGINE_LABEL`/`ENGINE_REASON_LABEL` 一起複製——這兩個是
+      常數 map，複製比硬做 `@Input` function 傳遞更乾淨。至於
+      `engineMode()`（後端權威鎖定狀態，agent 編輯區在用，跟
+      `settingsForm.engineMode` 是同名但不同的兩個東西）：這個元件根本
+      沒用到它（原本以為會用到，盤點後發現這個區塊實際只讀
+      `engineStatus()`，`engineMode()` 是被其他區塊——agent 編輯區——
+      用，跟這次搬移無關），所以完全不用決定 `AppStateService` 這個
+      問題，之前的評估過度謹慎了。這個區塊沒有用到任何新的 CSS class
+      （全部沿用已經 global 的 `.modal-section`），不用動
+      `styles.scss`。
     - ✅ 語音輸入（`SttSettingsComponent`：只有 `settingsForm.sttMode`
       單一欄位，本來就是獨立 `.modal-section`，沒有跨頁依賴，比
       AI Provider 還單純）。
@@ -257,6 +266,15 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
       `.btn-danger` 其實被定義了兩次，後面那份（第 4334 行附近）蓋掉
       前面那份的每個重疊屬性，全域拷貝抄的是「實際生效」的後面那份，
       不是文件裡先出現的那份，這是既有的技術債，這次沒有清理）。
+
+    **`settingsForm`（63 refs）子區塊拆分至此全部完成** ✅——
+    `app.html` 裡已經找不到任何 `settingsForm.` 的直接 template
+    綁定，全部搬進上面 6 個獨立元件（Provider/STT/QuickPrompts/
+    General/Engine + 巢狀的 RecentWorkDirs）。`app.ts` 裡剩下的
+    `this.settingsForm.x = ...` 都是合理留下的業務邏輯（拖放資料夾、
+    `toggleLang()`/`toggleTheme()`、`openSettings()`/`saveSettings()`
+    初始化與存檔、`_autoCorrectGlobalEngine()` 自動切換），不是
+    UI 綁定，本來就不屬於這次「settings modal UI 拆分」的範圍。
   - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm` /
     `.toggle-label` / `.tg-status-chip` / `.memview-textarea` 等
     settings modal 共用樣式已搬到 `src/styles.scss`（global）——
@@ -264,10 +282,18 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     encapsulation 讓子元件收不到 `app.scss` 裡的 component-scoped
     樣式，每抽一個新元件如果用到這些 class 不用再重複搬；如果用到
     新的共用 class，記得順手搬過去。
+- **settings modal 內部拆分至此全部完成**（9 個獨立元件：
+  DiagnosticsPanel、AgencyImportPanel、RecentWorkDirs、
+  TelegramSettings、MemoryEditor、ProviderSettings、SttSettings、
+  QuickPromptsEdit、GeneralSettings、EngineSettings——數字對不上是
+  因為 RecentWorkDirs 巢狀在 GeneralSettings 裡，兩邊都算）。拆分
+  模式已經驗證足夠多次（純讀取、`@Input`/`@Output` 事件、shared
+  object reference mutation、cross-page signal 唯讀快照、純函式/
+  常數複製，五種模式都出現過），可以進到下一階段。
 - memview/schedules 分頁、teams/skills 側欄、chat 主畫面的 lazy
-  route 化維持原規劃，在 settings 相關的小區塊都驗證完拆分模式可行
-  之後再進行（這幾塊本身就是路由層級，天然比 settings modal 內部
-  的子元件更適合 `loadComponent` lazy route，風險模式不同）。
+  route 化：下一步，這幾塊本身就是路由層級，天然比 settings modal
+  內部的子元件更適合 `loadComponent` lazy route，風險模式不同
+  （route-level code splitting，不是 component extraction）。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立
