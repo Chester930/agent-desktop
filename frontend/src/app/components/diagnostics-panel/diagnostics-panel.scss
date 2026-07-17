@@ -1,0 +1,28 @@
+.modal-logs {
+  margin: 0 20px;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.modal-logs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: #1f1f1f;
+  font-size: 11px;
+  color: #888;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.modal-logs-body {
+  background: #0a0a0a;
+  color: #aaa;
+  font-size: 10px;
+  padding: 8px 10px;
+  max-height: 120px;
+  overflow-y: auto;
+  margin: 0;
+  white-space: pre-wrap;
+}

@@ -87,14 +87,59 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
 
 ### Phase 2 — 前端分解與延遲載入
 
-**目標**：把 `app.ts`（約 4,400 行）按分頁拆成 feature 元件，
+**目標**：把 `app.ts`（約 4,800 行）按分頁拆成 feature 元件，
 非首屏分頁改為 lazy route，降低初始 bundle 與變更偵測成本。
 
-- 拆分順序（依耦合度由低到高）：settings modal → memview/schedules
-  分頁 → teams/skills 側欄 → chat 主畫面。
-- 每一步都跑完整 e2e，拆完一塊合一塊，不做大爆炸式重寫。
+**2026-07-17 實測後的範圍修正（重要，讀完再動手）**：
 
-**驗收**：初始 bundle 顯著下降（目標 < 2MB raw）；所有 e2e 綠。
+原始規劃假設 settings modal 是「低耦合、可以第一個乾淨拆出去」的區塊。
+實際盤點後發現這個假設不成立，記錄如下避免後續實作者重踩：
+
+1. **狀態不是 settings-local，是 app-wide shared state。** 以
+   `engineStatus` 為例：在 `app.html` 233-555 行（settings modal 範圍）
+   內使用，但同時也在 onboarding 流程（55-66 行）與 agent 編輯區
+   （724 行）被讀取。settings modal 用到的 signal 有不少是這種
+   「順便展示在 settings 裡，但狀態本體屬於整個 app」的情況，不能
+   直接把它們的宣告搬進新元件——要嘛留在 `app.ts` 用 `@Input`/service
+   往下傳，要嘛抽成獨立 service（見下）。
+2. **實際引用規模比預期大。** grep 統計（僅列部分）：
+   `settingsForm: 63 refs`、`memEditContent: 8 refs`、
+   `telegramSaving: 6 refs`、`doctorRunning: 6 refs`、
+   `backendLogs: 3 refs`、`importAgencyAgents: 3 refs`、
+   `recentWorkDirs: 3 refs`。`settingsForm` 的 63 個引用分散在
+   template 綁定、`saveSettings()`、`resetSettingsForm()`、多個
+   `effect()` 之間，不是能安全一次性搬移的規模。
+3. **`@defer` 不能替代真正的元件抽取。** Angular 17+ 的 `@defer`
+   區塊只有在包住「有自己獨立 import 的元件」時才會真正做到
+   bundle-size 拆分；如果只是把 template 包一層 `@defer` 但邏輯還是
+   綁在 host component（`app.ts`）自己的 class members 上，效果只有
+   「延後渲染/變更偵測時機」，**不會**減少初始 bundle 大小——因為
+   `app.ts` 本身（含 settings 邏輯）還是被整包編進主 bundle。roadmap
+   驗收項「初始 bundle < 2MB raw」如果只做 `@defer` 包裝是達不到的，
+   必須是真元件抽取（獨立 `.ts`/`.html`/DI 邊界）才算數。
+
+**修正後的拆分策略**：
+
+- 抽取前先建一個 `AppStateService`（或按領域拆多個 service）承接
+  真正跨頁共用的 signal（`engineStatus` 是目前唯一已確認案例，抽取
+  途中若發現同類 signal 一併移入）；`app.ts` 與新元件都注入這個
+  service，而不是互相直接引用對方的 class members。
+- 抽取順序改為「先挑引用數最低、且已知無跨頁共用狀態的區塊做驗證」，
+  而不是原規劃的「settings modal 整塊」：`recentWorkDirs`
+  （3 refs）→ `importAgencyAgents`（3 refs）→ `backendLogs`（3 refs）
+  → `telegramSaving`（6 refs）→ `doctorRunning`（6 refs）→
+  `memEditContent`（8 refs）→ 最後才是 `settingsForm`（63 refs，
+  拆成子區塊逐步搬，不整塊搬）。
+- 每抽一個區塊：建元件 → 搬 template/邏輯 → 需要跨頁狀態的改注入
+  service → 跑完整 e2e → commit。不做大爆炸式重寫。
+- memview/schedules 分頁、teams/skills 側欄、chat 主畫面的 lazy
+  route 化維持原規劃，在 settings 相關的小區塊都驗證完拆分模式可行
+  之後再進行（這幾塊本身就是路由層級，天然比 settings modal 內部
+  的子元件更適合 `loadComponent` lazy route，風險模式不同）。
+
+**驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
+抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立
+回溯（每個 commit 都是綠的可運作狀態，不依賴後續 commit 才能運作）。
 
 ### Phase 3 — 後端模組化收尾
 

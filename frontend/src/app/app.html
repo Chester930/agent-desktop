@@ -506,32 +506,13 @@
           </div>
         </div>
 
-        <!-- T09 Doctor 診斷 -->
-        <div class="modal-logs">
-          <div class="modal-logs-header">
-            Claude Code 診斷（doctor）
-            <div style="display:flex;gap:6px">
-              <button class="btn-secondary" style="font-size:11px;padding:3px 8px"
-                (click)="runDoctor()" [disabled]="doctorRunning()">
-                {{ doctorRunning() ? '執行中…' : '執行診斷' }}
-              </button>
-              <button class="btn-secondary" style="font-size:11px;padding:3px 8px"
-                (click)="runClaudeUpdate()">檢查更新</button>
-            </div>
-          </div>
-          @if (doctorOutput()) {
-            <pre class="modal-logs-body">{{ doctorOutput() }}</pre>
-          }
-        </div>
-
-        <!-- 日誌分頁 -->
-        <div class="modal-logs">
-          <div class="modal-logs-header">
-            後端日誌
-            <button class="btn-secondary" style="font-size:11px;padding:3px 8px" (click)="loadLogs()">重新整理</button>
-          </div>
-          <pre class="modal-logs-body">{{ backendLogs().join('\n') || '（尚無日誌）' }}</pre>
-        </div>
+        <!-- T09 Doctor 診斷 + 後端日誌（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
+        @defer (on immediate) {
+          <app-diagnostics-panel
+            (logMessage)="messages.update(m => [...m, $event])" />
+        } @placeholder {
+          <div style="margin:0 20px;font-size:11px;color:#888;">載入中…</div>
+        }
 
         </div><!-- /modal-scroll-wrap -->
         <div class="modal-footer">

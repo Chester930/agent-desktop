@@ -1097,34 +1097,9 @@ body {
 }
 
 
-.modal-logs {
-  margin: 0 20px;
-  border: 1px solid $border;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.modal-logs-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  background: $surface2;
-  font-size: 11px;
-  color: $text-dim;
-  border-bottom: 1px solid $border;
-}
-
-.modal-logs-body {
-  background: #0a0a0a;
-  color: #aaa;
-  font-size: 10px;
-  padding: 8px 10px;
-  max-height: 120px;
-  overflow-y: auto;
-  margin: 0;
-  white-space: pre-wrap;
-}
+// .modal-logs / .modal-logs-header / .modal-logs-body moved to
+// components/diagnostics-panel/diagnostics-panel.scss (co-located,
+// exclusive to that extracted component).
 
 .modal-footer {
   display: flex;
@@ -1145,28 +1120,8 @@ body {
   white-space: nowrap;
 }
 
-.btn-primary {
-  background: $accent;
-  color: #000;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 20px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  &:hover { opacity: 0.85; }
-}
-
-.btn-secondary {
-  background: $surface2;
-  color: $text;
-  border: 1px solid $border;
-  border-radius: 6px;
-  padding: 8px 16px;
-  font-size: 13px;
-  cursor: pointer;
-  &:hover { border-color: $accent; }
-}
+// .btn-primary / .btn-secondary moved to src/styles.scss (global) —
+// shared with extracted standalone components, see comment there.
 
 // ── Session Search ────────────────────────────────────
 .session-search {

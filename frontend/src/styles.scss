@@ -1,5 +1,31 @@
 html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0d0d0d; }
 
+/* ── Shared buttons (must be global: used by App and by extracted */
+/* standalone feature components, which don't inherit App's emulated- */
+/* encapsulated app.scss styles) ────────────────────────────────── */
+.btn-primary {
+  background: #d4a853;
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  &:hover { opacity: 0.85; }
+}
+
+.btn-secondary {
+  background: #1f1f1f;
+  color: #e8e8e8;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  &:hover { border-color: #d4a853; }
+}
+
 /* ── Code block (injected via [innerHTML], must be global) ─────────────────── */
 .code-block-wrap {
   position: relative;

@@ -5,6 +5,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
+import { DiagnosticsPanelComponent } from './components/diagnostics-panel/diagnostics-panel';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -45,7 +46,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -3043,7 +3044,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   shouldScroll = false;
 
   settingsForm!: AppSettings;
-  backendLogs = signal<string[]>([]);
   statusInfo = signal('確認中…');
   projectSlug = signal('');
   resolvedClaudeHome = signal('');
@@ -3231,7 +3231,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   async openSettings() {
     this.settingsForm = this.settings.get();
     this.settingsOpen.set(true);
-    this.loadLogs();
     this.loadTelegramSettings();
     this.loadMemoryOverview();
     this.loadEngineStatus();
@@ -3262,10 +3261,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (eAPI?.getLoginItem) {
       this.settingsForm.openAtLogin = await eAPI.getLoginItem();
     }
-  }
-
-  loadLogs() {
-    this.claude.getLogs().subscribe(l => this.backendLogs.set(l));
   }
 
   saveSettings() {
@@ -4260,26 +4255,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.loadSession(sessions[0]);
   }
 
-  // T09 — claude doctor
-  doctorOutput = signal<string | null>(null);
-  doctorRunning = signal(false);
-
-  runDoctor() {
-    this.doctorRunning.set(true);
-    this.doctorOutput.set('執行中…');
-    this.claude.runCliCommand(['doctor']).subscribe({
-      next: out => { this.doctorOutput.set(out); this.doctorRunning.set(false); },
-      error: err => { this.doctorOutput.set(String(err)); this.doctorRunning.set(false); },
-    });
-  }
-
-  runClaudeUpdate() {
-    this.messages.update(m => [...m, { role: 'system', text: '正在檢查 Claude Code 更新…' }]);
-    this.claude.runCliCommand(['update']).subscribe({
-      next: out => this.messages.update(m => [...m, { role: 'system', text: out || '已是最新版本' }]),
-      error: err => this.messages.update(m => [...m, { role: 'system', text: String(err) }]),
-    });
-  }
+  // T09 — claude doctor: extracted into components/diagnostics-panel (Phase 2)
 
   importAgencyAgents() {
     this.importingAgency.set(true);
