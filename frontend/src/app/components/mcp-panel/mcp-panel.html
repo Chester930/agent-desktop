@@ -1,12 +1,14 @@
 <div class="mcp-view">
   <div class="mcp-header">
     <span style="font-size:12px;color:#888">MCP 伺服器（Model Context Protocol）</span>
-    <button class="btn-secondary btn-xs" (click)="addServerDef.emit()" title="新增一個 MCP Server 定義，會同步到 Claude／Codex 兩邊">
-      ＋ 新增
-    </button>
-    <button class="btn-secondary btn-xs" (click)="refreshList.emit()" [disabled]="mcpLoading">
-      {{ mcpLoading ? '…' : '↻ 整理' }}
-    </button>
+    <div class="mcp-header-actions">
+      <button class="btn-secondary" style="flex:1;font-size:12px;" (click)="addServerDef.emit()" title="新增一個 MCP Server 定義，會同步到 Claude／Codex 兩邊">
+        ＋ 新增
+      </button>
+      <button class="btn-secondary" style="flex:1;font-size:12px;" (click)="refreshList.emit()" [disabled]="mcpLoading">
+        {{ mcpLoading ? '…' : '↻ 整理' }}
+      </button>
+    </div>
   </div>
 
   <!-- App 自己管理的 MCP Server 定義（單一來源，同步到 Claude／Codex 兩邊）

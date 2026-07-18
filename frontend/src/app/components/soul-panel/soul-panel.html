@@ -6,7 +6,7 @@
     <p class="soul-hint">
       可以設定多個人格檔案，將全部合併並在每次對話開頭注入。用滾輪捲動可切換選取。
     </p>
-    <button class="btn-primary soul-add-btn" (click)="add.emit()">＋ 新增靈魂</button>
+    <button class="btn-secondary soul-add-btn" (click)="add.emit()">＋ 新增靈魂</button>
 
     @for (s of souls; track s.id) {
       <div class="panel-card" [class.selected]="selectedSoulId === s.id" (click)="pickSoul.emit(s.id)">
