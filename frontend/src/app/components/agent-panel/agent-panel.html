@@ -1,0 +1,109 @@
+<div class="panel-list">
+  @for (a of agents; track a.id) {
+    <div class="panel-card"
+      [class.active-in-chat]="activeAgentId === a.id"
+      [class.expanded]="expandedAgentId === a.id"
+      (click)="toggleExpand.emit(a.id)">
+      <div class="card-header-row">
+        <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+          <span class="card-name">@{{ a.name }}</span>
+        </div>
+        <div class="agent-action-btns" (click)="$event.stopPropagation()">
+          <button class="agent-activate-btn"
+            [class.active]="activeAgentId === a.id"
+            (click)="activate.emit(a)"
+            [title]="activeAgentId === a.id ? '已啟動' : '啟動此 Agent（套用 Soul/Skills/MCP/Memory）'">
+            {{ activeAgentId === a.id ? '◉ 啟動中' : '▶ 啟動' }}
+          </button>
+          <button class="agent-fav-btn" (click)="favorite.emit(a)"
+            [class.active]="a.favorite"
+            [title]="a.favorite ? '⭐ 已同步到 Claude Code CLI（點擊取消）' : '☆ 加入最愛，同步到 Claude Code CLI'">
+            {{ a.favorite ? '⭐' : '☆' }}
+          </button>
+          <button class="agent-edit-btn" (click)="edit.emit(a)" title="編輯 Agent 映射">✎</button>
+        </div>
+      </div>
+      <!-- 映射摘要列 -->
+      @if (a.soul || a.skills?.length || a.mcp?.length || a.memory?.length) {
+        <div class="agent-mapping-summary">
+          @if (a.soul) { <span class="mapping-chip soul-chip" title="Soul">👤 {{ a.soul }}</span> }
+          @if (a.skills?.length) { <span class="mapping-chip" title="Skills">⚡ {{ a.skills!.length }}</span> }
+          @if (a.mcp?.length) { <span class="mapping-chip" title="MCPs">🔌 {{ a.mcp!.length }}</span> }
+          @if (a.memory?.length) { <span class="mapping-chip" title="Memory">🧠 {{ a.memory!.length }}</span> }
+        </div>
+      }
+
+      @if (expandedAgentId === a.id) {
+        <div class="card-detail-content" (click)="$event.stopPropagation()">
+          <div class="detail-desc">
+            {{ expandedTranslation !== null && expandedTranslation !== ''
+                ? expandedTranslation
+                : (a.description || '（無說明）') }}
+            @if (expandedTranslation === '') {
+              <span class="translating">翻譯中…</span>
+            }
+          </div>
+          @if (a.description) {
+            <div class="detail-actions">
+              <button class="translate-btn" (click)="translate.emit(a.description)">
+                {{ expandedTranslation !== null ? '還原原文' : '翻譯成繁體中文' }}
+              </button>
+            </div>
+          }
+          <div class="linked-section">
+            <!-- 永久技能 -->
+            <div class="linked-title">永久技能：</div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              @for (skillId of (a.skills ?? []); track skillId) {
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <button class="link-item" style="flex:1" (click)="jumpToSkill.emit(skillId)">
+                    <span>/{{ skillId }}</span><span>➔</span>
+                  </button>
+                  <button class="del-btn" (click)="$event.stopPropagation(); removeSkillPerm.emit({ agentId: a.id, skillId })" title="移除">✕</button>
+                </div>
+              } @empty {
+                <div style="font-size:10px;color:#555;font-style:italic;">無永久技能</div>
+              }
+            </div>
+
+            <!-- 永久直連 MCP -->
+            <div class="linked-title" style="margin-top:8px;">直連 MCP（永久）：</div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              @for (mcpName of (a.mcp ?? []); track mcpName) {
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <button class="link-item" style="flex:1" (click)="jumpToMcp.emit(mcpName)">
+                    <span>{{ mcpName }}</span><span>➔</span>
+                  </button>
+                  <button class="del-btn" (click)="$event.stopPropagation(); removeMcpPerm.emit({ agentId: a.id, mcpName })" title="移除">✕</button>
+                </div>
+              } @empty {
+                <div style="font-size:10px;color:#555;font-style:italic;">無直連 MCP</div>
+              }
+            </div>
+
+            <!-- 靈魂人格 -->
+            <div class="linked-title" style="margin-top:8px;">靈魂人格 (Soul Persona)：</div>
+            <div class="soul-persona-preview" style="font-size:11px;color:#bbb;background:#151515;border:1px solid #222;border-radius:4px;padding:8px;margin-top:4px;white-space:pre-wrap;max-height:120px;overflow-y:auto;line-height:1.5;">
+              {{ getAgentSoulContent(a.soul || a.id) }}
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  } @empty {
+    <div class="empty-guide">
+      <div class="empty-guide-icon">🤖</div>
+      <div class="empty-guide-title">尚未設定 Agent</div>
+      <div class="empty-guide-sub">
+        Agent 定義 Claude 的角色與行為。<br>
+        在以下目錄建立 <code>.md</code> 檔案即可自動出現：
+      </div>
+      <code class="empty-guide-path">~/.claude/agents/my-agent.md</code>
+      <button class="empty-guide-btn" (click)="openHelp.emit()">查看說明</button>
+    </div>
+  }
+  <!-- 建立 Agent 按鈕 -->
+  <div class="sticky-create-btn-wrap">
+    <button class="btn-secondary" style="width:100%;font-size:12px;" (click)="edit.emit(undefined)">＋ 建立 Agent</button>
+  </div>
+</div>

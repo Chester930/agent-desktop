@@ -913,18 +913,12 @@ body {
   &:hover { border-color: $accent2; color: $accent2; }
 }
 
-.auth-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: #10b981;
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
-  flex-shrink: 0;
-  transition: all 0.2s ease-in-out;
-}
+// .auth-dot moved to src/styles.scss (global) — exclusive to
+// components/skill-panel now (Phase 2).
 
-
+// .linked-section .link-item hover override: still used directly by App
+// elsewhere too (agents tab shares the same detail-expansion pattern),
+// original stays; global copy added to src/styles.scss.
 .linked-section {
   .link-item {
     transition: all 0.15s;
@@ -1045,55 +1039,15 @@ body {
   flex-direction: column;
   gap: 16px;
 
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 12px;
-    color: $text-dim;
-    font-weight: 500;
-
-    input, select, textarea {
-      background: $surface2;
-      border: 1px solid $border;
-      color: $text;
-      border-radius: 6px;
-      padding: 8px 10px;
-      font-size: 13px;
-      outline: none;
-      font-family: inherit;
-      // 讓 Windows 上的 select 不用原生渲染
-      appearance: none;
-      -webkit-appearance: none;
-      &:focus { border-color: $accent; }
-    }
-
-    // select 加下拉箭頭
-    select {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-      padding-right: 28px;
-      cursor: pointer;
-      option { background: #1e1e2e; color: #e8e8e8; }
-    }
-
-    // checkbox 自訂深色外觀
-    input[type="checkbox"] {
-      appearance: auto;
-      -webkit-appearance: auto;
-      width: 14px; height: 14px;
-      accent-color: $accent;
-      cursor: pointer;
-      padding: 0;
-    }
-
-    small {
-      font-size: 11px;
-      color: $text-dim;
-      opacity: 0.7;
-    }
-  }
+  // nested `label { ... }` moved to src/styles.scss as a plain global
+  // `.modal-body label` selector — the <label> elements are now
+  // rendered by GeneralSettingsComponent (Phase 2), and Angular's
+  // emulated encapsulation means a scoped descendant selector here
+  // would stop matching them (they don't carry App's content
+  // attribute); a plain global selector still matches by DOM
+  // ancestry regardless of which component rendered which element, so
+  // this `.modal-body` div itself (still owned by App) doesn't need
+  // to change at all.
 }
 
 
@@ -1141,12 +1095,11 @@ body {
   &:focus { border-color: $accent; }
 }
 
-.schedule-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
+// .schedule-actions moved to src/styles.scss (global) — exclusive to
+// components/schedule-panel now (Phase 2).
 
+// .icon-btn-sm: still used directly by App elsewhere, original stays;
+// global copy added to src/styles.scss for components/schedule-panel.
 .icon-btn-sm {
   background: none;
   border: none;
@@ -1199,40 +1152,18 @@ body {
   color: $text-dim;
 }
 
-// ── Schedules ─────────────────────────────────────────
-.schedule-view { display: flex; flex-direction: column; }
+// .schedule-view / .schedule-form / .schedule-input / .schedule-add-btn /
+// .schedule-header / .schedule-status moved to src/styles.scss (global) —
+// exclusive to components/schedule-panel now (Phase 2).
 
-.schedule-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 2px 0 4px;
-}
+// ── Scrollbar ─────────────────────────────────────────
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: $border; border-radius: 3px; }
 
-.schedule-input {
-  background: $surface2;
-  border: 1px solid $border;
-  color: $text;
-  border-radius: 6px;
-  padding: 7px 10px;
-  font-size: 12px;
-  outline: none;
-  font-family: inherit;
-  &:focus { border-color: $accent; }
-}
-
-.schedule-add-btn {
-  align-self: flex-end;
-  padding: 6px 14px;
-  font-size: 12px;
-}
-
-.schedule-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
+// .del-btn / .empty-hint: still used directly by App elsewhere (other
+// panel-card lists), original stays; global copy added to
+// src/styles.scss for components/schedule-panel.
 .del-btn {
   background: none;
   border: none;
@@ -1242,18 +1173,6 @@ body {
   padding: 0 2px;
   &:hover { color: #e55; }
 }
-
-.schedule-status {
-  font-size: 10px;
-  margin-top: 4px;
-  color: $text-dim;
-  &.active { color: #4c9; }
-}
-
-// ── Scrollbar ─────────────────────────────────────────
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: $border; border-radius: 3px; }
 
 .empty-hint { color: $text-dim; font-size: 12px; padding: 12px; text-align: center; }
 
@@ -1556,6 +1475,10 @@ body {
 // Height is now managed by input-area resizing layout
 
 // ── Memory editor ─────────────────────────────────────
+// .memory-editor: still used directly by App elsewhere (agent editor's
+// soul-content textarea), original stays; global copy (base rule +
+// the .soul-lower nested override) added to src/styles.scss for
+// components/soul-panel.
 .memory-editor {
   width: 100%;
   flex: 1;
@@ -1586,28 +1509,7 @@ body {
   outline: none;
 }
 
-// ── Recent dirs chips ─────────────────────────────────
-.recent-dirs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-}
-
-.dir-chip {
-  background: $surface2;
-  border: 1px solid $border;
-  border-radius: 4px;
-  color: $text-dim;
-  font-size: 10px;
-  padding: 2px 8px;
-  cursor: pointer;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  &:hover { border-color: $accent2; color: $accent2; }
-}
+// .recent-dirs / .dir-chip moved to src/styles.scss (global), see comment there.
 
 // ── Tool result display ───────────────────────────────
 .tool-input {
@@ -1661,99 +1563,26 @@ body {
 }
 
 // ── Modal section ─────────────────────────────────────
-.modal-section {
-  padding: 8px 12px;
-  border-top: 1px solid $border;
+// .modal-section / .modal-section-header moved to src/styles.scss
+// (global) — used by both App's remaining inline settings sections and
+// extracted standalone settings components, see comment there.
 
-  // label 和 small 文字補齊深色樣式
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 12px;
-    color: $text-dim;
-    font-weight: 500;
-  }
-  small {
-    font-size: 11px;
-    color: $text-dim;
-    opacity: 0.7;
-  }
-
-  // modal-form 裡的 input/select 共用 modal-body 的深色樣式
-  input, select, textarea {
-    background: $surface2;
-    border: 1px solid $border;
-    color: $text;
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 13px;
-    outline: none;
-    font-family: inherit;
-    appearance: none;
-    -webkit-appearance: none;
-    width: 100%;
-    &:focus { border-color: $accent; }
-  }
-  select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 10px center;
-    padding-right: 28px;
-    cursor: pointer;
-    option { background: #1e1e2e; color: #e8e8e8; }
-  }
-  input[type="checkbox"] {
-    appearance: auto; -webkit-appearance: auto;
-    width: 14px; height: 14px;
-    accent-color: $accent;
-    cursor: pointer; padding: 0;
-  }
-}
-
-.modal-section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11px;
-  color: $text-dim;
-  margin-bottom: 6px;
-}
-
-// ── Quick prompts edit ────────────────────────────────
-.quick-prompts-edit {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.qp-row {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.qp-label-input {
-  width: 140px;
-  flex-shrink: 0;
-}
-
-.qp-text-input {
-  flex: 1;
-}
-
-.qp-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-}
+// .quick-prompts-edit / .qp-row / .qp-label-input / .qp-text-input /
+// .qp-actions moved to src/styles.scss (global), see comment there.
 
 // ── Button sizes ──────────────────────────────────────
+// .btn-xs global copy in src/styles.scss (still used directly by App
+// elsewhere too, so this scoped copy stays — see comment there).
 .btn-xs {
   font-size: 11px;
   padding: 2px 8px;
 }
 
+// .btn-danger: this rule is fully shadowed by the one at the bottom
+// of this file (search .btn-danger) which declares later and wins
+// every overlapping property — kept as-is, not this extraction's
+// concern to clean up. Global copy of the *effective* (bottom) rule
+// is in src/styles.scss.
 .btn-danger {
   background: #3a1515;
   border: 1px solid #7a3535;
@@ -1856,13 +1685,7 @@ body {
 }
 
 // ── Toggle label ──────────────────────────────────────
-.toggle-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  input[type="checkbox"] { width: auto; }
-}
+// .toggle-label moved to src/styles.scss (global), see comment there.
 
 // ── Soul footer ───────────────────────────────────────
 .soul-footer {
@@ -2136,17 +1959,10 @@ body {
 }
 
 // ── T10 MCP Panel ─────────────────────────────────────
-.mcp-view {
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.mcp-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
+// .mcp-view / .mcp-header moved to src/styles.scss (global) — exclusive
+// to components/mcp-panel now (Phase 2). .mcp-list-output below is dead
+// (pre-existing, not referenced by any template — left as-is, out of
+// scope for this extraction).
 .mcp-list-output {
   background: #111;
   border: 1px solid #2a2a2a;
@@ -2468,13 +2284,11 @@ body {
   &.restart { color: #f59e0b; &:hover { border-color: #f59e0b; } }
 }
 
-.binding-btns {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
+// .binding-btns moved to src/styles.scss (global) — exclusive to
+// components/skill-panel now (Phase 2).
 
+// .bind-btn: still used directly by App elsewhere too, original stays;
+// global copy added to src/styles.scss for components/skill-panel.
 .bind-btn {
   background: none;
   border: 1px solid #333;
@@ -2497,41 +2311,10 @@ body {
   margin: 0;
 }
 
-// ── 共用：下半區空提示 ───────────────────────────────
-.lower-empty-hint {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  color: $text-dim;
-  font-style: italic;
-  padding: 16px;
-}
-
-// ── 共用：編輯下半區 header & 操作列 ─────────────────
-.edit-lower-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: #aaa;
-  padding: 6px 8px 4px;
-  flex-shrink: 0;
-}
-
-.unsaved-dot {
-  color: $accent;
-  font-size: 10px;
-}
-
-.edit-lower-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 6px 8px;
-  flex-shrink: 0;
-}
+// .lower-empty-hint / .edit-lower-header / .unsaved-dot /
+// .edit-lower-actions moved to src/styles.scss (global) — exclusive to
+// components/soul-panel now (Phase 2). Comments called these "shared"
+// but grep confirms nothing else currently uses them.
 
 // ── 記憶 Panel（上下分割）────────────────────────────
 .memory-panel {
@@ -2637,112 +2420,12 @@ body {
 }
 
 
-// ── Soul Panel（draggable split）────────────────────────────────
-.soul-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-  position: relative;
-}
-
-.soul-upper {
-  flex-shrink: 0;
-  overflow-y: auto;
-  padding: 8px 8px 4px;
-  min-height: 60px;
-  box-sizing: border-box;
-
-  .soul-hint {
-    font-size: 11px;
-    color: #666;
-    margin: 0 0 6px;
-    line-height: 1.4;
-  }
-
-  .soul-create-form {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 8px;
-  }
-}
-
-.soul-add-btn {
-  width: 100%;
-  margin-bottom: 8px;
-  font-size: 12px;
-  padding: 6px 0;
-}
-
-.soul-rename-btn {
-  background: transparent;
-  border: none;
-  color: #555;
-  font-size: 11px;
-  padding: 2px 4px;
-  cursor: pointer;
-  border-radius: 3px;
-  flex-shrink: 0;
-  &:hover { color: #ccc; background: rgba(255,255,255,0.07); }
-}
-
-.soul-rename-input {
-  flex: 1;
-  min-width: 0;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(212,168,83,0.4);
-  border-radius: 4px;
-  color: #e8e8e8;
-  font-size: 12px;
-  padding: 2px 6px;
-  outline: none;
-  &:focus { border-color: #d4a853; }
-}
-
-.soul-filename {
-  flex: 1;
-  font-size: 12px;
-  color: $text-dim;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-// Draggable divider between upper and lower
-.soul-divider {
-  flex-shrink: 0;
-  height: 8px;
-  cursor: row-resize;
-  background: transparent;
-  position: relative;
-  z-index: 10;
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 0; right: 0; top: 50%;
-    height: 2px;
-    background: #2a2a2a;
-    transform: translateY(-50%);
-    transition: background 0.15s;
-  }
-  &:hover::after { background: #7c6fff; }
-}
-
-.soul-lower {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 60px;
-  overflow: hidden;
-  padding: 0 6px 6px;
-  box-sizing: border-box;
-
-  .memory-editor {
-    min-height: 0;
-    flex: 1;
-  }
-}
+// .soul-panel / .soul-upper / .soul-add-btn / .soul-rename-btn /
+// .soul-rename-input / .soul-filename / .soul-divider / .soul-lower
+// moved to src/styles.scss (global) — exclusive to
+// components/soul-panel now (Phase 2). .soul-create-form under
+// .soul-upper was dead already (no matching template usage even
+// before this extraction) — not moved, not cleaned up either.
 
 // ── Session skill-generate button ────────────────────────
 
@@ -3036,20 +2719,8 @@ body {
 }
 
 // Cron presets
-.cron-row {
-  display: flex; gap: 6px; align-items: center;
-  .cron-input { flex: 1; }
-  .schedule-add-btn { flex-shrink: 0; white-space: nowrap; }
-}
-.cron-presets {
-  display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px;
-}
-.cron-preset-btn {
-  background: $surface2; border: 1px solid $border; border-radius: 12px;
-  color: $text-dim; font-size: 10px; padding: 2px 8px;
-  cursor: pointer; transition: all 0.15s;
-  &:hover { border-color: $accent2; color: $accent2; }
-}
+// .cron-row / .cron-presets / .cron-preset-btn moved to src/styles.scss
+// (global) — exclusive to components/schedule-panel now (Phase 2).
 
 // Model picker
 .model-picker-modal {
@@ -3114,30 +2785,13 @@ body {
   }
 }
 
-// MCP log viewer (#15)
+// MCP log viewer (#15) — .mcp-log-toggle below is dead (pre-existing,
+// unused). .mcp-log-panel/header/body/line/empty moved to src/styles.scss
+// (global) — exclusive to components/mcp-panel now (Phase 2).
 .mcp-log-toggle {
   background: none; border: none; font-size: 10px; cursor: pointer;
   color: $text-dim; padding: 1px 3px; border-radius: 3px; margin-left: auto;
   &:hover, &.active { color: $accent2; background: rgba(124,111,255,0.1); }
-}
-.mcp-log-panel {
-  margin-top: 6px; border-top: 1px solid $border;
-  padding-top: 6px; animation: toast-in 0.2s ease;
-}
-.mcp-log-header {
-  display: flex; justify-content: space-between; align-items: center;
-  font-size: 10px; color: $text-dim; margin-bottom: 4px;
-}
-.mcp-log-body {
-  background: #0a0a0a; border: 1px solid $border; border-radius: 6px;
-  max-height: 140px; overflow-y: auto; padding: 6px 8px;
-  font-family: monospace; font-size: 10px;
-}
-.mcp-log-line {
-  color: #9ca3af; line-height: 1.5; word-break: break-all;
-}
-.mcp-log-empty {
-  color: #555; font-style: italic; font-size: 10px;
 }
 // ── P3 styles ──────────────────────────────────────────────────────────────
 
@@ -3168,12 +2822,7 @@ body {
   &:hover { background: #7c3aed; }
 }
 
-// #18 Telegram status chip
-.tg-status-chip {
-  font-size: 10px;
-  color: #9ca3af;
-  &.running { color: #10b981; }
-}
+// .tg-status-chip moved to src/styles.scss (global), see comment there.
 
 // #21 Export format select (topbar)
 .export-format-select {
@@ -3220,13 +2869,7 @@ body {
   text-align: center;
 }
 
-// Settings: .btn-sm
-.btn-sm {
-  font-size: 12px;
-  padding: 5px 12px;
-  border-radius: 6px;
-  margin-top: 6px;
-}
+// .btn-sm moved to src/styles.scss (global), see comment there.
 
 // ── UX Polish Styles ──────────────────────────────────────────────────────
 
@@ -3501,64 +3144,13 @@ body {
 
 
 // ── MCP Panel Redesign ────────────────────────────────────────────────────────
-.mcp-view { display: flex; flex-direction: column; height: 100%; }
+// .mcp-view / .mcp-section(+variants) / .mcp-section-title/icon/count/hint /
+// .mcp-empty / .mcp-footer-hint moved to src/styles.scss (global) —
+// exclusive to components/mcp-panel now (Phase 2).
 
-.mcp-section {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  // 高度現在由 .mcp-pane-top / .mcp-pane-bottom 控制，不再限制 section 本身
-  &.mcp-section-external { flex: 1 1 0; overflow-y: auto; }
-  &.mcp-section-local    { flex: 1 1 0; overflow-y: auto; }
-}
-
-.mcp-section-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 4px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #aaa;
-  letter-spacing: 0.04em;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  position: sticky;
-  top: 0;
-  background: $bg;
-  z-index: 2;
-}
-.mcp-section-icon { font-size: 13px; }
-.mcp-section-count {
-  font-size: 10px;
-  background: #2a2a2a;
-  border-radius: 8px;
-  padding: 1px 6px;
-  color: #666;
-  margin-left: 2px;
-}
-.mcp-section-hint {
-  font-size: 9px;
-  color: $text-dim;
-  margin-left: auto;
-  font-weight: 400;
-}
-.mcp-empty {
-  font-size: 10px;
-  color: $text-dim;
-  font-style: italic;
-  padding: 8px 4px;
-  text-align: center;
-  code { background: #1a1a1a; padding: 1px 4px; border-radius: 3px; font-size: 9px; }
-}
-.mcp-footer-hint {
-  margin-top: 8px;
-  font-size: 10px;
-  color: $text-dim;
-  padding: 4px;
-  code { background: #1a1a1a; padding: 1px 4px; border-radius: 3px; }
-}
-
-// ── Local MCP card ─────────────────────────────────────────────────────────────
+// ── Local MCP card (pre-existing dead code — superseded by .mcp-card-compact
+// further below in this same redesign; not referenced by any template, left
+// as-is, out of scope for this extraction) ──────────────────────────────────
 .local-mcp-card {
   border-left: 2px solid #2a2a2a;
   &.docker-card { border-left-color: #1a54962a; background: rgba(26,84,150,0.04); }
@@ -3598,32 +3190,14 @@ body {
   }
 }
 
-// Control bar (always visible, top-right)
+// Control bar (always visible, top-right) — .mcp-ctrl-bar below is dead
+// (pre-existing, unused). .ctrl-btn moved to src/styles.scss (global) —
+// exclusive to components/mcp-panel now (Phase 2).
 .mcp-ctrl-bar {
   display: flex;
   align-items: center;
   gap: 3px;
   flex-shrink: 0;
-}
-.ctrl-btn {
-  width: 24px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  border: 1px solid #2a2a2a;
-  background: #151515;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.12s;
-  &:hover { border-color: #444; }
-  &.ctrl-start   { color: #10b981; &:hover { background: #0a2a1e; border-color: #10b981; } }
-  &.ctrl-stop    { color: #ef4444; &:hover { background: #2a0a0a; border-color: #ef4444; } }
-  &.ctrl-restart { color: #f59e0b; &:hover { background: #2a1e0a; border-color: #f59e0b; } }
-  &.ctrl-log     { color: #888;    font-size: 12px;
-    &.active, &:hover { background: #1e1e2e; border-color: #7c6fff; color: #9d94ff; }
-  }
 }
 
 // Metadata row below card header
@@ -3653,236 +3227,16 @@ body {
   padding: 1px 5px;
 }
 
-// Docker config form
-.docker-cfg-section {
-  margin-top: 8px;
-  border-top: 1px dashed rgba(255,255,255,0.08);
-  padding-top: 8px;
-}
-.docker-cfg-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.docker-cfg-label {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 10px;
-  color: #888;
-}
-.docker-cfg-input {
-  background: #151515;
-  border: 1px solid #2a2a2a;
-  border-radius: 4px;
-  padding: 4px 7px;
-  font-size: 11px;
-  color: #e5e7eb;
-  &:focus { outline: none; border-color: #1a5496; }
-}
-.docker-cfg-display {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.docker-cfg-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  span:first-child { color: #666; min-width: 40px; }
-  code { background: #1a1a1a; padding: 1px 5px; border-radius: 3px; color: #7cb8ff; }
-}
+// Docker config form — moved to src/styles.scss (global) — exclusive to
+// components/mcp-panel now (Phase 2).
 
-// ── MCP Status Lamp — 四色三燈邏輯 ──────────────────────────────────────────
-// .mcp-status-lamp  = 本地 API 大燈（8px）
-// .mcp-status-dot   = 外部 API 小點（6px，沿用舊 class）
-// 共用 4 個 modifier class:
-//   .lamp-green   ● 運行中且啟用（綠）
-//   .lamp-yellow  ● 運行中未啟用（黃）
-//   .lamp-red     ● 停止但在用   （紅，警示）
-//   .lamp-off     ● 停止未使用   （灰，無特殊意義）
-
-.mcp-status-lamp {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: #333;
-  transition: background 0.3s, box-shadow 0.3s;
-}
-.mcp-status-dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: #333;
-  transition: background 0.3s, box-shadow 0.3s;
-}
-
-.lamp-green  {
-  background:  #10b981 !important;
-  box-shadow:  0 0 6px rgba(16,185,129,0.7);
-}
-.lamp-yellow {
-  background:  #f59e0b !important;
-  box-shadow:  0 0 6px rgba(245,158,11,0.6);
-}
-.lamp-red    {
-  background:  #ef4444 !important;
-  box-shadow:  0 0 6px rgba(239,68,68,0.7);
-  animation:   lamp-pulse 1.2s ease-in-out infinite;
-}
-.lamp-off    {
-  background:  #333 !important;
-  box-shadow:  none;
-}
-
-@keyframes lamp-pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.45; }
-}
-
-// ── MCP Split Panes ────────────────────────────────────────────────────────────
-.mcp-view {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-
-.mcp-pane {
-  overflow: hidden;       // inner scroll handled by .mcp-section
-  display: flex;
-  flex-direction: column;
-  min-height: 60px;
-}
-.mcp-pane-bottom {
-  flex: 1 1 0;            // takes remaining space below divider
-}
-
-// ── Draggable Divider ──────────────────────────────────────────────────────────
-.mcp-divider {
-  flex-shrink: 0;
-  height: 10px;
-  cursor: ns-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 3;
-  user-select: none;
-}
-.mcp-divider-track {
-  width: 100%;
-  height: 3px;
-  background: #1e1e2e;
-  border-top:    1px solid #2a2a3e;
-  border-bottom: 1px solid #2a2a3e;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s;
-}
-.mcp-divider:hover .mcp-divider-track {
-  background: #252540;
-  border-color: #4a4a6e;
-}
-.mcp-divider-grip {
-  width: 36px;
-  height: 3px;
-  background: #3a3a5a;
-  border-radius: 2px;
-  transition: background 0.15s, width 0.15s;
-}
-.mcp-divider:hover .mcp-divider-grip {
-  background: #7c6fff;
-  width: 48px;
-}
-// While dragging anywhere on document
-body[style*="ns-resize"] .mcp-divider-grip {
-  background: #7c6fff;
-}
-
-// ── MCP Compact Card ──────────────────────────────────────────────────────────
-.mcp-card-compact {
-  padding: 5px 8px;
-  border-radius: 6px;
-  margin-bottom: 2px;
-  cursor: pointer;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid transparent;
-  transition: background 0.12s, border-color 0.12s;
-
-  &:hover        { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.07); }
-  &.expanded     { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.1);  }
-}
-
-// 閉合列：● 名稱 [actions(hover)]
-.mcc-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-
-.mcc-name {
-  flex: 1 1 0;
-  font-size: 12px;
-  color: #ccc;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-// hover 才顯示的控制區
-.mcc-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s;
-}
-.mcp-card-compact:hover .mcc-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-// 展開詳情區
-.mcc-detail {
-  margin-top: 7px;
-  padding-top: 7px;
-  border-top: 1px dashed rgba(255,255,255,0.07);
-  font-size: 11px;
-  color: #aaa;
-  line-height: 1.5;
-}
-.mcc-url {
-  font-size: 10px;
-  color: #555;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-bottom: 4px;
-}
-.mcc-tools-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: #666;
-  margin-top: 6px;
-  margin-bottom: 3px;
-}
-.mcc-tool-row {
-  font-family: monospace;
-  font-size: 11px;
-  color: #d4a853;
-  padding: 1px 0;
-}
-.mcc-tool-desc {
-  font-family: sans-serif;
-  color: #888;
-  font-size: 10px;
-}
+// .mcp-status-lamp(current)/.lamp-green/.lamp-yellow/.lamp-red/.lamp-off/
+// @keyframes lamp-pulse, .mcp-view(pane-split variant)/.mcp-pane/
+// .mcp-pane-bottom, .mcp-divider(+track/grip), .mcp-card-compact/.mcc-* —
+// all moved to src/styles.scss (global) — exclusive to
+// components/mcp-panel now (Phase 2). (.mcp-status-dot right above this
+// comment, at the top of this earlier "四色三燈" doc block, was the old/
+// unused variant — pre-existing dead code, left as-is.)
 
 // ── Profile Switcher — 自訂 dropdown ──────────────────────────────────────────
 .profile-dd-wrap {
@@ -4250,31 +3604,11 @@ body[style*="ns-resize"] .mcp-divider-grip {
 }
 
 
-.agent-skill-badge {
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 8px;
-  background: rgba(212,168,83,0.15);
-  border: 1px solid rgba(212,168,83,0.3);
-  color: $accent;
-  white-space: nowrap;
-  flex-shrink: 0;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+// .agent-skill-badge moved to src/styles.scss (global) — exclusive to
+// components/skill-panel now (Phase 2).
 
-.mcp-agent-hint {
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 8px;
-  background: rgba(99,179,237,0.12);
-  border: 1px solid rgba(99,179,237,0.25);
-  color: #63b3ed;
-  white-space: nowrap;
-  flex-shrink: 0;
-  margin-left: 2px;
-}
+// .mcp-agent-hint moved to src/styles.scss (global) — exclusive to
+// components/mcp-panel now (Phase 2).
 
 .agent-mapping-summary {
   display: flex;
@@ -4829,14 +4163,7 @@ body[style*="ns-resize"] .mcp-divider-grip {
   border-radius: 3px; padding: 1px 4px; flex-shrink: 0;
 }
 
-.memview-textarea {
-  width: 100%; box-sizing: border-box;
-  background: rgba(0,0,0,0.3); color: #ccc;
-  border: 1px solid rgba(255,255,255,0.12); border-radius: 4px;
-  font-size: 11px; font-family: monospace; line-height: 1.5;
-  padding: 6px 8px; resize: vertical; outline: none;
-  &:focus { border-color: rgba(255,255,255,0.25); }
-}
+// .memview-textarea moved to src/styles.scss (global), see comment there.
 
 .memview-edit-actions {
   display: flex; gap: 6px; margin-top: 6px;

@@ -1,0 +1,6 @@
+# Shell scripts must stay LF — Windows checkouts with core.autocrlf=true
+# otherwise convert them to CRLF, which breaks when a script like
+# backend/docker-entrypoint.sh is bind-mounted into a Linux container and
+# run via `sh`: `sh` reads the trailing \r as part of the option string
+# (e.g. `set -eu\r`) and fails with "Illegal option -".
+*.sh text eol=lf

@@ -126,3 +126,39 @@ async def test_team_execute_member_without_engine_defaults_to_codex(client, monk
 
     assert len(codex_calls) == 1
     assert not claude_called
+
+
+async def test_team_execute_strips_sonnet_model_alias_for_non_claude_engine(client, monkeypatch, app, tmp_path):
+    """2026-07-18：同一個 bug 的第三條路徑——見
+    test_handle_chat_engine_routing.py / test_handle_team_chat_engine_routing.py
+    的同名測試。"sonnet" 是 Claude-only 的 UI 佔位值，engine.run_turn() 這
+    條路徑漏了過濾，選了 Sonnet 4.6 當全域模型、成員又宣告 engine: codex
+    時，"sonnet" 字面值直接傳給 Codex CLI 當 --model 參數。"""
+    import main
+    _write_agent(main.AGENTS_DIR, "codex-executor-2", engine="codex")
+    _write_team(main.TEAMS_DIR, "sonnet-strip-exec-team", ["codex-executor-2"])
+
+    project_dir = tmp_path / "project3"
+    project_dir.mkdir()
+
+    from engines import codex_engine
+    captured = {}
+
+    async def fake_codex_run_turn(**kwargs):
+        captured["model"] = kwargs.get("model")
+        await kwargs["on_text"]("ok")
+        return RunResult(output="ok", session_id="sid-exec-sonnet-strip")
+
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+    resp = await client.post("/api/team/execute", json={
+        "client_id": "test-client-exec-sonnet-strip",
+        "team_id": "sonnet-strip-exec-team",
+        "project_path": str(project_dir),
+        "task": "完成這個任務",
+        "model": "sonnet",
+    })
+    assert resp.status == 200
+    await _read_sse_events(resp)
+
+    assert captured["model"] is None

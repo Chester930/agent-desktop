@@ -1,0 +1,50 @@
+<!-- Pluggable agent engine（Team Run 等協作功能實際執行任務用的 CLI） -->
+<div class="modal-section">
+  <div class="modal-section-header">Agent Engine</div>
+  <div class="modal-form">
+    <label>執行引擎範圍
+      <select [(ngModel)]="settingsForm.engineMode">
+        <option value="claude" [disabled]="engineOptionDisabled('claude')">只用 {{ engineOptionLabel('claude') }}</option>
+        <option value="codex" [disabled]="engineOptionDisabled('codex')">只用 {{ engineOptionLabel('codex') }}</option>
+        <option value="both">兩者都開放，Agent 可自行指定</option>
+      </select>
+      <div style="font-size:11px;display:flex;gap:14px;margin:4px 0 2px">
+        <span [style.color]="engineStatus['claude']?.available ? '#4caf50' : '#e07070'">
+          {{ engineStatus['claude']?.available ? '✓' : '✗' }} Claude{{ engineOptionDisabled('claude') ? '（' + (engineStatus['claude']?.reason === 'not_logged_in' ? '未登入' : '未安裝') + '）' : '' }}
+        </span>
+        <span [style.color]="engineStatus['codex']?.available ? '#4caf50' : '#e07070'">
+          {{ engineStatus['codex']?.available ? '✓' : '✗' }} Codex{{ engineOptionDisabled('codex') ? '（' + (engineStatus['codex']?.reason === 'not_logged_in' ? '未登入' : '未安裝') + '）' : '' }}
+        </span>
+      </div>
+      <small>鎖定為「只用 Claude」或「只用 Codex」時，個別 Agent 的 <code>engine:</code> 覆寫會被完全忽略，一律使用這裡選的引擎；選擇「兩者都開放」時才會依 Agent 自己的設定（或下方的預設引擎）決定，混用不同引擎的成員。</small>
+      <small>Codex 需先 <code>codex login</code>；Windows 上 <code>workspace-write</code> sandbox 目前無法執行 shell 指令（Codex CLI 本身的限制），已驗證 <code>danger-full-access</code> 可繞過此限制，但該等級完全沒有沙盒保護，請謹慎使用。</small>
+    </label>
+    @if (settingsForm.engineMode === 'both') {
+      <label>兩者都開放時的預設引擎
+        <select [(ngModel)]="settingsForm.agentEngine">
+          <option value="claude" [disabled]="engineOptionDisabled('claude')">{{ engineOptionLabel('claude') }}</option>
+          <option value="codex" [disabled]="engineOptionDisabled('codex')">{{ engineOptionLabel('codex') }}（預設）</option>
+        </select>
+        <small>沒有 Agent 自行指定時使用哪個引擎；Agent 的 <code>engine:</code> 覆寫優先於這裡。即使選了不可用的引擎，實際執行時也會自動切換到還可用的那個。</small>
+      </label>
+    }
+    <label>Claude 執行路徑
+      <input [(ngModel)]="settingsForm.claudeBin" placeholder="claude">
+      <small>留空則自動偵測（建議留空）。僅影響主聊天室／💬 團隊對話／Team Execute，不影響 Team Run 或 HR 自動組隊。</small>
+    </label>
+    <label>Codex 執行路徑
+      <input [(ngModel)]="settingsForm.codexBin" placeholder="codex">
+      <small>留空則自動偵測（建議留空）。僅影響主聊天室／💬 團隊對話／Team Execute，不影響 Team Run 或 HR 自動組隊。</small>
+    </label>
+    <label>Claude API Key 命令（Vault）
+      <input [(ngModel)]="settingsForm.apiKeyCmd"
+        placeholder="留空 = 使用 claude login。例：op read op://vault/item/credential">
+      <small>若填入指令，後端會執行它並把輸出作為 ANTHROPIC_API_KEY。支援 1Password CLI、pass、任意 shell 指令。</small>
+    </label>
+    <label>Codex API Key 命令（Vault）
+      <input [(ngModel)]="settingsForm.codexApiKeyCmd"
+        placeholder="留空 = 使用 codex login。例：op read op://vault/item/credential">
+      <small>若填入指令，後端會執行它並把輸出作為 CODEX_API_KEY。留空則沿用 codex login 的既有登入憑證。</small>
+    </label>
+  </div>
+</div>

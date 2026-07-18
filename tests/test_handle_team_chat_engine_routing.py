@@ -74,3 +74,33 @@ async def test_team_chat_leader_routes_to_codex(client, monkeypatch, app):
     assert any("身為組長，我用 Codex 回覆。" in e.get("text", "") for e in text_events)
     assert any(e.get("type") == "agent_start" and e.get("agent") == "codex-leader" for e in events)
     assert any(e.get("type") == "agent_done" and e.get("agent") == "codex-leader" for e in events)
+
+
+async def test_team_chat_strips_sonnet_model_alias_for_non_claude_engine(client, monkeypatch, app):
+    """2026-07-18：跟 test_handle_chat_engine_routing.py 的同名測試同一個
+    bug——"sonnet" 是 Claude-only 的 UI 佔位值，engine.run_turn() 這條路徑
+    漏了過濾，導致選了 Sonnet 4.6 當全域模型、組長又宣告 engine: codex 時，
+    "sonnet" 字面值直接傳給 Codex CLI 當 --model 參數，實測重現過
+    「Model metadata for sonnet not found」錯誤。"""
+    import main
+    _write_agent(main.AGENTS_DIR, "codex-leader-2", engine="codex")
+    _write_team(main.TEAMS_DIR, "sonnet-strip-team", "codex-leader-2", ["codex-leader-2"])
+
+    from engines import codex_engine
+    captured = {}
+
+    async def fake_codex_run_turn(**kwargs):
+        captured["model"] = kwargs.get("model")
+        await kwargs["on_text"]("ok")
+        return RunResult(output="ok", session_id="sid-team-sonnet-strip")
+
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+    resp = await client.post("/api/team/chat", json={
+        "message": "請開始討論", "client_id": "test-client-team-sonnet-strip", "team_id": "sonnet-strip-team",
+        "model": "sonnet",
+    })
+    assert resp.status == 200
+    await _read_sse_events(resp)
+
+    assert captured["model"] is None

@@ -1,0 +1,81 @@
+<div class="panel-list">
+  @for (s of skills; track s.id) {
+    <div class="panel-card"
+      [class.active-in-chat]="isSkillLinkedToActiveAgent(s.id)"
+      [class.expanded]="expandedSkillId === s.id"
+      (click)="toggleExpand.emit(s.id)">
+      <div class="card-header-row">
+        <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+          @if (isSkillInActiveAgentFrontmatter(s.id)) {
+            <span class="agent-skill-badge" [title]="'● ' + selectedAgent + ' 的 Skill'">● {{ selectedAgent }}</span>
+          } @else if (isSkillLinkedToActiveAgent(s.id)) {
+            <span class="auth-dot active" title="此對話已加入此技能"></span>
+          }
+          <span class="card-name">/{{ s.name }}</span>
+        </div>
+        <div class="binding-btns" (click)="$event.stopPropagation()">
+          <button class="bind-btn" [class.active]="isSkillInTab(s.id)"
+            (click)="toggleInTab.emit(s.id)"
+            [title]="isSkillInTab(s.id) ? '從此對話移除' : '加入此對話'">
+            {{ isSkillInTab(s.id) ? '◉' : '○' }}
+          </button>
+          <button class="agent-edit-btn" (click)="$event.stopPropagation(); edit.emit(s)" title="編輯 Skill 映射">✎</button>
+        </div>
+      </div>
+      <!-- Skill 依賴摘要 -->
+      @if (s.mcp?.length || s.memory?.length || s.output_memory?.length) {
+        <div class="agent-mapping-summary">
+          @if (s.mcp?.length) { <span class="mapping-chip" title="依賴 MCP">🔌 {{ s.mcp!.length }}</span> }
+          @if (s.memory?.length) { <span class="mapping-chip" title="讀取 Memory">🧠 {{ s.memory!.length }}</span> }
+          @if (s.output_memory?.length) { <span class="mapping-chip output-chip" title="輸出 Memory">→ {{ s.output_memory!.length }}</span> }
+        </div>
+      }
+      @if (expandedSkillId === s.id) {
+        <div class="card-detail-content" (click)="$event.stopPropagation()">
+          <div class="detail-desc">
+            {{ expandedTranslation !== null && expandedTranslation !== ''
+                ? expandedTranslation
+                : (s.description || '（無說明）') }}
+            @if (expandedTranslation === '') {
+              <span class="translating">翻譯中…</span>
+            }
+          </div>
+          @if (s.description) {
+            <div class="detail-actions">
+              <button class="translate-btn" (click)="translate.emit(s.description)">
+                {{ expandedTranslation !== null ? '還原原文' : '翻譯成繁體中文' }}
+              </button>
+            </div>
+          }
+          <div class="linked-section">
+            <div class="linked-title">使用的 MCP 伺服器：</div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              @for (mcpName of getUsedMcps(s.id); track mcpName) {
+                <button class="link-item" (click)="jumpToMcp.emit(mcpName)">
+                  <span>{{ mcpName }}</span>
+                  <span>➔</span>
+                </button>
+              } @empty {
+                <div style="font-size: 10px; color: #555; font-style: italic;">無連結的 MCP</div>
+              }
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  } @empty {
+    <div class="empty-guide">
+      <div class="empty-guide-icon">🛠</div>
+      <div class="empty-guide-title">尚未找到 Skill</div>
+      <div class="empty-guide-sub">
+        Skill 提供特定任務的專業知識，在輸入框打 <code>/</code> 即可使用。<br>
+        建立 <code>.md</code> 檔案到以下目錄：
+      </div>
+      <code class="empty-guide-path">~/.claude/skills/my-skill.md</code>
+      <div class="empty-guide-sub" style="margin-top:8px">
+        或點對話歷史的 <strong>✦</strong> 按鈕，讓 AI 從對話自動生成 Skill
+      </div>
+      <button class="empty-guide-btn" (click)="openHelp.emit()">查看說明</button>
+    </div>
+  }
+</div>

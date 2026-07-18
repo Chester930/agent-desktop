@@ -1,0 +1,19 @@
+<div class="modal-section">
+  <div class="modal-section-header">MEMORY</div>
+  <div class="modal-form">
+    <label>User
+      <textarea class="memview-textarea" rows="6"
+        [value]="memEditContent()['user'] ?? ''"
+        (input)="memEditContent.update(m => ({...m, user: $any($event.target).value}))"></textarea>
+      <small>memory\user\profile.md — 使用者背景、偏好、長期目標</small>
+    </label>
+    <button class="btn-primary btn-sm" (click)="saveMemEdit('user')">儲存 User</button>
+    <label style="margin-top:12px">System
+      <textarea class="memview-textarea" rows="6"
+        [value]="memEditContent()['system'] ?? ''"
+        (input)="memEditContent.update(m => ({...m, system: $any($event.target).value}))"></textarea>
+      <small>memory\system\state.md — 系統能力、技能清單、KG 狀態</small>
+    </label>
+    <button class="btn-primary btn-sm" (click)="saveMemEdit('system')">儲存 System</button>
+  </div>
+</div>

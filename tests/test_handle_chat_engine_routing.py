@@ -102,6 +102,37 @@ async def test_handle_chat_defaults_to_codex_when_no_engine_declared(client, mon
     assert not claude_called
 
 
+async def test_handle_chat_strips_sonnet_model_alias_for_non_claude_engine(client, monkeypatch, app):
+    """2026-07-18：「sonnet」是 UI 層的 Claude-only 佔位值，代表「不覆寫，讓
+    引擎用自己的預設」——claude subprocess 路徑（_exec_cmd）跟 ClaudeSDKClient
+    路徑本來就有 `model not in ("sonnet", "")` 這個過濾，但 engine.run_turn()
+    這條路徑（agent 宣告非 Claude engine 時）漏掉了，導致選了 Sonnet 4.6
+    當作全域模型、又把某個 agent 設成 engine: codex 時，"sonnet" 這個字面值
+    會直接被當成 --model 參數傳給 Codex CLI，得到
+    「Model metadata for sonnet not found」這個錯誤（實測重現過）。"""
+    import main
+    _write_agent(main.AGENTS_DIR, "codex-model-agent", engine="codex")
+
+    captured = {}
+
+    async def fake_codex_run_turn(**kwargs):
+        captured["model"] = kwargs.get("model")
+        await kwargs["on_text"]("ok")
+        return RunResult(output="ok", session_id="sid-codex-model-test")
+
+    from engines import codex_engine
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+    resp = await client.post("/api/chat", json={
+        "message": "hi", "client_id": "test-client-sonnet-strip", "agent": "codex-model-agent",
+        "model": "sonnet",
+    })
+    assert resp.status == 200
+    await _read_sse_events(resp)
+
+    assert captured["model"] is None
+
+
 async def test_handle_chat_passes_resolved_codex_api_key(client, monkeypatch, app, tmp_path):
     """2026-07-13：_resolve_agent_engine_and_key() 的三選一分支——agent 宣告
     engine: codex 時，codex_engine.run_turn() 應該收到

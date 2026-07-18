@@ -1,0 +1,58 @@
+<div class="panel-list">
+  @for (t of teams; track t.id) {
+    <div class="panel-card" (click)="toggleExpanded(t.id)" style="cursor: pointer; user-select: none;">
+      <div class="card-header-row">
+        <span class="card-name">{{ t.name }}</span>
+        <div class="agent-action-btns" (click)="$event.stopPropagation()">
+          <button class="agent-activate-btn" style="background: linear-gradient(135deg, #6366f1, #28a745); color:white;" (click)="chat.emit(t)" title="與整個團隊對話（各成員依序序列執行任務）">💬 團隊對話</button>
+          <button class="agent-fav-btn team-fav-btn" (click)="$event.stopPropagation(); favorite.emit(t)"
+            [class.active]="t.favorite"
+            [title]="t.favorite ? '已加入 Team 最愛（點擊取消）' : '加入 Team 最愛'">
+            {{ t.favorite ? '⭐' : '☆' }}
+          </button>
+          <button class="agent-edit-btn" (click)="edit.emit(t)" title="編輯 Team">✎</button>
+        </div>
+      </div>
+      @if (t.description) {
+        <div class="card-desc">{{ t.description }}</div>
+      }
+      <!-- 組長與展開收合按鈕 -->
+      <div class="team-leader-preview" style="font-size:11px; margin-top:6px; display:flex; align-items:center; gap:6px;">
+        <span style="color:#d4a853; font-weight:bold;">👑</span>
+        <span class="team-member-chip" style="border-color:#d4a853; cursor:default; margin:0; padding:2px 6px;">
+          {{ t.leader || '（無）' }}
+        </span>
+        <span style="color:#888; font-size:10px; margin-left:auto;" [title]="expandedTeams()[t.id] ? '收合' : '展開其餘 ' + (t.members.length > 1 ? (t.members.length - 1) : 0) + ' 名成員'">
+          {{ expandedTeams()[t.id] ? '▲' : '▼ ' + (t.members.length > 1 ? (t.members.length - 1) : 0) }}
+        </span>
+      </div>
+      <!-- 成員列表 -->
+      @if (expandedTeams()[t.id]) {
+        <div class="team-members-row" style="margin-top:8px;">
+          @for (m of t.members; track m.agent) {
+            <span class="team-member-chip" [title]="m.role || m.agent" [style.border-color]="t.leader === m.agent ? '#d4a853' : null">
+              <span class="member-dot" [style.color]="t.leader === m.agent ? '#d4a853' : null">●</span> {{ m.agent }}
+              @if (t.leader === m.agent) { <span style="color:#d4a853;margin-left:2px;font-weight:bold;" title="組長 (Team Leader)">👑</span> }
+              @if (m.role) { <span class="member-role">{{ m.role }}</span> }
+            </span>
+          }
+          @if (!t.members.length) {
+            <span style="font-size:11px;color:#555;font-style:italic;">無成員</span>
+          }
+        </div>
+      }
+    </div>
+  } @empty {
+    <div class="empty-guide">
+      <div class="empty-guide-icon">👥</div>
+      <div class="empty-guide-title">尚未建立 Team</div>
+      <div class="empty-guide-sub">
+        Team 是多個 Agent 的組合，可以一鍵啟動。<br>
+        建立後會儲存在：<code>~/.claude/teams/</code>
+      </div>
+    </div>
+  }
+  <div class="sticky-create-btn-wrap">
+    <button class="btn-secondary" style="width:100%;font-size:12px;" (click)="edit.emit(undefined)">＋ 建立 Team</button>
+  </div>
+</div>

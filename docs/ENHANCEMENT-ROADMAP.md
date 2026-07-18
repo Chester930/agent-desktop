@@ -132,10 +132,473 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
   拆成子區塊逐步搬，不整塊搬）。
 - 每抽一個區塊：建元件 → 搬 template/邏輯 → 需要跨頁狀態的改注入
   service → 跑完整 e2e → commit。不做大爆炸式重寫。
-- memview/schedules 分頁、teams/skills 側欄、chat 主畫面的 lazy
-  route 化維持原規劃，在 settings 相關的小區塊都驗證完拆分模式可行
-  之後再進行（這幾塊本身就是路由層級，天然比 settings modal 內部
-  的子元件更適合 `loadComponent` lazy route，風險模式不同）。
+- **進度（持續更新，接手前先看這裡）**：
+  - ✅ `backendLogs` + `doctorRunning`（合併抽成
+    `DiagnosticsPanelComponent`，兩者本來就是同一塊 UI 且互不跨頁）。
+  - ✅ `importAgencyAgents`（抽成 `AgencyImportPanelComponent`，
+    `imported` 事件往上通知 `app.ts` 呼叫既有的 `reload()` /
+    `loadTeams()`）。
+  - ✅ `recentWorkDirs`（抽成 `RecentWorkDirsComponent`；只抽「最近
+    目錄 chips」這個純讀取 `SettingsService` 的子區塊，`select`
+    事件往上通知 `app.ts` 設定 `settingsForm.workDir`——`<label>工作
+    目錄` 本身那個 `[(ngModel)]="settingsForm.workDir"` 的主輸入框
+    仍留在 `app.ts`，因為它屬於還沒拆的 `settingsForm`）。
+  - ✅ `telegramSaving`（連同 `telegramToken`/`telegramEnabled`/
+    `telegramRunning`/`loadTelegramSettings`/`saveTelegramSettings`
+    一併抽成 `TelegramSettingsComponent`；整塊本來就是獨立的
+    `.modal-section`，沒有跨頁狀態。`loadTelegramSettings()` 原本由
+    `App.openSettings()` 呼叫，改成元件自己在 `ngOnInit` 載入——因為
+    `@if (settingsOpen())` 包住整個 modal，每次開 modal 都會重新
+    建立這個元件，效果等價）。
+  - ✅ `memEditContent`（連同 `memoryOverview`/`memViewExpanded`/
+    `memEditMode`/`loadMemoryOverview`/`toggleMemViewSection`/
+    `memViewIsOpen`/`memViewFilePath`/`startMemEdit`/`cancelMemEdit`/
+    `saveMemEdit` 一併抽成 `MemoryEditorComponent`。盤點後發現這些
+    identifier 裡只有 `memEditContent`/`saveMemEdit`（以及餵資料給
+    它們的 `loadMemoryOverview`）實際在 template 有用到——
+    `memoryOverview`/`memViewExpanded`/`memEditMode`/
+    `toggleMemViewSection`/`memViewIsOpen`/`memViewFilePath`/
+    `startMemEdit`/`cancelMemEdit` 在 `app.html` 完全沒有引用，是既有
+    的死碼；因為它們互相耦合（例如 `startMemEdit`/`cancelMemEdit`
+    讀寫 `memEditContent`/`memEditMode`），整塊原樣搬過去，沒有藉機
+    清理——清死碼不是這次任務範圍。唯一的跨元件依賴是
+    `memViewFilePath()` 用到 `resolvedClaudeHome()`（同一個
+    `engineStatus` 類型的 app-wide signal），改成 `@Input
+    resolvedClaudeHome`，`app.html` 傳
+    `[resolvedClaudeHome]="resolvedClaudeHome()"`。`loadMemoryOverview()`
+    原本由 `App.openSettings()` 呼叫，同 telegram 的做法改成元件自己
+    `ngOnInit` 載入。`.memview-textarea` 搬到 `src/styles.scss`
+    （global）；`.memview-empty`/`.memview-path-row`/
+    `.memview-proj-row`/`.memview-label`/`.memview-edit-actions`
+    同樣是死 CSS，沒有搬動也沒有清理，維持原狀）。
+  - ✅ `settingsForm`（63 refs）分段拆完成，不整塊搬。
+    `settingsForm` 是 `AppSettings` 一般物件（非 signal），拆分策略：
+    子元件用 `@Input() settingsForm!: AppSettings` 接住同一個物件
+    參考，`[(ngModel)]` 直接 mutate 它——因為是同一個物件參考，不需要
+    額外 `@Output` 事件把值傳回去，`App` 自己讀 `this.settingsForm`
+    時就已經是最新值（跟 `App` 現有 template 直接綁 `settingsForm.x`
+    的行為完全一致，純粹是把 UI 搬到別的檔案，狀態owner 沒變）。
+    子區塊完成度：
+    - ✅ AI Provider（#16，`ProviderSettingsComponent`：`provider`/
+      `providerApiKey`/`providerModel`/`providerApiUrl` 4 個欄位，
+      本來就是獨立 `.modal-section`，沒有跨頁依賴，是最單純的一塊）。
+    - ✅ `.modal-body` 最上面那組沒包在 `.modal-section` 裡的標籤
+      （`GeneralSettingsComponent`：`projectDir`/`claudeHome`/
+      `workDir`/`backendPort`/`backendUrl`/`defaultAgent`/`theme`/
+      `lang`/`enterToSend`/`openAtLogin`，連同巢狀的
+      `<app-recent-work-dirs>` 一起搬）。混在裡面的幾個依賴分別這樣
+      處理：
+      - `pickProjectDir()`/`pickClaudeHome()`：純粹讀寫
+        `settingsForm` 的方法，整個搬進新元件（只需要注入
+        `ClaudeService`）。
+      - `resolvedClaudeHome()`：跨頁 signal，同 memory-editor 的作法用
+        `@Input resolvedClaudeHome`。
+      - `dropdownAgents()`：`App` 自己在別處（agent 相關程式碼）還在
+        用這個 computed，所以留在 `App`，用
+        `@Input dropdownAgents: Agent[]` 傳唯讀快照。
+      - `isElectron`：純環境判斷式（`!!(window as any).electronAPI`），
+        不是 app state，新元件自己算一份就好，不用 `@Input`——這也讓
+        `App` 裡原本的 `isElectron` 欄位變成死碼，順手一併移除（這是
+        這次搬移直接造成的死碼，不是搬移前就存在的技術債，所以清掉
+        跟前幾次「發現既有死碼但不清」的原則不衝突）。
+      - CSS 踩坑：`.modal-body` 這個包裹 `<div>` 本身還留在 `App`
+        自己的 template 裡（沒有整個搬走，只搬了裡面的 `<label>`
+        內容），但巢狀選擇器 `.modal-body { label { ... } }`
+        （scoped 在 `app.scss`）在新元件渲染出的 `<label>` 上會失效
+        ——因為 Angular 的 emulated encapsulation 是靠比對 content
+        attribute，不是單純比對 DOM 祖先關係，子元件渲染的元素不帶
+        `App` 的 attribute。解法：把巢狀的 `label {...}` 規則獨立成
+        一個純粹的全域 `.modal-body label {...}` 選擇器搬進
+        `src/styles.scss`（純 CSS 選擇器只看 DOM 結構，不管 Angular
+        attribute，所以子元件渲染的 `<label>` 一樣吃得到）；`.modal-
+        body` 外層的 padding/flex 排版本身不用動，因為那個 `<div>`
+        還是 `App` 自己渲染的。注意這個規則跟已經是全域的
+        `.modal-section { label {...} }` **不是**同一份、故意沒有合併
+        ——兩者巢狀範圍不同（`.modal-section` 版本的
+        `input/select/textarea` 直接掛在 section 底下、還多一個
+        `width:100%`，`.modal-body` 版本是掛在 `label` 底下、沒有
+        `width:100%`），合併會悄悄改變其中一邊的樣式，所以維持兩份
+        獨立規則。用 `page.evaluate` 讀 computed style 驗證過顏色/
+        字重/背景色都跟搬移前的 scss 定義完全一致，不是肉眼猜的。
+    - ✅ 「執行引擎範圍」區塊（`EngineSettingsComponent`：
+      `settingsForm.engineMode`/`settingsForm.agentEngine`/
+      `claudeBin`/`codexBin`/`apiKeyCmd`/`codexApiKeyCmd`）。決定不做
+      `AppStateService`，用 `@Input engineStatus` 傳
+      `engineStatus()` 的唯讀快照（純物件，不是 signal）——因為
+      `engineOptionDisabled()`/`engineOptionLabel()` 這兩個方法
+      **在別處也用到**（agent 編輯區的個別引擎覆寫選單，原 2235-2236
+      行），所以 `App` 自己那份不能刪，新元件裡複製一份小的純函式版本
+      （改讀 `this.engineStatus[name]` 而非 `this.engineStatus()[name]`，
+      因為現在是 plain object 不是 signal call），連同兩個靜態 label
+      對照表 `ENGINE_LABEL`/`ENGINE_REASON_LABEL` 一起複製——這兩個是
+      常數 map，複製比硬做 `@Input` function 傳遞更乾淨。至於
+      `engineMode()`（後端權威鎖定狀態，agent 編輯區在用，跟
+      `settingsForm.engineMode` 是同名但不同的兩個東西）：這個元件根本
+      沒用到它（原本以為會用到，盤點後發現這個區塊實際只讀
+      `engineStatus()`，`engineMode()` 是被其他區塊——agent 編輯區——
+      用，跟這次搬移無關），所以完全不用決定 `AppStateService` 這個
+      問題，之前的評估過度謹慎了。這個區塊沒有用到任何新的 CSS class
+      （全部沿用已經 global 的 `.modal-section`），不用動
+      `styles.scss`。
+    - ✅ 語音輸入（`SttSettingsComponent`：只有 `settingsForm.sttMode`
+      單一欄位，本來就是獨立 `.modal-section`，沒有跨頁依賴，比
+      AI Provider 還單純）。
+    - ✅ 快速提示編輯區塊（`QuickPromptsEditComponent`：
+      `quickPromptsForm`/`showQuickPromptsEdit`/`openQuickPromptsEdit`/
+      `saveQuickPrompts`/`addQuickPrompt`/`removeQuickPrompt` 整塊搬
+      走，包含 header 裡切換編輯狀態的「✏ 編輯」按鈕——因為那顆按鈕
+      控制的 `showQuickPromptsEdit` 也搬走了，留在 `App` 裡沒意義。
+      這組其實不是 `settingsForm` 欄位，是獨立於 `SettingsService` 的
+      表單暫存，元件自己注入 `SettingsService` 讀/寫，完全不需要
+      `@Input`/`@Output`。注意：`App` 自己還留著唯讀的
+      `quickPrompts = computed(() => this.settings.get().quickPrompts)`
+      給 chat 輸入區的快速提示按鈕用（app.html 原 1065 行），這個
+      **沒有**搬——它本來就跟編輯 UI 是分開的兩塊狀態，只是共用同一份
+      底層資料。搬移過程中發現這個 computed 讀的是 `settings.get()`
+      （plain method，不是 signal），所以理論上 `saveQuickPrompts()`
+      存檔後這個 computed 不會自動重新求值——這是搬移前就存在的既有
+      行為（不是這次改壞的），原樣保留，沒有動手修。
+      `.quick-prompts-edit`/`.qp-row`/`.qp-label-input`/
+      `.qp-text-input`/`.qp-actions`（只有這裡用，整塊搬到
+      `src/styles.scss`）；`.btn-xs`/`.btn-danger`（`App` 自己其他地方
+      還在用，所以 `app.scss` 原本的定義沒動，只在
+      `src/styles.scss` 加一份全域拷貝——過程中發現 `app.scss` 裡
+      `.btn-danger` 其實被定義了兩次，後面那份（第 4334 行附近）蓋掉
+      前面那份的每個重疊屬性，全域拷貝抄的是「實際生效」的後面那份，
+      不是文件裡先出現的那份，這是既有的技術債，這次沒有清理）。
+
+    **`settingsForm`（63 refs）子區塊拆分至此全部完成** ✅——
+    `app.html` 裡已經找不到任何 `settingsForm.` 的直接 template
+    綁定，全部搬進上面 6 個獨立元件（Provider/STT/QuickPrompts/
+    General/Engine + 巢狀的 RecentWorkDirs）。`app.ts` 裡剩下的
+    `this.settingsForm.x = ...` 都是合理留下的業務邏輯（拖放資料夾、
+    `toggleLang()`/`toggleTheme()`、`openSettings()`/`saveSettings()`
+    初始化與存檔、`_autoCorrectGlobalEngine()` 自動切換），不是
+    UI 綁定，本來就不屬於這次「settings modal UI 拆分」的範圍。
+  - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm` /
+    `.toggle-label` / `.tg-status-chip` / `.memview-textarea` 等
+    settings modal 共用樣式已搬到 `src/styles.scss`（global）——
+    Angular 的 emulated
+    encapsulation 讓子元件收不到 `app.scss` 裡的 component-scoped
+    樣式，每抽一個新元件如果用到這些 class 不用再重複搬；如果用到
+    新的共用 class，記得順手搬過去。
+- **settings modal 內部拆分至此全部完成**（9 個獨立元件：
+  DiagnosticsPanel、AgencyImportPanel、RecentWorkDirs、
+  TelegramSettings、MemoryEditor、ProviderSettings、SttSettings、
+  QuickPromptsEdit、GeneralSettings、EngineSettings——數字對不上是
+  因為 RecentWorkDirs 巢狀在 GeneralSettings 裡，兩邊都算）。拆分
+  模式已經驗證足夠多次（純讀取、`@Input`/`@Output` 事件、shared
+  object reference mutation、cross-page signal 唯讀快照、純函式/
+  常數複製，五種模式都出現過），可以進到下一階段。
+- **2026-07-18 修正：這個 app 完全沒有裝 Angular Router**（
+  `RouterModule`/`provideRouter`/`Routes` 在 `frontend/src` 裡零匹配）。
+  原規劃「memview/schedules 分頁…天然適合 `loadComponent` lazy
+  route」的前提不成立——右側面板的分頁（TEAM/AGENT/SKILL/MCP/
+  Scheduling/soul）全部是 `activeTab()` signal 驅動的 `@if` 區塊切換，
+  不是路由。引入 Router 是遠比目前做過的任何一次抽取都大的架構變更
+  （routing config、navigation guard、把分頁切換改成 router
+  navigation、處理 deep-link 邊界情況），跟這個 Phase 目前「最小風險
+  漸進抽取」的精神不符，這次沒有做，維持既有的 `@if` + tab signal
+  架構。改用跟 settings modal 完全相同、已經驗證 9 次的模式：
+  `@if (activeTab() === 'x')` 裡面包 `@defer (on immediate)` + 獨立
+  元件，效果一樣是「非首屏分頁不進主 bundle」，只是觸發條件是 tab
+  切換而非 modal 開關，機制上沒有差異。
+  - 另外「memview」這個名字本身也是死的——`activeTab` signal 的型別
+    union 裡雖然列了 `'memory'`/`'memview'` 兩個值，但 `app.html`
+    完全沒有任何 `@if (activeTab() === 'memview')` 或
+    `'memory'` 的區塊，也沒有任何按鈕會 `.set('memview')`——這是
+    寫好但從沒接上 UI 的死型別，不是這次搬移弄壞的，原樣保留。
+  - ✅ **Scheduling 分頁**（`SchedulePanelComponent`）：整塊排程
+    UI——新增排程表單（prompt/cron 輸入、AI 自然語言轉 cron、
+    cron 快速選項）+ 排程列表（執行/啟停/刪除）——全部搬進新元件，
+    採跟 Telegram/QuickPromptsEdit 相同的「完全自包含」模式：
+    `schedules`/`newSchedulePrompt`/`newScheduleCron`/`aiParsing` 這些
+    state，以及 `translateCron`/`isNaturalLanguage`/`parseCronFromAI`/
+    `addSchedule`/`deleteSchedule`/`toggleSchedule`/`runScheduleNow`
+    這些方法，盤點後確認全部只有這個分頁在用（`grep` 全域找不到第二
+    處引用），整塊搬走、注入 `ClaudeService` 自己打 API。
+    `loadSchedules()` 原本由 `App.reload()`（app 啟動時）呼叫，改成
+    元件自己 `ngOnInit` 載入——這不只是模式一致，還是真正的行為改善：
+    原本排程資料不管使用者有沒有點過 Scheduling 分頁都會在啟動時抓，
+    現在只有第一次真的點進這個分頁才會抓，跟「非首屏不做非必要工作」
+    的 Phase 2 目標本身對齊。
+    唯一新出現的模式：`addSchedule`/`deleteSchedule`/`toggleSchedule`/
+    `runScheduleNow` 的錯誤處理原本呼叫 `App.showToast(...)`（app 全域
+    的 toast 通知系統，這個分頁以外還有很多地方在用，不能直接搬），
+    改成 `@Output() toast = new EventEmitter<{text,type}>()`，
+    `app.html` 接 `(toast)="showToast($event.text, $event.type)"`——
+    跟 diagnostics-panel 當初的 `(logMessage)` 是同一個「cross-cutting
+    UI 效果透過 @Output 事件往上通知」模式，只是這次是 toast 而不是
+    chat log。
+    CSS 部分規模比之前任何一次都大：`.schedule-view`/
+    `.schedule-form`/`.schedule-input`/`.schedule-add-btn`/
+    `.schedule-header`/`.schedule-status`/`.schedule-actions`/
+    `.cron-row`/`.cron-presets`/`.cron-preset-btn` 這組只有這個分頁在
+    用，整塊搬到 `src/styles.scss`；但 `.panel-list`/`.panel-card`/
+    `.card-name`/`.card-desc`/`.icon-btn-sm`/`.del-btn`/`.empty-hint`
+    是 App 自己好幾個其他分頁（agents/teams/skills/soul/mcp）共用的
+    卡片式列表樣式，`app.scss` 原本的定義不能動，只在
+    `src/styles.scss` 加一份全域拷貝——`.panel-card` 的全域拷貝特意
+    只抄基底規則（background/border/padding/hover），沒有抄
+    `.selected`/`.active-in-chat`/`.expanded` 這些修飾用的變體，因為
+    排程卡片從來不會套用那些 class，抄了也用不到。
+  - ✅ **Teams 分頁**（`TeamPanelComponent`）：只搬「團隊卡片列表」這個
+    UI，不是整個 Teams 功能——盤點後發現 Teams 比 Scheduling 複雜
+    得多，不是全部自包含：
+    - `sortedTeams()`（原本的 computed）依賴 `rightPanelFilter()`，
+      這是整個右側面板（agents/skills/mcp/teams 共用）的搜尋框
+      signal，不能搬——所以排序/篩選邏輯留在 `App`，只把算好的結果
+      用 `@Input() teams: Team[]` 傳下去（跟 `dropdownAgents` 當初
+      的處理方式一樣）。
+    - `expandedTeams`/`toggleTeamExpanded`（卡片展開/收合狀態）純粹
+      是這個列表自己的 UI 狀態，別處沒人用，整個搬進元件、改名
+      `toggleExpanded`。
+    - `selectTeamLeader`（點「💬 團隊對話」）、`toggleTeamFavorite`
+      （收藏切換）、`openTeamEditor`（開編輯 Team 的另一個獨立
+      modal，`app.html` 2318 行左右，跟這個列表完全是分開的區塊）
+      這三個**不能搬**——`selectTeamLeader` 深度耦合 chat/session
+      狀態（呼叫 `saveCurrentTab()`、建立新對話分頁），
+      `openTeamEditor` 開的是列表以外的另一塊 UI，`toggleTeamFavorite`
+      寫回 `App` 自己持有、別處也會讀的 `teams` signal。三個都改成
+      `@Output`（`chat`/`favorite`/`edit`）往上通知，`App` 收到事件後
+      呼叫原本就有的方法——元件本身完全不碰 `ClaudeService`，是純
+      presentational 元件，跟之前「自包含」的元件（Telegram/
+      QuickPromptsEdit/Schedule）是不同的模式。
+    CSS：`.card-header-row`（補進既有全域 `.panel-card` 巢狀規則
+    裡）、`.agent-action-btns`/`.agent-activate-btn`/`.agent-edit-btn`/
+    `.agent-fav-btn`/`.empty-guide*`/`.sticky-create-btn-wrap`/
+    `.team-members-row`/`.team-member-chip`（含巢狀 `.member-dot`/
+    `.member-role`）都是 App 自己其他分頁（agents/skills/chat 空狀態）
+    共用的樣式，原定義不動，`src/styles.scss` 加全域拷貝；
+    `.team-fav-btn`/`.team-leader-preview` 盤點後發現根本沒有對應的
+    scss 規則（純裝飾用的 class，一直是空的），不用搬。
+    既有 e2e 測試「Team 卡片可以切換最愛」直接驗證了 `(favorite)`
+    這條線路整條可用；手動另外驗證了空狀態、展開/收合、`(edit)`
+    事件（編輯既有 Team 與建立新 Team 兩條路徑都會正確開啟
+    Team Editor modal）——`(chat)` 沒有另外寫測試，因為它跟已驗證
+    過兩次的 `(favorite)`/`(edit)` 是完全相同的事件轉發寫法，風險
+    判斷上不需要重複驗證。
+  - ✅ **Skills 分頁**（`SkillPanelComponent`）：目前為止耦合最深的一個
+    ——不是完全自包含，也不是單純「presentational + @Output」，是
+    兩者的混合：
+    - `sortedSkills()` 依賴 `rightPanelFilter()` **和**
+      `selectedAgent()`（目前選中的 agent），排序邏輯留在 `App`，結果
+      用 `@Input() skills: Skill[]` 傳下去（跟 teams 一樣）。
+    - `isSkillLinkedToActiveAgent`/`isSkillInActiveAgentFrontmatter`/
+      `isSkillInTab` 這三個方法在原本的 template 裡是「每個 skill 卡
+      呼叫一次」，若直接當 `@Output`/function `@Input` 傳會很醜。改用
+      新模式：`App` 新增三個 `computed()`（`linkedSkillIds`/
+      `frontmatterSkillIds`/`tabSkillIds`，都是 `Set<string>`），
+      元件收 `@Input() linkedSkillIds: Set<string>` 等三個唯讀快照，
+      模板裡改成 `.has(s.id)` 查表，不再呼叫方法。這是首次為了拆分
+      新增 computed（不是單純移動既有的），純衍生自既有 signal，行為
+      應該不變。
+    - `expandedTranslation`/`translateExpanded` 發現**橫跨 agents 和
+      skills 兩個分頁共用**（agents 分頁原 1292-1302 行也在用同一份
+      翻譯狀態）——不是 teams 那種「純本地」也不是「純跨頁唯讀」，是
+      「跨分頁但可寫」，所以留在 `App`，`@Input() expandedTranslation`
+      +`@Output() translate` 雙向處理。
+    - `expandedSkillId` 也一樣不能像 teams 的 `expandedTeams` 那樣搬成
+      本地 signal——agents 分頁有個「跳到某個 Skill 詳情」的連結
+      （`jumpToSkillDetail`，原 1312 行）會直接寫入這個 signal，是
+      跨分頁寫入，所以留在 `App`，用 `@Input`/`@Output` 處理。
+    - `getUsedMcps`/`SKILL_MCPS_MAP`（靜態查表）複製一份到元件裡
+      （`App` 自己在 `sortedMcpServers` 內部還要用，不能拿掉），跟
+      `ENGINE_LABEL` 是同一個處理方式。
+    - `openSkillEditor`/`jumpToMcpDetail`（跳到別的分頁）不能搬，改
+      `@Output`（`edit`/`jumpToMcp`）。
+    CSS：`.card-detail-content`/`.detail-desc`/`.detail-actions`/
+    `.linked-section`/`.linked-title`/`.link-item`（巢狀在
+    `.panel-card` 底下）、`.bind-btn`/`.agent-mapping-summary`/
+    `.mapping-chip`/`.translate-btn`/`.translating` 都跟 agents 分頁
+    共用，原定義不動、`src/styles.scss` 加全域拷貝；
+    `.binding-btns`/`.agent-skill-badge`/`.auth-dot` 盤點後確認只剩
+    skill-panel 在用，整塊搬。`@keyframes blink` 動畫改名成
+    `skill-panel-blink`——Angular 的 emulated encapsulation **不**
+    幫 `@keyframes` 加隔離屬性，如果全域 `styles.scss` 跟
+    `app.scss` 各自定義同名 keyframe，理論上有互相蓋掉的風險，改名
+    避免這個問題，不是這次才發現的既有 bug，是預防性處理。
+    手動 e2e 涵蓋卡片渲染（含 mapping chip）、展開/收合、翻譯（含
+    還原原文）、跳轉到 MCP 分頁（`jumpToMcp` 觸發跨分頁切換）、
+    加入/移出目前對話（`bind-btn` 切換）、開啟 Skill 編輯器
+    （過程中發現 `openSkillEditor` 會先打一次 `GET /api/skills/:id`
+    才開 modal，不是純本地操作，一開始漏 mock 這個 API 導致 modal
+    開不起來，補上後才過）。
+  - ✅ **Agents 分頁**（`AgentPanelComponent`）：結構跟 skills 幾乎一樣
+    （果然如預期），但實際盤點後發現比 skills 更單純一些：
+    - `sortedAgents()` 依賴 `rightPanelFilter()`，留在 `App`，結果用
+      `@Input() agents: Agent[]` 傳下去。
+    - `expandedAgentId`/`expandedTranslation` 一樣不能變成本地
+      signal——盤點時發現一個新的跨分頁寫入來源：`window:keydown`
+      全域 Escape 鍵監聽器（`onGlobalKey`）會同時重置
+      `expandedAgentId`/`expandedSkillId`/`expandedMcpId` 三個，跟
+      分頁切換無關，是全域快捷鍵，一定要留在 `App`。用
+      `@Input`/`@Output` 處理，跟 skills 同一招。
+    - **比 skills 簡化的地方**：原本猜測 `getPermSkills(agentId)`/
+      `getPermMcps(agentId)` 需要跟 skills 的
+      `linkedSkillIds`/`frontmatterSkillIds` 一樣包成 `Set` 傳下去，
+      但盤點後發現這兩個方法其實就是
+      `this.agents().find(x => x.id === id)?.skills ?? []`——單純讀
+      agent 物件自己的欄位。既然元件已經透過 `@Input() agents` 拿到
+      完整的 agent 物件了，模板裡直接用 `a.skills ?? []` /
+      `a.mcp ?? []` 取代方法呼叫即可，不需要額外的 computed 或
+      Set——比 skills 少了三個新 computed。
+    - `activateAgent`（啟動 Agent，套用 Soul/MCP/Memory、建立新對話
+      分頁）、`toggleFavorite`、`openAgentEditor`、
+      `toggleSkillPermForAgent`/`toggleMcpPermForAgent`、
+      `jumpToSkillDetail`/`jumpToMcpDetail`（跳到別分頁）都不能搬，
+      改 `@Output`（`activate`/`favorite`/`edit`/`removeSkillPerm`/
+      `removeMcpPerm`/`jumpToSkill`/`jumpToMcp`）。
+    - `getAgentSoulContent(soulId)`：純讀 `souls()` signal 找對應
+      content，只在展開的詳情卡才會用到（低頻率查詢），直接把
+      `souls: SoulProfile[]` 整包當 `@Input` 傳，元件自己
+      `.find()`，不用像 skill 的三個布林檢查那樣包 Set——這個是
+      「單次查找」不是「逐項在迴圈裡查」，包 Set 反而多此一舉。這也
+      讓 `App` 裡原本的 `getAgentSoulContent` 方法變成死碼，順手移除
+      （跟 `isElectron` 一樣，是這次搬移直接造成的死碼）。
+    CSS：**這次沒有新增任何全域樣式**——agent-panel 用到的每一個
+    class（`.card-header-row`/`.agent-action-btns`/
+    `.agent-activate-btn`/`.agent-fav-btn`/`.agent-edit-btn`/
+    `.agent-mapping-summary`/`.mapping-chip`/`.card-detail-content` 一
+    整組/`.translate-btn`/`.translating`/`.del-btn`/`.empty-guide*`/
+    `.sticky-create-btn-wrap`/`.btn-secondary`）都已經在 teams/skills
+    那兩輪搬過了，盤點後確認一個字都不用改 `styles.scss`/`app.scss`。
+    手動 e2e 涵蓋卡片渲染（含 mapping chip）、展開+翻譯、跳轉到
+    Skills 分頁（跨分頁）、最愛切換、開啟 Agent 編輯器；`activate`
+    （啟動 Agent）沒有另外寫測試，因為跟已驗證過的
+    `favorite`/`edit`/`jumpToSkill` 是同一種簡單事件轉發寫法。
+  - ✅ **Soul 分頁**（`SoulPanelComponent`）：卡片列表 + 下方編輯器的
+    雙區塊版面，`souls`/`selectedSoulId` 兩個 signal 同時被 Agent 分頁
+    的 `getAgentSoulContent` 讀取，是跨分頁共用狀態，維持在 `App`
+    用 `@Input` 往下傳，不搬進元件。`soulSplitRatio`（上下區塊高度
+    比例，由全域 `mousemove`/`mouseup` 監聽器拖曳調整）也留在 `App`——
+    拖曳邏輯本身跟切分頁無關，是全域行為。
+    - 過程中抓到兩個真的產品 bug（不是測試問題），都是靠 Playwright
+      搭配 Angular dev-mode `ng.getComponent()` 直接讀 live component
+      state 才定位到：
+      1. **高頻文字狀態不能整包用 `@Input`/`@Output` 來回傳遞**。原本
+         把編輯器草稿內容（`soulDraft`）設計成 `@Input()
+         soulDraft`/`@Output() draftChange`，在快速輸入下會出現
+         stale-echo race——子元件的 `[ngModel]="soulDraft"` 被父層
+         回傳的舊值蓋掉，Save/Discard 按鈕在使用者明明已經編輯過的
+         情況下仍顯示 disabled。修法：草稿文字（`localDraft`）完全
+         留在元件本地狀態，只靠 `ngOnChanges` 監聽
+         `selectedSoulId`（不是 `souls` 陣列）變化時重置——只在切換
+         選取的靈魂檔案時重置，避免打字打到一半被 `souls` 陣列的
+         其他變動打斷。`soulDraftSaved`（純布林、每次編輯 session
+         只會 true→false 一次）維持 `@Input`，因為它是 idempotent，
+         不會有 race。
+      2. **`@Output()` 不能取跟原生 DOM 事件同名的名字**。原本
+         `@Output() select`/`@Output() wheel` 分別對應「選取某個靈魂
+         卡片」跟「滾輪捲動清單」，但 `select`/`wheel` 本身是真的、
+         會冒泡的原生 DOM 事件——在下方 textarea 裡按 Ctrl+A
+         全選文字時觸發的原生 `select` 事件冒泡到
+         `<app-soul-panel>` host element，被 `(select)="..."`
+         這個 Angular Output binding 誤接住，導致
+         `App.selectedSoulId` 被寫入一個原生 `Event` 物件而不是
+         靈魂檔案的 id 字串（畫面上會看到 `[object Event].md`）。
+         修法：兩個 Output 分別改名為 `pickSoul`/`soulWheel`，避開
+         跟原生事件同名。
+    - 抓到這個 bug 之後回頭對所有已抽出的元件做了一輪
+      `grep -rn "@Output() "` 掃描，檢查是否有其他同名衝突（比對
+      click/change/input/submit/focus/blur/keydown/keyup/drag/
+      drop/touch*/scroll/resize/load/error/toggle/close 等常見原生
+      事件名稱）——只有 soul-panel 這兩個，另外在更早抽出、已合併的
+      `RecentWorkDirsComponent` 發現同款 `@Output() select`（該元件
+      目前模板裡沒有可選取文字的子元素，理論上不會被觸發，但屬於同一
+      個已證實為真的 bug pattern，順手一併改名為 `pickDir` 並同步更新
+      `general-settings.html` 的呼叫端，防患於未然）。
+    CSS：`.soul-panel`/`.soul-upper`（含 `.soul-hint`）/
+    `.soul-add-btn`/`.soul-rename-btn`/`.soul-rename-input`/
+    `.soul-filename`/`.soul-divider`/`.soul-lower`/`.lower-empty-hint`/
+    `.edit-lower-header`/`.unsaved-dot`/`.edit-lower-actions` 從
+    `app.scss` 整段搬到 `styles.scss`；`.memory-editor` 因為還被
+    `App` 剩餘模板（agent 編輯器裡的 soul 內容欄）直接使用，原始定義
+    留在 `app.scss`，`styles.scss` 加一份字面值複製（SCSS 變數轉字面
+    hex 色碼）。另外發現一個全域 `@keyframes blink` 沒有被 Angular
+    的 emulated view encapsulation 限定作用域，為避免跟其他元件未來
+    可能新增的動畫撞名，改名為 `skill-panel-blink`。
+    手動 e2e 涵蓋選取卡片、編輯草稿、儲存（清除 unsaved 標記）、
+    捨棄（還原上次儲存內容）、原地重新命名、刪除、新增全部走過。
+  - ✅ **MCP 分頁**（`McpPanelComponent`，22.93 kB，目前最大的 lazy
+    chunk）：如預期是四個分頁裡最複雜的一個，涵蓋 App 管理定義列表
+    （雙引擎同步）、外部／本地 API 雙卡片列表、可拖曳分隔線、Docker
+    設定子表單、日誌檢視器（含 2.5 秒自動輪詢）、MCP JSON-RPC 調試
+    主控台。
+    - 前置重構：`McpServer`/`McpServerDef`/`McpTool`/`McpType` 四個
+      型別原本一半在 `app.ts`（`McpServer`/`McpTool`/`McpType`）一半在
+      `claude.service.ts`（`McpServerDef`），為了讓新元件能直接從
+      `claude.service` import（跟 `Agent`/`SoulProfile` 等既有慣例
+      一致，避免元件回頭 import `app.ts` 造成循環依賴），把前三個也
+      搬進 `claude.service.ts`，`app.ts` 改成統一從那裡 import。
+    - 狀態分工採三種模式混合：
+      1. **維持 App**（跨分頁或有外部呼叫源）：`mcpServerDefs`/
+         `externalMcpServers`/`localMcpServers`/`expandedMcpId`（跟
+         agents/skills 共用同一個全域 Escape 鍵重置邏輯）/
+         `mcpLoading`/`mcpSplitPct`。`startMcp`/`stopMcp`/`loadMcp`
+         也留在 App，因為分別被 agent 啟用流程（`activateAgent`）和
+         `reload()`/初始化流程呼叫，不只是這個分頁自己用。
+      2. **精算 Set 作為 @Input**（沿用 skill-panel 的手法）：
+         `isMcpRequiredByActiveAgent`/`isMcpLinkedToActiveAgent`/
+         `isMcpInTab` 三個原本逐卡呼叫的方法，改成 App 端各自
+         precompute 一個 `Set<string>`（`requiredMcpNames`/
+         `linkedMcpNames`/`sessionMcpNames`），元件內用
+         `.has(name)` 做 O(1) 查找。
+      3. **完全下放給元件**（自己注入 `ClaudeService`）：Docker
+         設定（`localMcpConfigs`/`localDockerConfig`/
+         `editingDockerMcp`/`openDockerConfig`/`saveDockerConfig`，
+         盤點確認 `localMcpConfigs` 只有這個分頁自己讀寫，於是元件
+         改成自己在 `ngOnInit` 呼叫 `getLocalMcpConfig()`，不再靠
+         App 的 `loadMcp()` 帶進來）、日誌檢視器（`mcpLogOpen`/
+         `mcpLogLines`/輪詢 interval）、MCP Live Debugger（RPC
+         method／params／result／pending-auth 全部狀態，`sendMcpRpc`
+         呼叫本身無跨分頁依賴）。Docker 設定儲存的成功/失敗提示改用
+         `@Output() toast`（沿用 `SchedulePanelComponent` 已有的
+         `{text, type}` 慣例），由 `app.html` 接手
+         `(toast)="showToast($event.text, $event.type)"`。
+    - **順手修正一個真的 bug**：日誌檢視器原本有個 T40 健檢修復註解
+      ——`closeSettings()`（關閉 ⚙ 設定 modal）會強制清掉
+      `mcpLogOpen`/輪詢 interval，理由是「開著 MCP 記錄檢視器再關閉
+      Settings，計時器會永遠留著」。但 MCP 分頁本身跟 Settings modal
+      是兩個完全不相關的畫面區域（現在的版面底下 MCP 清單早就搬到
+      右側面板分頁，不在 Settings modal 裡了），這個清理掛在
+      `closeSettings()` 只是巧合地堵住了其中一種情境——真正該觸發清理
+      的時機是「離開 MCP 分頁」，而舊寫法完全沒處理這個情境（切到
+      Skills/Agents 分頁時，開著的日誌輪詢照樣繼續打後端，直到使用者
+      剛好開關一次 Settings）。改成元件的 `ngOnDestroy` 清掉 interval
+      後，正確觸發時機變成「Angular 銷毀這個元件」——也就是
+      `@if (activeTab() === 'mcp')` 外層條件變 false（切到別的分頁）
+      或整個 app 銷毀，兩者都比原本的 `closeSettings()` 更貼近問題
+      本身，也讓 `closeSettings()` 恢復成單純的
+      `settingsOpen.set(false)`。
+    CSS：`.mcp-view`（原本分散在三處、各自新增不同屬性的三段定義，
+    照原順序整段搬移，不合併，確保 cascade 疊加結果不變）/
+    `.mcp-header`/`.mcp-section`(+`-external`/`-local` variant)/
+    `.mcp-section-title`/`-icon`/`-count`/`-hint`/`.mcp-empty`/
+    `.mcp-footer-hint`/`.ctrl-btn`(+四個狀態 modifier)/
+    `.docker-cfg-section`/`-form`/`-label`/`-input`/`-display`/`-row`/
+    `.mcp-status-lamp`（目前生效的第二個定義）/`.lamp-green`/`-yellow`/
+    `-red`/`-off`/`@keyframes lamp-pulse`/`.mcp-pane`/`-bottom`/
+    `.mcp-divider`(+`-track`/`-grip`)/`.mcp-card-compact`/`.mcc-row`/
+    `-name`/`-actions`/`-detail`/`-url`/`-tools-label`/`-tool-row`/
+    `-tool-desc`/`.mcp-log-panel`/`-header`/`-body`/`-line`/`-empty`/
+    `.mcp-agent-hint` 從 `app.scss` 整段搬到 `styles.scss`。盤點過程
+    中發現 `app.scss` 裡這個分頁的 CSS 歷經至少三輪重新設計
+    （「T10 MCP Panel」→「MCP Panel Redesign」→「MCP Split Panes」/
+    「MCP Compact Card」），中間留下大量從未被目前模板引用的死碼
+    （`.mcp-list-output`/`.mcp-status-dot`/`.mcp-group-label`/
+    `.mcp-ctrl-btns`/`.mcp-type-chip`/`.local-mcp-card`/
+    `.local-mcp-name-col`/`.mcp-ctrl-bar`/`.local-mcp-meta`/
+    `.docker-image-tag`/`.mcp-port-tag`/`.mcp-log-toggle`，以及一個
+    帶 `&.lamp-on` modifier、已被取代的舊版 `.mcp-status-lamp`
+    定義）——逐一用 grep 對照目前模板確認後，這些死碼原封不動留在
+    `app.scss`（不屬於這次抽取範圍，且部分死碼跟仍在使用的同名
+    selector 交錯，貿然刪除風險大於效益），只搬移經 grep 驗證仍在
+    使用的規則。
+    手動 e2e 涵蓋 App 管理定義列表渲染/新增/刪除、外部/本地卡片渲染
+    與展開、綁定到目前對話、本地伺服器啟動、Docker 設定顯示與編輯
+    儲存（含 toast 驗證）、日誌檢視器開啟與輪詢、RPC 調試主控台送出
+    請求、整理按鈕。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立

@@ -1,0 +1,7 @@
+@if (recentWorkDirs().length) {
+  <div class="recent-dirs">
+    @for (d of recentWorkDirs(); track d) {
+      <button class="dir-chip" (click)="pickDir.emit(d)">{{ d }}</button>
+    }
+  </div>
+}

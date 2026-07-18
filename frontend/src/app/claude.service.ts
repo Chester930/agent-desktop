@@ -33,6 +33,38 @@ export interface McpServerDef {
   synced?: { claude: boolean; codex: boolean };
 }
 
+export interface McpWorkflow {
+  type: 'code' | 'node';
+  content: string;
+  dockerized?: boolean;
+  dockerImage?: string;
+}
+
+export interface McpTool {
+  name: string;
+  description: string;
+  workflow?: McpWorkflow;
+}
+
+export type McpType = 'external' | 'docker' | 'stdio' | 'local-http';
+
+export interface McpServer {
+  id: string;
+  name: string;
+  url: string;
+  status: string;
+  authorized: boolean;
+  description: string;
+  mcpType: McpType;
+  dockerized?: boolean;
+  dockerImage?: string;
+  port?: string;
+  containerName?: string;
+  composeFile?: string;
+  composeService?: string;
+  tools?: McpTool[];
+}
+
 // 引擎可用性偵測（backend/engines/availability.py）——只做「已安裝／已登入」
 // 偵測，用量／額度數字兩邊 CLI 都沒有可腳本化的資料來源，這輪沒有做。
 export interface EngineAvailability {

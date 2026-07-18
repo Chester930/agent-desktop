@@ -1,0 +1,60 @@
+<div class="soul-panel" #soulPanel>
+
+  <!-- Upper: soul list, mouse-wheel to cycle selection -->
+  <div class="soul-upper" (wheel)="soulWheel.emit($event)"
+       [style.height.%]="soulSplitRatio * 100">
+    <p class="soul-hint">
+      可以設定多個人格檔案，將全部合併並在每次對話開頭注入。用滾輪捲動可切換選取。
+    </p>
+    <button class="btn-secondary soul-add-btn" (click)="add.emit()">＋ 新增靈魂</button>
+
+    @for (s of souls; track s.id) {
+      <div class="panel-card" [class.selected]="selectedSoulId === s.id" (click)="pickSoul.emit(s.id)">
+        <div class="card-header-row">
+          @if (renamingSoulId() === s.id) {
+            <input class="soul-rename-input"
+              [(ngModel)]="renameInput"
+              (keydown.enter)="onConfirmRename(s.id)"
+              (keydown.escape)="cancelRename()"
+              (blur)="onConfirmRename(s.id)"
+              (click)="$event.stopPropagation()"
+              autofocus>
+          } @else {
+            <div class="card-name">{{ s.name }}.md</div>
+            <button class="soul-rename-btn" (click)="startRename(s.id, $event)" title="重新命名">✏</button>
+          }
+          <button class="del-btn" (click)="$event.stopPropagation(); remove.emit(s.id)" title="Delete">✕</button>
+        </div>
+        <div class="card-desc" style="font-size:11px;color:#888;">
+          {{ s.content | slice:0:80 }}{{ (s.content?.length || 0) > 80 ? '…' : '' }}
+        </div>
+      </div>
+    } @empty {
+      <p class="empty-hint">尚無靈魂設定檔，點「＋ 新增靈魂」建立</p>
+    }
+  </div>
+
+  <!-- Draggable divider -->
+  <div class="soul-divider" (mousedown)="dividerMousedown.emit({ event: $event, panelHeight: soulPanel.clientHeight })"
+       title="Drag to resize"></div>
+
+  <!-- Lower: editor, confirm to save -->
+  <div class="soul-lower" [style.height.%]="(1 - soulSplitRatio) * 100">
+    @if (selectedSoulId) {
+      <div class="edit-lower-header">
+        <span class="soul-filename">{{ selectedSoulId }}.md</span>
+        <button class="soul-rename-btn" (click)="startRename(selectedSoulId, $event)" title="重新命名">✏</button>
+        @if (!soulDraftSaved) { <span class="unsaved-dot">● Unsaved</span> }
+      </div>
+      <textarea class="memory-editor" [ngModel]="localDraft" (ngModelChange)="onDraftEdit($event)"
+        style="flex:1;width:100%;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:6px;padding:8px;font-size:12px;outline:none;resize:none;font-family:inherit;line-height:1.5;"></textarea>
+      <div class="edit-lower-actions">
+        <button class="btn-secondary btn-xs" (click)="onDiscard()" [disabled]="soulDraftSaved">Discard</button>
+        <button class="btn-primary btn-xs" (click)="onSave()" [disabled]="soulDraftSaved">Save</button>
+      </div>
+    } @else {
+      <div class="lower-empty-hint">選擇或建立一個靈魂設定檔開始編輯</div>
+    }
+  </div>
+
+</div>

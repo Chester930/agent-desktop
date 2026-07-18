@@ -760,7 +760,9 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
 
         try:
             result = await engine.run_turn(
-                prompt=full_message, cwd=cwd, model=model, permission_mode=permission_mode,
+                prompt=full_message, cwd=cwd,
+                model=(model if model and model not in ("sonnet", "") else None),
+                permission_mode=permission_mode,
                 resume_session_id=active_sessions.get(client_id), api_key=engine_api_key,
                 on_text=_on_text, on_process=_on_process, attachments=attachments,
                 bin_override=(codex_bin_override if engine.name == "codex" else ""),
@@ -1065,7 +1067,9 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
 
             try:
                 result = await engine.run_turn(
-                    prompt=fp, cwd=cwd, model=model, permission_mode=permission_mode,
+                    prompt=fp, cwd=cwd,
+                    model=(model if model and model not in ("sonnet", "") else None),
+                    permission_mode=permission_mode,
                     resume_session_id=resume_sid, api_key=engine_api_key,
                     on_text=_on_text, on_process=_on_process, attachments=attachments,
                     bin_override=(codex_bin_override if engine.name == "codex" else ""),
@@ -1583,7 +1587,9 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                 # handle_team_execute 本來就沒有 attachments 概念（跟
                 # handle_chat／handle_team_chat 不一樣），這裡不用傳。
                 result = await engine.run_turn(
-                    prompt=prompt, cwd=project_path, model=model, permission_mode=permission_mode,
+                    prompt=prompt, cwd=project_path,
+                    model=(model if model and model not in ("sonnet", "") else None),
+                    permission_mode=permission_mode,
                     resume_session_id=resume_sid, api_key=engine_api_key,
                     on_text=_on_text, on_process=_on_process,
                     bin_override=(codex_bin_override if engine.name == "codex" else ""),

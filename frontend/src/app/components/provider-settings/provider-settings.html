@@ -1,0 +1,33 @@
+<!-- #16 Multi-provider settings -->
+<div class="modal-section">
+  <div class="modal-section-header">AI Provider</div>
+  <div class="modal-form">
+    <label>Provider
+      <select [(ngModel)]="settingsForm.provider">
+        <option value="claude">Claude Code CLI（預設）</option>
+        <option value="openai">OpenAI</option>
+        <option value="openrouter">OpenRouter</option>
+        <option value="gemini">Gemini（OpenAI compat）</option>
+        <option value="custom">Custom / 自訂</option>
+      </select>
+      <small>除 Claude 外均透過 OpenAI-compatible API 呼叫，不使用本機 CLI。</small>
+    </label>
+    <label>API Key
+      <input type="password" [(ngModel)]="settingsForm.providerApiKey"
+        placeholder="sk-...">
+      <small>{{ settingsForm.provider === 'claude' ? '選用；聊天本身走本機 Claude Code CLI 不需要。只有語音輸入切換成「雲端」時才會用到這把金鑰。' : '用於此 Provider 的聊天請求；語音輸入若切換成「雲端」也會用同一把金鑰。' }}</small>
+    </label>
+    @if (settingsForm.provider !== 'claude') {
+      <label>Model
+        <input [(ngModel)]="settingsForm.providerModel"
+          placeholder="例：gpt-4o-mini / claude-3-5-sonnet / gemini-1.5-flash">
+      </label>
+    }
+    @if (settingsForm.provider === 'custom') {
+      <label>API Base URL
+        <input type="url" [(ngModel)]="settingsForm.providerApiUrl"
+          placeholder="https://api.openai.com/v1">
+      </label>
+    }
+  </div>
+</div>

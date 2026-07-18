@@ -1,0 +1,51 @@
+<div class="schedule-view">
+  <div class="schedule-form">
+    <input [(ngModel)]="newSchedulePrompt" placeholder="要排程執行的指令…" class="schedule-input">
+    <div class="cron-row" style="display: flex; gap: 6px; width: 100%;">
+      <input [(ngModel)]="newScheduleCron" placeholder="執行週期（例：每天早上 9:00）" class="schedule-input cron-input" style="flex: 1; min-width: 0;">
+      @if (isNaturalLanguage(newScheduleCron)) {
+        <button class="btn-primary" (click)="parseCronFromAI()" [disabled]="aiParsing()" style="flex-shrink: 0; background: #6366f1; border-color: #6366f1; font-weight: bold; cursor: pointer; padding: 6px 12px; font-size: 12px; border-radius: 6px; color: white;">
+          {{ aiParsing() ? '解析中...' : '🧠 AI 轉換' }}
+        </button>
+      }
+      <button class="btn-primary schedule-add-btn" (click)="addSchedule()"
+        [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim() || isNaturalLanguage(newScheduleCron) || aiParsing()" style="flex-shrink: 0;">新增</button>
+    </div>
+    <div class="cron-presets" style="margin-top: 6px;">
+      @for (p of CRON_PRESETS; track p.value) {
+        <button class="cron-preset-btn" (click)="newScheduleCron = p.value" [title]="p.value">{{ p.label }}</button>
+      }
+    </div>
+  </div>
+  <div class="panel-list" style="margin-top:10px">
+    @for (sc of schedules(); track sc.id) {
+      <div class="panel-card">
+        <div class="schedule-header">
+          <div class="card-name" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" [title]="sc.prompt">
+            {{ sc.prompt }}
+          </div>
+          <div class="schedule-actions" style="flex-shrink: 0;">
+            <button class="icon-btn-sm" (click)="runScheduleNow(sc.id)" title="立即執行">▶</button>
+            <button class="icon-btn-sm" (click)="toggleSchedule(sc.id, sc.enabled)"
+              [title]="sc.enabled ? '停用' : '啟用'">{{ sc.enabled ? '⏸' : '▷' }}</button>
+            <button class="del-btn" (click)="deleteSchedule(sc.id)">✕</button>
+          </div>
+        </div>
+        <div class="card-desc" style="margin-top: 4px; font-size: 11.5px; color: #aaa;">
+          執行週期：<span style="color: #eee; font-weight: bold;">{{ translateCron(sc.cron) }}</span>
+        </div>
+        @if (sc.delivery && sc.delivery.channel) {
+          <div class="card-desc" style="margin-top: 2px; font-size: 11px; color: #889;">
+            📢 推送：<span style="color: #6366f1; font-weight: 500;">{{ sc.delivery.channel.toUpperCase() }}</span> ({{ sc.delivery.to || '未指定' }})
+          </div>
+        }
+        <div class="schedule-status" [class.active]="sc.enabled" style="margin-top: 4px;">
+          {{ sc.enabled ? '✓ 啟用中' : '✗ 已停用' }}
+          @if (sc.last_run) { · 上次：{{ sc.last_run | date:'MM/dd HH:mm' }} }
+        </div>
+      </div>
+    } @empty {
+      <p class="empty-hint">尚無排程任務</p>
+    }
+  </div>
+</div>

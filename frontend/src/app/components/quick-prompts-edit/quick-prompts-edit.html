@@ -1,0 +1,22 @@
+<!-- 快速提示 -->
+<div class="modal-section">
+  <div class="modal-section-header">
+    快速提示
+    <button class="btn-secondary btn-xs" (click)="openQuickPromptsEdit()">✏ 編輯</button>
+  </div>
+  @if (showQuickPromptsEdit) {
+    <div class="quick-prompts-edit">
+      @for (p of quickPromptsForm; track $index; let i = $index) {
+        <div class="qp-row">
+          <input class="qp-label-input" [(ngModel)]="quickPromptsForm[i].label" placeholder="標籤">
+          <input class="qp-text-input"  [(ngModel)]="quickPromptsForm[i].text"  placeholder="提示文字">
+          <button class="btn-danger btn-xs" (click)="removeQuickPrompt(i)">✕</button>
+        </div>
+      }
+      <div class="qp-actions">
+        <button class="btn-secondary btn-xs" (click)="addQuickPrompt()">+ 新增</button>
+        <button class="btn-primary  btn-xs" (click)="saveQuickPrompts()">儲存</button>
+      </div>
+    </div>
+  }
+</div>

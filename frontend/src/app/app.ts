@@ -6,47 +6,29 @@ import { FormsModule } from '@angular/forms';
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { DiagnosticsPanelComponent } from './components/diagnostics-panel/diagnostics-panel';
-import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
+import { AgencyImportPanelComponent } from './components/agency-import-panel/agency-import-panel';
+import { TelegramSettingsComponent } from './components/telegram-settings/telegram-settings';
+import { MemoryEditorComponent } from './components/memory-editor/memory-editor';
+import { ProviderSettingsComponent } from './components/provider-settings/provider-settings';
+import { SttSettingsComponent } from './components/stt-settings/stt-settings';
+import { QuickPromptsEditComponent } from './components/quick-prompts-edit/quick-prompts-edit';
+import { GeneralSettingsComponent } from './components/general-settings/general-settings';
+import { EngineSettingsComponent } from './components/engine-settings/engine-settings';
+import { SchedulePanelComponent } from './components/schedule-panel/schedule-panel';
+import { TeamPanelComponent } from './components/team-panel/team-panel';
+import { SkillPanelComponent } from './components/skill-panel/skill-panel';
+import { AgentPanelComponent } from './components/agent-panel/agent-panel';
+import { SoulPanelComponent } from './components/soul-panel/soul-panel';
+import { McpPanelComponent } from './components/mcp-panel/mcp-panel';
+import { SettingsService, AppSettings } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, McpServer, McpTool, McpType, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
-
-export interface McpWorkflow {
-  type: 'code' | 'node';
-  content: string;
-  dockerized?: boolean;
-  dockerImage?: string;
-}
-
-export interface McpTool {
-  name: string;
-  description: string;
-  workflow?: McpWorkflow;
-}
-
-export type McpType = 'external' | 'docker' | 'stdio' | 'local-http';
-
-export interface McpServer {
-  id: string;
-  name: string;
-  url: string;
-  status: string;
-  authorized: boolean;
-  description: string;
-  mcpType: McpType;
-  dockerized?: boolean;
-  dockerImage?: string;
-  port?: string;
-  containerName?: string;
-  composeFile?: string;
-  composeService?: string;
-  tools?: McpTool[];
-}
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent, AgentPanelComponent, SoulPanelComponent, McpPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -55,7 +37,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('inputRef') inputRef!: ElementRef;
   @ViewChild('scrollArea') scrollArea!: ElementRef;
 
-  readonly isElectron = !!(window as any).electronAPI;
+  // isElectron: extracted into components/general-settings (Phase 2) —
+  // that component computes its own copy (pure environment check).
 
   agents = signal<Agent[]>([]);
   dropdownAgents = computed(() => {
@@ -68,17 +51,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
     return list;
   });
-  // MCP Live Debugger state
-  mcpRpcName = '';
-  mcpRpcMethod = 'tools/list';
-  mcpRpcParamsText = '{}';
-  mcpRpcResult = '';
-  isMcpRpcSending = false;
+  // MCP Live Debugger state (mcpRpcName/mcpRpcMethod/mcpRpcParamsText/
+  // mcpRpcResult/isMcpRpcSending/mcpPendingAuth/sendMcpRpcDebug/
+  // authorizeMcpRpc): extracted into components/mcp-panel (Phase 2) —
+  // self-contained, no cross-tab reads/writes found.
   activeRunId = '';
 
   // Team Run Artifacts Tracer
   runArtifacts = signal<any[]>([]);
-  mcpPendingAuth = signal<any>(null);
 
   skills = signal<Skill[]>([]);
   resourceSyncStatus = signal<ResourceSyncStatus | null>(null);
@@ -141,12 +121,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   resourceSyncDetailsExpanded = signal(false);
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
-  schedules = signal<Schedule[]>([]);
-  memoryOverview = signal<any>(null);
-  memViewExpanded = signal<Record<string, boolean>>({});
-  expandedTeams = signal<Record<string, boolean>>({});
-  memEditMode = signal<Record<string, boolean>>({});
-  memEditContent = signal<Record<string, string>>({});
+  // schedules signal: extracted into components/schedule-panel (Phase 2)
+  // memoryOverview / memViewExpanded / memEditMode / memEditContent:
+  // extracted into components/memory-editor (Phase 2)
+  // expandedTeams: extracted into components/team-panel (Phase 2)
 
   rightPanelFilter = signal('');
 
@@ -179,6 +157,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       return a.name.localeCompare(b.name);
     });
   });
+
+  // Precomputed for components/skill-panel (Phase 2): avoids passing
+  // isSkillLinkedToActiveAgent/isSkillInActiveAgentFrontmatter/isSkillInTab
+  // as function @Inputs — the component checks membership instead.
+  linkedSkillIds = computed(() => new Set(this.selectedAgent() ? this.getLinkedSkills(this.selectedAgent()) : []));
+  frontmatterSkillIds = computed(() => {
+    const agentId = this.selectedAgent();
+    if (!agentId) return new Set<string>();
+    const agent = this.agents().find(a => a.id === agentId.replace(/^@/, ''));
+    return new Set(agent?.skills ?? []);
+  });
+  tabSkillIds = computed(() => new Set(this.activeTabField('sessionSkills')));
 
   sortedMcpServers = computed(() => {
     const q = this.rightPanelFilter().toLowerCase();
@@ -254,8 +244,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     document.addEventListener('mouseup', onUp);
   }
 
-  // Local MCP Docker/compose metadata loaded from backend
-  localMcpConfigs = signal<Record<string, any>>({});
+  // localMcpConfigs / localDockerConfig / editingDockerMcp / openDockerConfig /
+  // saveDockerConfig / loadLocalMcpConfigs: extracted into
+  // components/mcp-panel (Phase 2) — only read/written within the MCP tab,
+  // so the component now owns this slice entirely (loads its own copy via
+  // ClaudeService on init instead of receiving it as an @Input).
 
   // Manual override: names force-promoted to local section
   managedMcpNames = signal<string[]>([]);
@@ -275,12 +268,31 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   externalMcpServers = computed(() => this.sortedMcpServers().filter(m => !this.isMcpLocal(m)));
   localMcpServers = computed(() => this.sortedMcpServers().filter(m => this.isMcpLocal(m)));
-  dockerMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'docker' || m.dockerized));
-  stdioMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'stdio'));
-  localHttpMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'local-http'));
 
-  // Keep selfMcpServers as alias for backward-compat with agent/skill link display
-  selfMcpServers = this.localMcpServers;
+  // components/mcp-panel (Phase 2) needs per-card O(1) membership checks in
+  // its @for loops — same reasoning as skill-panel's precomputed Sets:
+  // passing isMcpRequiredByActiveAgent/isMcpLinkedToActiveAgent/isMcpInTab
+  // as function @Inputs would re-run their full lookup on every card, every
+  // change-detection pass.
+  requiredMcpNames = computed(() => {
+    const agentId = this.selectedAgent();
+    if (!agentId) return new Set<string>();
+    const agent = this.agents().find(a => a.id === agentId.replace(/^@/, ''));
+    return new Set(agent?.mcp ?? []);
+  });
+  linkedMcpNames = computed(() => {
+    const all = [...this.externalMcpServers(), ...this.localMcpServers()];
+    return new Set(all.filter(m => this.isMcpLinkedToActiveAgent(m.name)).map(m => m.name));
+  });
+  sessionMcpNames = computed(() => new Set(this.activeTabField('sessionMcps')));
+  // Manual "force this into 本地 API" override — isMcpLocal() checks
+  // membership before falling back to mcpType/URL auto-detection, for
+  // servers that auto-detection misses (e.g. an actually-local server
+  // whose URL doesn't match the docker://\/localhost\/127.0.0.1 patterns).
+  // Precomputed Set for the same per-card O(1)-lookup reason as the three
+  // above; toggleManagedMcp() below stays a plain method since it mutates
+  // rather than reads.
+  managedMcpNameSet = computed(() => new Set(this.managedMcpNames()));
 
   toggleManagedMcp(name: string) {
     this.managedMcpNames.update(arr =>
@@ -291,67 +303,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   isMcpRunning(status: string) { return status?.toLowerCase().includes('connected'); }
 
-  // Local MCP Docker config
-  localDockerConfig = signal<{ name: string; containerName: string; composeFile: string; composeService: string; port: string; notes: string } | null>(null);
-  editingDockerMcp = signal<string | null>(null);
-
-  openDockerConfig(m: McpServer) {
-    const cfg = this.localMcpConfigs()[m.name] ?? {};
-    this.localDockerConfig.set({
-      name: m.name,
-      containerName: cfg.containerName ?? m.containerName ?? '',
-      composeFile: cfg.composeFile ?? m.composeFile ?? '',
-      composeService: cfg.composeService ?? m.composeService ?? '',
-      port: cfg.port ?? m.port ?? '',
-      notes: cfg.notes ?? '',
-    });
-    this.editingDockerMcp.set(m.name);
-  }
-
-  saveDockerConfig() {
-    const cfg = this.localDockerConfig();
-    if (!cfg) return;
-    this.claude.saveLocalMcpConfig(cfg.name, cfg).subscribe({
-      next: () => {
-        this.localMcpConfigs.update(all => ({ ...all, [cfg.name]: cfg }));
-        this.showToast(`Docker 設定已儲存：${cfg.name}`, 'success', 2000);
-        this.editingDockerMcp.set(null);
-      },
-      error: (e) => this.showToast(`Docker 設定儲存失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  loadLocalMcpConfigs() {
-    this.claude.getLocalMcpConfig().subscribe(cfg => this.localMcpConfigs.set(cfg));
-  }
-
-  getMcpColor(name: string, status: string): string {
-    const running = this.isMcpRunning(status);
-    const inUse = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse) return '#ef4444'; // 未啟動 + 使用中 → 紅
-    if (!running) return '';        // 未啟動 + 未使用 → 無色
-    if (!inUse) return '#f59e0b'; // 啟動 + 未使用  → 黃
-    return '#10b981';                         // 啟動 + 使用中  → 綠
-  }
-
-  /** CSS class for the status lamp — encodes the 4-state traffic-light logic. */
-  getMcpLampClass(name: string, status: string): string {
-    const running = this.isMcpRunning(status);
-    const inUse = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse) return 'lamp-red';    // ⚠ 需要關注
-    if (!running) return 'lamp-off';    // ● 停止（灰）
-    if (!inUse) return 'lamp-yellow'; // ● 運行中但未啟用
-    return 'lamp-green';                          // ● 運行中且啟用
-  }
-
-  getMcpLampTitle(name: string, status: string): string {
-    const running = this.isMcpRunning(status);
-    const inUse = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse) return '⚠ 伺服器未啟動，但已被 Agent 使用';
-    if (!running) return '● 已停止';
-    if (!inUse) return '● 運行中（未綁定到目前 Agent）';
-    return '● 運行中 · 已啟用';
-  }
+  // getMcpLampClass / getMcpLampTitle: extracted into components/mcp-panel
+  // (Phase 2) as local pure methods (same 4-state logic, "inUse" now comes
+  // from the precomputed linkedMcpNames @Input instead of calling back into
+  // App per card).
 
   startMcp(name: string) { this.claude.startMcp(name).subscribe({ error: (e) => this.showToast(`MCP 啟動失敗: ${e.message ?? e}`, 'error') }); }
   stopMcp(name: string) { this.claude.stopMcp(name).subscribe({ error: (e) => this.showToast(`MCP 停止失敗: ${e.message ?? e}`, 'error') }); }
@@ -480,9 +435,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp' | 'memview'>('teams');
   sessionSearch = '';
 
-  // Schedule form
-  newSchedulePrompt = '';
-  newScheduleCron = '';
+  // Schedule form + schedules signal: extracted into
+  // components/schedule-panel (Phase 2)
 
   // Token usage + cost
   tokenUsage = signal<{ input: number; output: number; cost: number } | null>(null);
@@ -532,11 +486,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Multi-soul state
   souls = signal<SoulProfile[]>([]);
   selectedSoulId = signal<string>('');
-  soulDraft = '';
   soulDraftSaved = signal(true);
   newSoulName = '';
-  renamingSoulId = signal<string | null>(null);
-  renameSoulInput = '';
+  // renamingSoulId / renameSoulInput / soulDraft (the draft text itself,
+  // as opposed to soulDraftSaved which stays here): extracted into
+  // components/soul-panel (Phase 2) — purely local UI state, nothing
+  // outside the soul tab reads/writes it. soulDraft specifically had to
+  // move after an e2e test caught a stale-echo race when round-tripped
+  // through @Input/@Output on every keystroke.
   agentEditorSoulContent = '';
 
   // Resizing signals & state
@@ -577,11 +534,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     e.preventDefault();
   }
 
-  onSoulDividerMousedown(e: MouseEvent, panelEl: HTMLElement) {
+  onSoulDividerMousedown(e: MouseEvent, panelHeight: number) {
     this._soulResizing = true;
     this._soulStartY = e.clientY;
     this._soulStartRatio = this.soulSplitRatio();
-    this._soulPanelHeight = panelEl.clientHeight;
+    this._soulPanelHeight = panelHeight;
     e.preventDefault();
   }
 
@@ -1320,15 +1277,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  async pickProjectDir() {
-    const dir = await this.claude.pickDirectory();
-    if (dir) this.settingsForm.projectDir = dir;
-  }
-
-  async pickClaudeHome() {
-    const dir = await this.claude.pickDirectory();
-    if (dir) this.settingsForm.claudeHome = dir;
-  }
+  // pickProjectDir / pickClaudeHome: extracted into
+  // components/general-settings (Phase 2)
 
   // T07 — Dashboard stats
   stats = signal<{
@@ -1381,28 +1331,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return Math.floor((Date.now() - msg.startTime) / 1000);
   }
 
-  // Quick prompts
+  // Quick prompts (read-only, for the chat-input buttons): edit UI
+  // extracted into components/quick-prompts-edit (Phase 2)
   quickPrompts = computed(() => this.settings.get().quickPrompts);
-  showQuickPromptsEdit = false;
-  quickPromptsForm: QuickPrompt[] = [];
-
-  openQuickPromptsEdit() {
-    this.quickPromptsForm = [...this.settings.get().quickPrompts];
-    this.showQuickPromptsEdit = true;
-  }
-
-  saveQuickPrompts() {
-    this.settings.save({ quickPrompts: this.quickPromptsForm });
-    this.showQuickPromptsEdit = false;
-  }
-
-  addQuickPrompt() {
-    this.quickPromptsForm.push({ label: '✨ 新提示', text: '' });
-  }
-
-  removeQuickPrompt(i: number) {
-    this.quickPromptsForm.splice(i, 1);
-  }
 
   // Remaining tokens
   remainingTokens = computed(() => {
@@ -1440,55 +1371,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ];
   modelPickerOpen = signal(false);
 
-  // Cron presets
-  readonly CRON_PRESETS = [
-    { label: '每 5 分鐘', value: '*/5 * * * *' },
-    { label: '每小時', value: '0 * * * *' },
-    { label: '每天 9:00', value: '0 9 * * *' },
-    { label: '每週一早上', value: '0 9 * * 1' },
-  ];
-
-  translateCron(cron: string): string {
-    if (!cron) return '';
-    const trimmed = cron.trim();
-    const preset = this.CRON_PRESETS.find(p => p.value === trimmed);
-    if (preset) return preset.label;
-
-    const parts = trimmed.split(/\s+/);
-    if (parts.length === 5) {
-      const [min, hour, dom, month, dow] = parts;
-      if (min === '*' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
-        return '每分鐘';
-      }
-      if (min.startsWith('*/') && hour === '*' && dom === '*' && month === '*' && dow === '*') {
-        const m = min.split('/')[1];
-        return `每 ${m} 分鐘`;
-      }
-      if (hour.startsWith('*/') && min === '0' && dom === '*' && month === '*' && dow === '*') {
-        const h = hour.split('/')[1];
-        return `每 ${h} 小時`;
-      }
-      if (min === '0' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
-        return '每小時';
-      }
-      if (dom === '*' && month === '*' && dow === '*') {
-        const mStr = min.padStart(2, '0');
-        const hStr = hour.padStart(2, '0');
-        return `每天 ${hStr}:${mStr}`;
-      }
-      if (dom === '*' && month === '*' && dow !== '*') {
-        const days = ['日', '一', '二', '三', '四', '五', '六'];
-        const dayNames = dow.split(',').map(d => {
-          const idx = parseInt(d, 10);
-          return isNaN(idx) ? d : `週${days[idx]}`;
-        }).join('、');
-        const mStr = min.padStart(2, '0');
-        const hStr = hour.padStart(2, '0');
-        return `每${dayNames} ${hStr}:${mStr}`;
-      }
-    }
-    return cron;
-  }
+  // Cron presets / translateCron: extracted into
+  // components/schedule-panel (Phase 2)
 
   // Session pin/star
   pinnedIds = signal<string[]>([]);
@@ -1723,82 +1607,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.renamingId.set(null);
   }
 
-  sendMcpRpcDebug() {
-    if (!this.mcpRpcName || !this.mcpRpcMethod) {
-      this.mcpRpcResult = '錯誤: 必須填寫 MCP 名稱與 Method';
-      return;
-    }
-    if (this.mcpPendingAuth()) {
-      // 上一筆敏感操作還在等待使用者核准/拒絕，直接送出新請求會讓那筆掛起狀態
-      // 從畫面上悄悄消失（後端 pending_id 仍存在，只是 UI 不再追蹤），
-      // 因此在此擋下，要求使用者先處理完再繼續。
-      this.mcpRpcResult = '⚠️ 尚有一筆敏感操作正在等待授權，請先核准或拒絕後再送出新請求。';
-      return;
-    }
-    let paramsObj = {};
-    try {
-      paramsObj = JSON.parse(this.mcpRpcParamsText || '{}');
-    } catch (e: any) {
-      this.mcpRpcResult = `錯誤: Params 不是有效的 JSON - ${e.message}`;
-      return;
-    }
-    this.isMcpRpcSending = true;
-    this.mcpRpcResult = '發送中...';
-
-    this.claude.sendMcpRpc(this.mcpRpcName, this.mcpRpcMethod, paramsObj).subscribe({
-      next: (res) => {
-        this.mcpRpcResult = JSON.stringify(res, null, 2);
-        this.isMcpRpcSending = false;
-      },
-      error: (err) => {
-        // 當遇到後端敏感關鍵字安全閘口攔截 (403 pending_authorization)
-        if (err.status === 403 && (err.error?.status === 'pending_authorization' || err.error?.error?.includes('敏感操作'))) {
-          const errMsg = err.error?.error || '敏感操作已被掛起';
-          const pId = err.error?.pending_id;
-          this.mcpPendingAuth.set({
-            pendingId: pId,
-            name: this.mcpRpcName,
-            method: this.mcpRpcMethod,
-            params: paramsObj
-          });
-          this.mcpRpcResult = `⚠️ ${errMsg}`;
-          this.isMcpRpcSending = false;
-          return;
-        }
-        
-        this.mcpRpcResult = `請求失敗: ${err.error?.error || err.message || JSON.stringify(err)}`;
-        this.isMcpRpcSending = false;
-      }
-    });
-  }
-
-  authorizeMcpRpc(authorized: boolean) {
-    const auth = this.mcpPendingAuth();
-    if (!auth) return;
-
-    if (!authorized) {
-      this.mcpRpcResult = '授權拒絕。敏感操作已取消。';
-      this.mcpPendingAuth.set(null);
-      return;
-    }
-
-    this.isMcpRpcSending = true;
-    this.mcpRpcResult = '授權通過，發送中...';
-
-    this.claude.sendMcpRpc(auth.name, auth.method, auth.params, true, auth.pendingId).subscribe({
-      next: (res) => {
-        this.mcpRpcResult = JSON.stringify(res, null, 2);
-        this.isMcpRpcSending = false;
-        this.mcpPendingAuth.set(null);
-      },
-      error: (err) => {
-        this.mcpRpcResult = `授權執行失敗: ${err.error?.error || err.message || JSON.stringify(err)}`;
-        this.isMcpRpcSending = false;
-        this.mcpPendingAuth.set(null);
-      }
-    });
-  }
-
   loadRunArtifacts(runId: string) {
     if (!runId) return;
     this.claude.getTeamRunArtifacts(runId).subscribe({
@@ -1811,17 +1619,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  loadMemoryOverview() {
-    this.claude.getMemoryOverview().subscribe(data => {
-      this.memoryOverview.set(data);
-      this.memEditContent.update(m => ({
-        ...m,
-        user:   data?.user?.content   ?? '',
-        system: data?.system?.content ?? '',
-      }));
-    });
-  }
-
   loadResourceSyncStatus() {
     this.claude.getResourceSyncStatus().subscribe({
       next: status => this.resourceSyncStatus.set(status),
@@ -1831,41 +1628,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   toggleResourceSyncDetails() {
     this.resourceSyncDetailsExpanded.update(v => !v);
-  }
-
-  toggleMemViewSection(key: string) {
-    this.memViewExpanded.update(m => ({ ...m, [key]: !m[key] }));
-  }
-
-  memViewIsOpen(key: string): boolean {
-    return !!this.memViewExpanded()[key];
-  }
-
-  memViewFilePath(type: string, ...parts: string[]): string {
-    const base = this.resolvedClaudeHome() || '~/.claude';
-    const sep = base.includes('\\') ? '\\' : '/';
-    return [base, 'memory', ...parts].join(sep);
-  }
-
-  startMemEdit(key: string, currentContent: string) {
-    this.memEditContent.update(m => ({ ...m, [key]: currentContent || '' }));
-    this.memEditMode.update(m => ({ ...m, [key]: true }));
-  }
-
-  cancelMemEdit(key: string) {
-    this.memEditMode.update(m => ({ ...m, [key]: false }));
-  }
-
-  saveMemEdit(key: string) {
-    const content = this.memEditContent()[key] ?? '';
-    const save$ = key === 'user'
-      ? this.claude.putMemoryUser(content)
-      : this.claude.putMemorySystem(content);
-
-    save$.subscribe(() => {
-      this.memEditMode.update(m => ({ ...m, [key]: false }));
-      this.loadMemoryOverview();
-    });
   }
 
   // ── Toast notification system ────────────────────────────────────────────
@@ -2125,10 +1887,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  getAgentSoulContent(soulId: string): string {
-    const s = this.souls().find(x => x.id === soulId);
-    return s ? s.content : '';
-  }
+  // getAgentSoulContent: extracted into components/agent-panel (Phase 2)
 
   deleteAgent(id: string) {
     this.claude.deleteAgent(id).subscribe({
@@ -2306,9 +2065,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getTeams().subscribe(t => this.teams.set(t));
   }
 
-  toggleTeamExpanded(tid: string) {
-    this.expandedTeams.update(m => ({ ...m, [tid]: !m[tid] }));
-  }
+  // toggleTeamExpanded: extracted into components/team-panel (Phase 2)
 
   openTeamEditor(team?: Team) {
     if (team) {
@@ -2793,95 +2550,25 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     window.open(this.claude.debugDumpUrl(), '_blank');
   }
 
-  // ── #18 Telegram settings ─────────────────────────────────────────────────
-  telegramToken = '';
-  telegramEnabled = signal(false);
-  telegramRunning = signal(false);
-  telegramSaving = signal(false);
-
-  loadTelegramSettings() {
-    this.claude.getTelegram().subscribe(r => {
-      this.telegramToken = r.token;
-      this.telegramEnabled.set(r.enabled);
-      this.telegramRunning.set(r.running);
-    });
-  }
-
-  saveTelegramSettings() {
-    this.telegramSaving.set(true);
-    this.claude.setTelegram({
-      token: this.telegramToken,
-      enabled: this.telegramEnabled(),
-    }).subscribe({
-      next: r => {
-        this.telegramRunning.set(r.running);
-        this.telegramSaving.set(false);
-      },
-      error: () => this.telegramSaving.set(false),
-    });
-  }
+  // ── #18 Telegram settings: extracted into components/telegram-settings (Phase 2) ──
 
   // ── #22 Auto-update progress ──────────────────────────────────────────────
   updateProgress = signal<number | null>(null);
   updateAvailable = signal(false);
   updateReady = signal(false);
 
-  // MCP log viewer (#15)
-  mcpLogOpen = signal<string | null>(null);
-  mcpLogLines = signal<string[]>([]);
-  private _mcpLogInterval: any = null;
-
-  toggleMcpLog(name: string) {
-    if (this._mcpLogInterval) {
-      clearInterval(this._mcpLogInterval);
-      this._mcpLogInterval = null;
-    }
-
-    if (this.mcpLogOpen() === name) {
-      this.mcpLogOpen.set(null);
-      return;
-    }
-    this.mcpLogOpen.set(name);
-    this.refreshMcpLog(name);
-
-    // 每 2.5 秒自動重整日誌，方便使用者調試
-    this._mcpLogInterval = setInterval(() => {
-      if (this.mcpLogOpen() === name) {
-        this.refreshMcpLog(name);
-      } else {
-        clearInterval(this._mcpLogInterval);
-        this._mcpLogInterval = null;
-      }
-    }, 2500);
-  }
-
-  // T40 健檢修復：關閉 Settings（ESC 或按下儲存）原本只是把 settingsOpen
-  // 設成 false，從未重設 mcpLogOpen 或清掉 _mcpLogInterval —— 開著 MCP 記
-  // 錄檢視器再關閉 Settings，這個每 2.5 秒打一次後端的計時器會永遠留著，
-  // 直到元件銷毀或重新打開 Settings 並手動切換掉同一個 MCP 記錄。
-  private stopMcpLogPolling() {
-    if (this._mcpLogInterval) {
-      clearInterval(this._mcpLogInterval);
-      this._mcpLogInterval = null;
-    }
-    this.mcpLogOpen.set(null);
-  }
-
+  // MCP log viewer (#15): extracted into components/mcp-panel (Phase 2),
+  // including the 2.5s auto-refresh interval and its cleanup — the
+  // component now clears it in ngOnDestroy, which fires whenever Angular
+  // destroys it (leaving the MCP tab via the @if wrapping the @defer
+  // block, or app teardown). This actually fixes the leak T40 patched
+  // around (see removed stopMcpLogPolling()) more correctly than before:
+  // that fix only stopped polling when Settings closed, an unrelated
+  // modal — switching tabs away from 'mcp' with the log open never
+  // stopped it. ngOnDestroy stops it on the transition that actually
+  // matters.
   closeSettings() {
-    this.stopMcpLogPolling();
     this.settingsOpen.set(false);
-  }
-
-  refreshMcpLog(name: string) {
-    this.claude.getMcpLogs(name).subscribe(r => {
-      this.mcpLogLines.set(r.lines);
-      setTimeout(() => {
-        const el = document.querySelector('.mcp-log-body');
-        if (el) {
-          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-        }
-      }, 50);
-    });
   }
 
   // Auto session title (#10)
@@ -2970,9 +2657,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.send();
   }
 
-  // Workdir quick switch
-  recentWorkDirs = computed(() => this.settings.get().recentWorkDirs);
-
+  // Workdir quick switch — recentWorkDirs signal extracted into
+  // components/recent-work-dirs (Phase 2)
   setWorkDir(dir: string) {
     this.settingsForm.workDir = dir;
     this.settings.save(this.settingsForm);
@@ -3049,8 +2735,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   resolvedClaudeHome = signal('');
   skillGenBusy = signal(false);
   skillGenResult = signal<string | null>(null);
-  importingAgency = signal(false);
-  importResult = signal<string | null>(null);
 
   // ── Onboarding wizard ────────────────────────────────
   showOnboarding = signal(false);
@@ -3231,8 +2915,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   async openSettings() {
     this.settingsForm = this.settings.get();
     this.settingsOpen.set(true);
-    this.loadTelegramSettings();
-    this.loadMemoryOverview();
     this.loadEngineStatus();
     this.claude.getStatus().subscribe(s => {
       this.statusInfo.set(s.claude_bin ?? '未知');
@@ -3340,7 +3022,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ngOnDestroy() {
     clearInterval(this._healthTimer); clearInterval(this._resourceSyncTimer);
     clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
-    if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
     for (const fn of this.tabStopFns.values()) fn();
     this.tabStopFns.clear();
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
@@ -3375,8 +3056,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   selectSoulProfile(id: string) {
     this.selectedSoulId.set(id);
-    const s = this.souls().find(x => x.id === id);
-    this.soulDraft = s?.content ?? '';
     this.soulDraftSaved.set(true);
   }
 
@@ -3393,13 +3072,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (next !== idx) this.selectSoulProfile(list[next].id);
   }
 
-  saveSoulProfileEdits() {
+  saveSoulProfileEdits(content: string) {
     const id = this.selectedSoulId();
     if (!id) return;
-    this.claude.saveSoulProfile(id, this.soulDraft).subscribe({
+    this.claude.saveSoulProfile(id, content).subscribe({
       next: () => {
         this.soulDraftSaved.set(true);
-        this.souls.update(list => list.map(x => x.id === id ? { ...x, content: this.soulDraft } : x));
+        this.souls.update(list => list.map(x => x.id === id ? { ...x, content } : x));
       },
       error: (e) => this.showToast(`Soul 儲存失敗: ${e.message ?? e}`, 'error'),
     });
@@ -3408,8 +3087,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   discardSoulProfileEdits() {
     const id = this.selectedSoulId();
     if (!id) return;
-    const s = this.souls().find(x => x.id === id);
-    this.soulDraft = s?.content ?? '';
     this.soulDraftSaved.set(true);
   }
 
@@ -3456,15 +3133,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  startRenameSoul(id: string, e: Event) {
-    e.stopPropagation();
-    this.renamingSoulId.set(id);
-    this.renameSoulInput = id;
-  }
+  // startRenameSoul: extracted into components/soul-panel (Phase 2)
 
-  confirmRenameSoul(oldId: string) {
-    const newName = this.renameSoulInput.trim().replace(/\.md$/i, '').trim();
-    this.renamingSoulId.set(null);
+  confirmRenameSoul(oldId: string, rawInput: string) {
+    const newName = rawInput.trim().replace(/\.md$/i, '').trim();
     if (!newName || newName === oldId) return;
     this.claude.renameSoulProfile(oldId, newName).subscribe({
       next: (res) => {
@@ -3483,7 +3155,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.deleteSoulProfile(id).subscribe(() => {
       if (this.selectedSoulId() === id) {
         this.selectedSoulId.set('');
-        this.soulDraft = '';
       }
       this.claude.getSouls().subscribe(list => {
         this.souls.set(list);
@@ -3494,72 +3165,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  aiParsing = signal(false);
-
-  isNaturalLanguage(text: string): boolean {
-    if (!text) return false;
-    const trimmed = text.trim();
-    if (!trimmed) return false;
-    const hasChinese = /[\u4e00-\u9fa5]/.test(trimmed);
-    if (hasChinese) return true;
-    
-    const isCronChars = /^[0-9\s*\/,\-?LW#]+$/.test(trimmed);
-    if (!isCronChars) return true;
-
-    const parts = trimmed.split(/\s+/);
-    if (parts.length !== 5) return true;
-
-    return false;
-  }
-
-  parseCronFromAI() {
-    const text = this.newScheduleCron.trim();
-    if (!text) return;
-    this.aiParsing.set(true);
-    this.claude.parseCron(text).subscribe({
-      next: (res) => {
-        this.aiParsing.set(false);
-        if (res && res.cron) {
-          this.newScheduleCron = res.cron;
-        } else {
-          alert('AI 無法解析該頻率，請嘗試更具體的描述。');
-        }
-      },
-      error: (err) => {
-        this.aiParsing.set(false);
-        alert('AI 轉換失敗：' + (err?.message || err));
-      }
-    });
-  }
-
-  addSchedule() {
-    if (!this.newSchedulePrompt.trim() || !this.newScheduleCron.trim()) return;
-    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron).subscribe({
-      next: () => { this.newSchedulePrompt = ''; this.newScheduleCron = ''; this.claude.getSchedules().subscribe(s => this.schedules.set(s)); },
-      error: (e) => this.showToast(`新增排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  deleteSchedule(id: string) {
-    this.claude.deleteSchedule(id).subscribe({
-      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
-      error: (e) => this.showToast(`刪除排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  toggleSchedule(id: string, enabled: boolean) {
-    this.claude.toggleSchedule(id, !enabled).subscribe({
-      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
-      error: (e) => this.showToast(`更新排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  runScheduleNow(id: string) {
-    this.claude.runSchedule(id).subscribe({
-      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
-      error: (e) => this.showToast(`執行排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
+  // aiParsing / isNaturalLanguage / parseCronFromAI / addSchedule /
+  // deleteSchedule / toggleSchedule / runScheduleNow: extracted into
+  // components/schedule-panel (Phase 2)
 
   searchSessions() {
     this.sessionOffset = 0;
@@ -3586,7 +3194,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.sessions.set(r.items);
       this.hasMoreSessions.set(r.has_more);
     });
-    this.claude.getSchedules().subscribe(s => this.schedules.set(s));
     this.claude.getMemory().subscribe(m => this.memory.set(m));
     this.claude.getSouls().subscribe(list => {
       this.souls.set(list);
@@ -4256,27 +3863,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // T09 — claude doctor: extracted into components/diagnostics-panel (Phase 2)
-
-  importAgencyAgents() {
-    this.importingAgency.set(true);
-    this.importResult.set('正在下載並導入 Agency Agents，這可能需要一至兩分鐘，請稍候…');
-    this.claude.importAgencyAgents().subscribe({
-      next: (res) => {
-        this.importingAgency.set(false);
-        if (res.ok) {
-          this.importResult.set(res.message);
-          this.reload();
-          this.loadTeams();
-        } else {
-          this.importResult.set(`導入失敗: ${res.message}`);
-        }
-      },
-      error: (err) => {
-        this.importingAgency.set(false);
-        this.importResult.set(`導入出錯: ${err?.error?.message || err?.message || err || '網路或伺服器錯誤'}`);
-      }
-    });
-  }
+  // Agency Agents importer: extracted into components/agency-import-panel (Phase 2)
 
   // T10 — MCP 管理
   mcpList = signal<string>('');
@@ -4284,7 +3871,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   loadMcp() {
     this.mcpLoading.set(true);
-    this.loadLocalMcpConfigs();
     this.claude.runCliCommand(['mcp', 'list']).subscribe({
       next: out => {
         this.mcpList.set(out || '（無已安裝的 MCP）');
@@ -4319,9 +3905,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  objectKeys(obj: Record<string, unknown>): string[] {
-    return Object.keys(obj);
-  }
+  // objectKeys: extracted into components/mcp-panel (Phase 2) as a local
+  // helper — its only caller was the mcp-view template.
 
   openMcpServerEditor() {
     this.mcpServerEditorName = '';
@@ -4779,11 +4364,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.isMcpPermForAgent(agentId, mcpName) || this.isMcpInTab(mcpName);
   }
 
-  // 此 MCP 是否在 activeAgent 的 frontmatter mcp[] 中（P1-F6）
-  isMcpRequiredByActiveAgent(mcpName: string): boolean {
-    const agentId = this.selectedAgent();
-    if (!agentId) return false;
-    return this.agents().find(a => a.id === agentId.replace(/^@/, ''))?.mcp?.includes(mcpName) ?? false;
-  }
+  // isMcpRequiredByActiveAgent: extracted into requiredMcpNames computed()
+  // above (Phase 2) — same P1-F6 frontmatter-mcp[] check, precomputed as a
+  // Set for the mcp-panel component's per-card lookup.
 
 }
