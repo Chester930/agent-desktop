@@ -1731,6 +1731,79 @@ body {
   }
 }
 
+// ── 工作目錄下拉選單（瀏覽器版替代原生資料夾對話框）────────────
+.workdir-picker-wrap { position: relative; }
+.workdir-menu-overlay { position: fixed; inset: 0; z-index: 300; }
+.workdir-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 260px;
+  max-width: 360px;
+  z-index: 301;
+  background: #1e1e2e;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  padding: 8px;
+}
+.workdir-menu-title {
+  font-size: 10px;
+  color: #888;
+  padding: 2px 6px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.workdir-menu-empty {
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
+  padding: 4px 6px 8px;
+}
+.workdir-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #ccc;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  &:hover { background: #2a2a3a; color: #fff; }
+}
+.workdir-menu-sep { height: 1px; background: rgba(255,255,255,0.08); margin: 6px 0; }
+.workdir-menu-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 0 2px;
+}
+.workdir-menu-input {
+  flex: 1;
+  background: #141420;
+  border: 1px solid #2d2d3d;
+  border-radius: 6px;
+  color: #eee;
+  font-size: 12px;
+  padding: 5px 8px;
+  min-width: 0;
+  &:focus { outline: none; border-color: #7c6fff; }
+}
+.workdir-menu-confirm {
+  background: #7c6fff;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  &:hover { opacity: 0.85; }
+}
+
 .input-banner {
   background: #1c0d0d;
   border: 1px solid #3a1a1a;

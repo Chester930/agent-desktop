@@ -1055,13 +1055,34 @@
         <!-- 頂部專案路徑藥丸按鈕 -->
         <div class="input-top-bar">
           <span class="pill-btn pill-static">💻 Local</span>
-          <button class="pill-btn pill-action"
-            (click)="pickFolder()"
-            [class.pill-locked]="isDirLocked()"
-            [title]="isDirLocked() ? '📌 ' + workDir() + '（已綁定，不可更換）' : '工作目錄：' + (workDir() || '（未設定）')">
-            @if (isDirLocked()) { 🔒 } @else { 📁 }
-            {{ workDirLabel() }}
-          </button>
+          <div class="workdir-picker-wrap">
+            <button class="pill-btn pill-action"
+              (click)="pickFolder()"
+              [class.pill-locked]="isDirLocked()"
+              [title]="isDirLocked() ? '📌 ' + workDir() + '（已綁定，不可更換）' : '工作目錄：' + (workDir() || '（未設定）')">
+              @if (isDirLocked()) { 🔒 } @else { 📁 }
+              {{ workDirLabel() }}
+            </button>
+            @if (workDirMenuOpen()) {
+              <div class="workdir-menu-overlay" (click)="workDirMenuOpen.set(false)"></div>
+              <div class="workdir-menu">
+                @if (recentWorkDirs().length) {
+                  <div class="workdir-menu-title">最近使用</div>
+                  @for (d of recentWorkDirs(); track d) {
+                    <button class="workdir-menu-item" (click)="selectWorkDirFromMenu(d)" [title]="d">{{ d }}</button>
+                  }
+                } @else {
+                  <div class="workdir-menu-empty">尚無最近使用的目錄</div>
+                }
+                <div class="workdir-menu-sep"></div>
+                <div class="workdir-menu-input-row">
+                  <input class="workdir-menu-input" [(ngModel)]="workDirMenuInput"
+                    placeholder="輸入目錄路徑…" (keydown.enter)="confirmWorkDirMenuInput()">
+                  <button class="workdir-menu-confirm" (click)="confirmWorkDirMenuInput()">套用</button>
+                </div>
+              </div>
+            }
+          </div>
         </div>
 
         <!-- Skill 產生結果通知 -->

@@ -1270,18 +1270,43 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // active tab 是否已鎖定目錄（有訊息就算鎖定）
   isDirLocked = computed(() => (this.activeChat?.messages.length ?? 0) > 0);
 
+  // 瀏覽器版（無 Electron 原生選資料夾對話框）的替代下拉選單
+  workDirMenuOpen = signal(false);
+  workDirMenuInput = '';
+  recentWorkDirs = computed(() => this.settings.get().recentWorkDirs);
+
   async pickFolder() {
     if (this.isDirLocked()) return; // 有訊息時禁止更換目錄
-    const dir = await this.claude.pickDirectory();
-    if (dir) {
-      // 同步更新 active tab 的 projectDir
-      const id = this.activeChatId();
-      this.chatTabs.update(tabs => tabs.map(t =>
-        t.id === id ? { ...t, projectDir: dir } : t
-      ));
-      this.settings.save({ workDir: dir });
-      this.settingsForm.workDir = dir;
+    if ((window as any).electronAPI?.openDirectory) {
+      const dir = await this.claude.pickDirectory();
+      if (dir) this.applyWorkDir(dir);
+      return;
     }
+    // 瀏覽器版沒有原生資料夾選擇窗，改用最近使用目錄下拉選單
+    this.workDirMenuOpen.update(v => !v);
+  }
+
+  private applyWorkDir(dir: string) {
+    // 同步更新 active tab 的 projectDir
+    const id = this.activeChatId();
+    this.chatTabs.update(tabs => tabs.map(t =>
+      t.id === id ? { ...t, projectDir: dir } : t
+    ));
+    this.settings.save({ workDir: dir });
+    this.settingsForm.workDir = dir;
+  }
+
+  selectWorkDirFromMenu(dir: string) {
+    this.applyWorkDir(dir);
+    this.workDirMenuOpen.set(false);
+  }
+
+  confirmWorkDirMenuInput() {
+    const dir = this.workDirMenuInput.trim();
+    if (!dir) return;
+    this.applyWorkDir(dir);
+    this.workDirMenuInput = '';
+    this.workDirMenuOpen.set(false);
   }
 
   // pickProjectDir / pickClaudeHome: extracted into
