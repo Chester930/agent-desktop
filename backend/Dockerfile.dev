@@ -9,7 +9,16 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "watchdog[watchmedo]"
+# nvidia-cublas-cu12 / nvidia-cudnn-cu12 (optional GPU accelerators — stt.py
+# falls back to CPU silently without them) are each several hundred MB+ and
+# have been the repeated point of failure on this machine's current flaky
+# connection to files.pythonhosted.org. Installed in a separate layer so a
+# transient failure here doesn't force redownloading everything else, and
+# skippable entirely for dev sessions that don't need GPU-accelerated STT.
+RUN grep -v '^nvidia-' requirements.txt > requirements.core.txt && \
+    pip install --no-cache-dir --timeout 120 --retries 10 -r requirements.core.txt "watchdog[watchmedo]"
+RUN pip install --no-cache-dir --timeout 120 --retries 10 nvidia-cublas-cu12 nvidia-cudnn-cu12 || \
+    echo "[dev build] Skipping optional GPU accelerators (nvidia-cublas-cu12/nvidia-cudnn-cu12) — STT will run on CPU."
 
 EXPOSE 8765
 
