@@ -520,8 +520,85 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     可能新增的動畫撞名，改名為 `skill-panel-blink`。
     手動 e2e 涵蓋選取卡片、編輯草稿、儲存（清除 unsaved 標記）、
     捨棄（還原上次儲存內容）、原地重新命名、刪除、新增全部走過。
-  - ⬜ 待拆：mcp 分頁。從先前的踩點看牽涉 Docker 設定子 UI，可能是
-    右側面板四個分頁裡最大最複雜的一個，留到最後拆。
+  - ✅ **MCP 分頁**（`McpPanelComponent`，22.93 kB，目前最大的 lazy
+    chunk）：如預期是四個分頁裡最複雜的一個，涵蓋 App 管理定義列表
+    （雙引擎同步）、外部／本地 API 雙卡片列表、可拖曳分隔線、Docker
+    設定子表單、日誌檢視器（含 2.5 秒自動輪詢）、MCP JSON-RPC 調試
+    主控台。
+    - 前置重構：`McpServer`/`McpServerDef`/`McpTool`/`McpType` 四個
+      型別原本一半在 `app.ts`（`McpServer`/`McpTool`/`McpType`）一半在
+      `claude.service.ts`（`McpServerDef`），為了讓新元件能直接從
+      `claude.service` import（跟 `Agent`/`SoulProfile` 等既有慣例
+      一致，避免元件回頭 import `app.ts` 造成循環依賴），把前三個也
+      搬進 `claude.service.ts`，`app.ts` 改成統一從那裡 import。
+    - 狀態分工採三種模式混合：
+      1. **維持 App**（跨分頁或有外部呼叫源）：`mcpServerDefs`/
+         `externalMcpServers`/`localMcpServers`/`expandedMcpId`（跟
+         agents/skills 共用同一個全域 Escape 鍵重置邏輯）/
+         `mcpLoading`/`mcpSplitPct`。`startMcp`/`stopMcp`/`loadMcp`
+         也留在 App，因為分別被 agent 啟用流程（`activateAgent`）和
+         `reload()`/初始化流程呼叫，不只是這個分頁自己用。
+      2. **精算 Set 作為 @Input**（沿用 skill-panel 的手法）：
+         `isMcpRequiredByActiveAgent`/`isMcpLinkedToActiveAgent`/
+         `isMcpInTab` 三個原本逐卡呼叫的方法，改成 App 端各自
+         precompute 一個 `Set<string>`（`requiredMcpNames`/
+         `linkedMcpNames`/`sessionMcpNames`），元件內用
+         `.has(name)` 做 O(1) 查找。
+      3. **完全下放給元件**（自己注入 `ClaudeService`）：Docker
+         設定（`localMcpConfigs`/`localDockerConfig`/
+         `editingDockerMcp`/`openDockerConfig`/`saveDockerConfig`，
+         盤點確認 `localMcpConfigs` 只有這個分頁自己讀寫，於是元件
+         改成自己在 `ngOnInit` 呼叫 `getLocalMcpConfig()`，不再靠
+         App 的 `loadMcp()` 帶進來）、日誌檢視器（`mcpLogOpen`/
+         `mcpLogLines`/輪詢 interval）、MCP Live Debugger（RPC
+         method／params／result／pending-auth 全部狀態，`sendMcpRpc`
+         呼叫本身無跨分頁依賴）。Docker 設定儲存的成功/失敗提示改用
+         `@Output() toast`（沿用 `SchedulePanelComponent` 已有的
+         `{text, type}` 慣例），由 `app.html` 接手
+         `(toast)="showToast($event.text, $event.type)"`。
+    - **順手修正一個真的 bug**：日誌檢視器原本有個 T40 健檢修復註解
+      ——`closeSettings()`（關閉 ⚙ 設定 modal）會強制清掉
+      `mcpLogOpen`/輪詢 interval，理由是「開著 MCP 記錄檢視器再關閉
+      Settings，計時器會永遠留著」。但 MCP 分頁本身跟 Settings modal
+      是兩個完全不相關的畫面區域（現在的版面底下 MCP 清單早就搬到
+      右側面板分頁，不在 Settings modal 裡了），這個清理掛在
+      `closeSettings()` 只是巧合地堵住了其中一種情境——真正該觸發清理
+      的時機是「離開 MCP 分頁」，而舊寫法完全沒處理這個情境（切到
+      Skills/Agents 分頁時，開著的日誌輪詢照樣繼續打後端，直到使用者
+      剛好開關一次 Settings）。改成元件的 `ngOnDestroy` 清掉 interval
+      後，正確觸發時機變成「Angular 銷毀這個元件」——也就是
+      `@if (activeTab() === 'mcp')` 外層條件變 false（切到別的分頁）
+      或整個 app 銷毀，兩者都比原本的 `closeSettings()` 更貼近問題
+      本身，也讓 `closeSettings()` 恢復成單純的
+      `settingsOpen.set(false)`。
+    CSS：`.mcp-view`（原本分散在三處、各自新增不同屬性的三段定義，
+    照原順序整段搬移，不合併，確保 cascade 疊加結果不變）/
+    `.mcp-header`/`.mcp-section`(+`-external`/`-local` variant)/
+    `.mcp-section-title`/`-icon`/`-count`/`-hint`/`.mcp-empty`/
+    `.mcp-footer-hint`/`.ctrl-btn`(+四個狀態 modifier)/
+    `.docker-cfg-section`/`-form`/`-label`/`-input`/`-display`/`-row`/
+    `.mcp-status-lamp`（目前生效的第二個定義）/`.lamp-green`/`-yellow`/
+    `-red`/`-off`/`@keyframes lamp-pulse`/`.mcp-pane`/`-bottom`/
+    `.mcp-divider`(+`-track`/`-grip`)/`.mcp-card-compact`/`.mcc-row`/
+    `-name`/`-actions`/`-detail`/`-url`/`-tools-label`/`-tool-row`/
+    `-tool-desc`/`.mcp-log-panel`/`-header`/`-body`/`-line`/`-empty`/
+    `.mcp-agent-hint` 從 `app.scss` 整段搬到 `styles.scss`。盤點過程
+    中發現 `app.scss` 裡這個分頁的 CSS 歷經至少三輪重新設計
+    （「T10 MCP Panel」→「MCP Panel Redesign」→「MCP Split Panes」/
+    「MCP Compact Card」），中間留下大量從未被目前模板引用的死碼
+    （`.mcp-list-output`/`.mcp-status-dot`/`.mcp-group-label`/
+    `.mcp-ctrl-btns`/`.mcp-type-chip`/`.local-mcp-card`/
+    `.local-mcp-name-col`/`.mcp-ctrl-bar`/`.local-mcp-meta`/
+    `.docker-image-tag`/`.mcp-port-tag`/`.mcp-log-toggle`，以及一個
+    帶 `&.lamp-on` modifier、已被取代的舊版 `.mcp-status-lamp`
+    定義）——逐一用 grep 對照目前模板確認後，這些死碼原封不動留在
+    `app.scss`（不屬於這次抽取範圍，且部分死碼跟仍在使用的同名
+    selector 交錯，貿然刪除風險大於效益），只搬移經 grep 驗證仍在
+    使用的規則。
+    手動 e2e 涵蓋 App 管理定義列表渲染/新增/刪除、外部/本地卡片渲染
+    與展開、綁定到目前對話、本地伺服器啟動、Docker 設定顯示與編輯
+    儲存（含 toast 驗證）、日誌檢視器開啟與輪詢、RPC 調試主控台送出
+    請求、整理按鈕。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立

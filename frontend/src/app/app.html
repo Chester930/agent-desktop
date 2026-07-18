@@ -1334,269 +1334,31 @@
 
 
           @if (activeTab() === 'mcp') {
-            <div class="mcp-view">
-              <div class="mcp-header">
-                <span style="font-size:12px;color:#888">MCP 伺服器（Model Context Protocol）</span>
-                <button class="btn-secondary btn-xs" (click)="openMcpServerEditor()" title="新增一個 MCP Server 定義，會同步到 Claude／Codex 兩邊">
-                  ＋ 新增
-                </button>
-                <button class="btn-secondary btn-xs" (click)="loadMcp()" [disabled]="mcpLoading()">
-                  {{ mcpLoading() ? '…' : '↻ 整理' }}
-                </button>
-              </div>
-
-              <!-- App 自己管理的 MCP Server 定義（單一來源，同步到 Claude／Codex 兩邊）
-                   跟下面「外部 API／本地」清單（parse claude mcp list 輸出，只反映 Claude
-                   那邊看得到什麼）是不同的資料來源。 -->
-              @if (objectKeys(mcpServerDefs()).length > 0) {
-                <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
-                  <div class="mcp-section-title">
-                    <span class="mcp-section-icon">🔗</span>
-                    <span>App 管理（雙引擎同步）</span>
-                    <span class="mcp-section-count">{{ objectKeys(mcpServerDefs()).length }}</span>
-                  </div>
-                  <div class="panel-list">
-                    @for (name of objectKeys(mcpServerDefs()); track name) {
-                      <div class="mcp-card-compact">
-                        <div class="mcc-row">
-                          <span class="mcc-name">{{ name }}</span>
-                          <span style="font-size:10px;color:#888;margin-left:6px;">{{ mcpServerDefs()[name].type }}</span>
-                          <span style="font-size:10px;margin-left:auto;"
-                            [style.color]="mcpServerDefs()[name].synced?.claude ? '#4caf50' : '#e07070'"
-                            title="Claude 同步狀態——✗ 代表上次同步失敗（例如 Claude CLI 未安裝），不是還沒同步">Claude{{ mcpServerDefs()[name].synced?.claude ? ' ✓' : ' ✗' }}</span>
-                          <span style="font-size:10px;margin-left:6px;"
-                            [style.color]="mcpServerDefs()[name].synced?.codex ? '#4caf50' : '#e07070'"
-                            title="Codex 同步狀態——✗ 代表上次同步失敗（例如 Codex CLI 未安裝或未登入），不是還沒同步">Codex{{ mcpServerDefs()[name].synced?.codex ? ' ✓' : ' ✗' }}</span>
-                          <button class="del-btn" style="margin-left:6px;" (click)="deleteMcpServerDef(name)" title="刪除（會同步從兩邊移除）">✕</button>
-                        </div>
-                      </div>
-                    }
-                  </div>
-                </div>
-              }
-
-              <!-- ══════════════════════════════════════════════════
-                   上半：外部 API（高度由分隔線拖曳控制）
-              ════════════════════════════════════════════════════ -->
-              <div class="mcp-pane mcp-pane-top" [style.height.%]="mcpSplitPct()">
-              <div class="mcp-section mcp-section-external" style="height:100%;overflow-y:auto;">
-                <div class="mcp-section-title">
-                  <span class="mcp-section-icon">🌐</span>
-                  <span>外部 API</span>
-                  <span class="mcp-section-count">{{ externalMcpServers().length }}</span>
-                </div>
-                <div class="panel-list">
-                @for (m of externalMcpServers(); track m.id) {
-                  <div class="mcp-card-compact"
-                    [class.expanded]="expandedMcpId() === m.id"
-                    (click)="toggleMcpExpand(m.id)">
-
-                    <!-- 閉合列：● 名稱 -->
-                    <div class="mcc-row">
-                      <span class="mcp-status-lamp" [ngClass]="getMcpLampClass(m.name, m.status)"
-                        [title]="getMcpLampTitle(m.name, m.status)"></span>
-                      <span class="mcc-name">{{ m.name }}</span>
-                      @if (isMcpRequiredByActiveAgent(m.name)) {
-                        <span class="mcp-agent-hint" [title]="'此 Agent 需要：' + selectedAgent()">需要</span>
-                      }
-                      <!-- hover 才顯示 -->
-                      <div class="mcc-actions" (click)="$event.stopPropagation()">
-                        <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
-                          (click)="toggleMcpInTab(m.name)"
-                          [title]="isMcpInTab(m.name) ? '從此對話移除' : '加入此對話'">
-                          {{ isMcpInTab(m.name) ? '◉' : '○' }}
-                        </button>
-                      </div>
-                    </div>
-
-                    <!-- 展開詳情 -->
-                    @if (expandedMcpId() === m.id) {
-                      <div class="mcc-detail" (click)="$event.stopPropagation()">
-                        <div class="mcc-url" [title]="m.url">{{ m.url }}</div>
-                        <div class="detail-desc" style="margin-top:6px;">
-                          {{ m.description || '（無說明）' }}
-                        </div>
-                        @if ((m.tools || []).length) {
-                          <div class="mcc-tools-label">工具 ({{ m.tools!.length }})</div>
-                          @for (tool of m.tools!; track tool.name) {
-                            <div class="mcc-tool-row">🛠 {{ tool.name }}
-                              @if (tool.description) {
-                                <span class="mcc-tool-desc">— {{ tool.description }}</span>
-                              }
-                            </div>
-                          }
-                        }
-                      </div>
-                    }
-                  </div>
-                } @empty {
-                  <div class="mcp-empty">尚無外部 API 連線</div>
-                }
-                </div><!-- /.panel-list -->
-              </div><!-- /.mcp-section-external -->
-              </div><!-- /.mcp-pane-top -->
-
-              <!-- ══ 可拖曳分隔線 ══════════════════════════════════ -->
-              <div class="mcp-divider" (mousedown)="onMcpDividerDown($event)" title="拖曳調整上下比例">
-                <div class="mcp-divider-track">
-                  <div class="mcp-divider-grip"></div>
-                </div>
-              </div>
-
-              <!-- ══════════════════════════════════════════════════
-                   下半：本地 API（Docker / stdio / local-http）
-              ════════════════════════════════════════════════════ -->
-              <div class="mcp-pane mcp-pane-bottom">
-              <div class="mcp-section mcp-section-local" style="height:100%;overflow-y:auto;">
-                <div class="mcp-section-title">
-                  <span class="mcp-section-icon">🖥</span>
-                  <span>本地 API</span>
-                  <span class="mcp-section-count">{{ localMcpServers().length }}</span>
-                  <span class="mcp-section-hint">啟動 / 關閉 / 重啟</span>
-                </div>
-                <div class="panel-list">
-                @for (m of localMcpServers(); track m.id) {
-                  <!-- ── 本地 API 卡片（compact） ── -->
-                  <div class="mcp-card-compact"
-                    [class.expanded]="expandedMcpId() === m.id"
-                    (click)="toggleMcpExpand(m.id)">
-
-                    <!-- 閉合列：● 名稱 -->
-                    <div class="mcc-row">
-                      <span class="mcp-status-lamp"
-                        [ngClass]="getMcpLampClass(m.name, m.status)"
-                        [title]="getMcpLampTitle(m.name, m.status)"></span>
-                      <span class="mcc-name">{{ m.name }}</span>
-                      @if (isMcpRequiredByActiveAgent(m.name)) {
-                        <span class="mcp-agent-hint" [title]="'此 Agent 需要：' + selectedAgent()">需要</span>
-                      }
-                      <!-- hover 才顯示 -->
-                      <div class="mcc-actions" (click)="$event.stopPropagation()">
-                        @if (isMcpRunning(m.status)) {
-                          <button class="ctrl-btn ctrl-stop"    (click)="stopMcp(m.name)"    title="停止">■</button>
-                          <button class="ctrl-btn ctrl-restart" (click)="restartMcp(m.name)" title="重啟">↺</button>
-                        } @else {
-                          <button class="ctrl-btn ctrl-start"   (click)="startMcp(m.name)"   title="啟動">▶</button>
-                        }
-                        <button class="ctrl-btn ctrl-log"
-                          (click)="toggleMcpLog(m.name)"
-                          [class.active]="mcpLogOpen() === m.name"
-                          title="日誌">📋</button>
-                        <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
-                          (click)="toggleMcpInTab(m.name)"
-                          [title]="isMcpInTab(m.name) ? '從此對話移除' : '加入此對話'">
-                          {{ isMcpInTab(m.name) ? '◉' : '○' }}
-                        </button>
-                      </div>
-                    </div>
-
-                    <!-- 日誌面板 -->
-                    @if (mcpLogOpen() === m.name) {
-                      <div class="mcp-log-panel" (click)="$event.stopPropagation()">
-                        <div class="mcp-log-header">
-                          <span>日誌 · {{ m.name }}</span>
-                          <button class="icon-btn-sm" (click)="refreshMcpLog(m.name)" title="重新整理">↻</button>
-                        </div>
-                        <div class="mcp-log-body">
-                          @for (line of mcpLogLines(); track $index) {
-                            <div class="mcp-log-line">{{ line }}</div>
-                          } @empty {
-                            <div class="mcp-log-empty">尚無日誌</div>
-                          }
-                        </div>
-                        
-                        <!-- MCP RPC 調試控制台 -->
-                        <div class="mcp-rpc-console" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
-                          <div class="mcp-rpc-title" style="font-size: 11px; font-weight: 600; color: #ffad33; margin-bottom: 6px; display: flex; align-items: center; gap: 4px;">
-                            <span>⚡ MCP JSON-RPC Debugger</span>
-                          </div>
-                          <div class="mcp-rpc-inputs" style="display: flex; gap: 6px; margin-bottom: 6px;">
-                            <input class="mcp-rpc-input-method" [(ngModel)]="mcpRpcMethod" placeholder="Method (例: tools/list)" style="flex: 1; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 4px; font-family: monospace;">
-                            <button class="mcp-rpc-btn" [disabled]="isMcpRpcSending" (click)="mcpRpcName = m.name; sendMcpRpcDebug()" style="background: #ff9900; color: #000; border: none; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; min-width: 60px;">
-                              {{ isMcpRpcSending ? '...' : 'Send' }}
-                            </button>
-                          </div>
-                          <textarea class="mcp-rpc-textarea" [(ngModel)]="mcpRpcParamsText" placeholder="Params JSON (e.g. {})" style="width: 100%; height: 40px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 4px; resize: none; font-family: monospace; box-sizing: border-box; margin-bottom: 6px;"></textarea>
-                          
-                          @if (mcpRpcResult) {
-                            <div class="mcp-rpc-res-title" style="font-size: 10px; color: rgba(255,255,255,0.5); margin-bottom: 4px;">Response:</div>
-                            <pre class="mcp-rpc-result" style="margin: 0; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 6px; max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 10px; color: #a3e635; white-space: pre-wrap; word-break: break-all;"><code>{{ mcpRpcResult }}</code></pre>
-                          }
-
-                          @if (mcpPendingAuth()) {
-                            <div class="mcp-rpc-auth-actions" style="margin-top: 6px; display: flex; gap: 6px; justify-content: flex-end;">
-                              <button (click)="authorizeMcpRpc(false)" style="background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;">拒絕 Reject</button>
-                              <button (click)="authorizeMcpRpc(true)" style="background: #a3e635; border: none; color: #000; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 4px; cursor: pointer;">授權放行 Authorize</button>
-                            </div>
-                          }
-                        </div>
-                      </div>
-                    }
-
-                    <!-- 展開詳情 -->
-                    @if (expandedMcpId() === m.id) {
-                      <div class="mcc-detail" (click)="$event.stopPropagation()">
-                        @if (m.url) {
-                          <div class="mcc-url" [title]="m.url">{{ m.url }}</div>
-                        }
-                        @if (m.mcpType === 'docker' || m.dockerized) {
-                          <div class="docker-cfg-section">
-                            @if (editingDockerMcp() === m.name && localDockerConfig()) {
-                              <div class="docker-cfg-form">
-                                <label class="docker-cfg-label">容器名稱
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.containerName" placeholder="例: my-mcp-container">
-                                </label>
-                                <label class="docker-cfg-label">Compose 路徑
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.composeFile" placeholder="例: /home/user/docker-compose.yml">
-                                </label>
-                                <label class="docker-cfg-label">服務名稱
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.composeService" placeholder="例: mcp-server">
-                                </label>
-                                <label class="docker-cfg-label">Port
-                                  <input class="docker-cfg-input" [(ngModel)]="localDockerConfig()!.port" placeholder="例: 3000">
-                                </label>
-                                <div style="display:flex;gap:6px;margin-top:6px;">
-                                  <button class="btn-primary btn-xs" (click)="saveDockerConfig()">儲存</button>
-                                  <button class="btn-secondary btn-xs" (click)="editingDockerMcp.set(null)">取消</button>
-                                </div>
-                              </div>
-                            } @else {
-                              <div class="docker-cfg-display">
-                                @if (localMcpConfigs()[m.name]?.containerName) {
-                                  <div class="docker-cfg-row"><span>容器</span><code>{{ localMcpConfigs()[m.name].containerName }}</code></div>
-                                }
-                                @if (localMcpConfigs()[m.name]?.composeFile) {
-                                  <div class="docker-cfg-row"><span>Compose</span><code style="font-size:9px;">{{ localMcpConfigs()[m.name].composeFile }}</code></div>
-                                }
-                                <button class="btn-secondary btn-xs" style="margin-top:4px;" (click)="openDockerConfig(m)">🐳 設定 Docker / Compose</button>
-                              </div>
-                            }
-                          </div>
-                        }
-                        @if ((m.tools || []).length) {
-                          <div class="mcc-tools-label">工具 ({{ m.tools!.length }})</div>
-                          @for (tool of m.tools!; track tool.name) {
-                            <div class="mcc-tool-row">🛠 {{ tool.name }}</div>
-                          }
-                        } @else {
-                          <div style="font-size:10px;color:#555;font-style:italic;">無工具資訊（尚未啟動）</div>
-                        }
-                      </div>
-                    }
-                  </div>
-                } @empty {
-                  <div class="mcp-empty">
-                    尚無本地 API 設定<br>
-                    <small>在終端執行 <code>claude mcp add &lt;name&gt; docker run ...</code></small>
-                  </div>
-                }
-                </div><!-- /.panel-list -->
-              </div><!-- /.mcp-section-local -->
-              <div class="mcp-footer-hint">
-                新增 MCP：<code>claude mcp add &lt;name&gt; &lt;command&gt;</code>
-              </div>
-              </div><!-- /.mcp-pane-bottom -->
-            </div><!-- /.mcp-view -->
+            <!-- Phase 2 拆分：獨立元件 + @defer 延遲載入 -->
+            @defer (on immediate) {
+              <app-mcp-panel [mcpServerDefs]="mcpServerDefs()"
+                [externalMcpServers]="externalMcpServers()"
+                [localMcpServers]="localMcpServers()"
+                [expandedMcpId]="expandedMcpId()"
+                [mcpLoading]="mcpLoading()"
+                [mcpSplitPct]="mcpSplitPct()"
+                [requiredMcpNames]="requiredMcpNames()"
+                [linkedMcpNames]="linkedMcpNames()"
+                [sessionMcpNames]="sessionMcpNames()"
+                [selectedAgentLabel]="selectedAgent()"
+                (addServerDef)="openMcpServerEditor()"
+                (refreshList)="loadMcp()"
+                (deleteServerDef)="deleteMcpServerDef($event)"
+                (toggleExpand)="toggleMcpExpand($event)"
+                (toggleInTab)="toggleMcpInTab($event)"
+                (dividerMousedown)="onMcpDividerDown($event)"
+                (start)="startMcp($event)"
+                (stop)="stopMcp($event)"
+                (restart)="restartMcp($event)"
+                (toast)="showToast($event.text, $event.type)" />
+            } @placeholder {
+              <div style="margin:8px;font-size:11px;color:#888;">載入中…</div>
+            }
           }
 
         </div>

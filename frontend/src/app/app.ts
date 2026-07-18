@@ -19,47 +19,16 @@ import { TeamPanelComponent } from './components/team-panel/team-panel';
 import { SkillPanelComponent } from './components/skill-panel/skill-panel';
 import { AgentPanelComponent } from './components/agent-panel/agent-panel';
 import { SoulPanelComponent } from './components/soul-panel/soul-panel';
+import { McpPanelComponent } from './components/mcp-panel/mcp-panel';
 import { SettingsService, AppSettings } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, McpServer, McpTool, McpType, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
-
-export interface McpWorkflow {
-  type: 'code' | 'node';
-  content: string;
-  dockerized?: boolean;
-  dockerImage?: string;
-}
-
-export interface McpTool {
-  name: string;
-  description: string;
-  workflow?: McpWorkflow;
-}
-
-export type McpType = 'external' | 'docker' | 'stdio' | 'local-http';
-
-export interface McpServer {
-  id: string;
-  name: string;
-  url: string;
-  status: string;
-  authorized: boolean;
-  description: string;
-  mcpType: McpType;
-  dockerized?: boolean;
-  dockerImage?: string;
-  port?: string;
-  containerName?: string;
-  composeFile?: string;
-  composeService?: string;
-  tools?: McpTool[];
-}
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent, AgentPanelComponent, SoulPanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent, AgentPanelComponent, SoulPanelComponent, McpPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -82,17 +51,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
     return list;
   });
-  // MCP Live Debugger state
-  mcpRpcName = '';
-  mcpRpcMethod = 'tools/list';
-  mcpRpcParamsText = '{}';
-  mcpRpcResult = '';
-  isMcpRpcSending = false;
+  // MCP Live Debugger state (mcpRpcName/mcpRpcMethod/mcpRpcParamsText/
+  // mcpRpcResult/isMcpRpcSending/mcpPendingAuth/sendMcpRpcDebug/
+  // authorizeMcpRpc): extracted into components/mcp-panel (Phase 2) —
+  // self-contained, no cross-tab reads/writes found.
   activeRunId = '';
 
   // Team Run Artifacts Tracer
   runArtifacts = signal<any[]>([]);
-  mcpPendingAuth = signal<any>(null);
 
   skills = signal<Skill[]>([]);
   resourceSyncStatus = signal<ResourceSyncStatus | null>(null);
@@ -278,8 +244,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     document.addEventListener('mouseup', onUp);
   }
 
-  // Local MCP Docker/compose metadata loaded from backend
-  localMcpConfigs = signal<Record<string, any>>({});
+  // localMcpConfigs / localDockerConfig / editingDockerMcp / openDockerConfig /
+  // saveDockerConfig / loadLocalMcpConfigs: extracted into
+  // components/mcp-panel (Phase 2) — only read/written within the MCP tab,
+  // so the component now owns this slice entirely (loads its own copy via
+  // ClaudeService on init instead of receiving it as an @Input).
 
   // Manual override: names force-promoted to local section
   managedMcpNames = signal<string[]>([]);
@@ -306,6 +275,23 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Keep selfMcpServers as alias for backward-compat with agent/skill link display
   selfMcpServers = this.localMcpServers;
 
+  // components/mcp-panel (Phase 2) needs per-card O(1) membership checks in
+  // its @for loops — same reasoning as skill-panel's precomputed Sets:
+  // passing isMcpRequiredByActiveAgent/isMcpLinkedToActiveAgent/isMcpInTab
+  // as function @Inputs would re-run their full lookup on every card, every
+  // change-detection pass.
+  requiredMcpNames = computed(() => {
+    const agentId = this.selectedAgent();
+    if (!agentId) return new Set<string>();
+    const agent = this.agents().find(a => a.id === agentId.replace(/^@/, ''));
+    return new Set(agent?.mcp ?? []);
+  });
+  linkedMcpNames = computed(() => {
+    const all = [...this.externalMcpServers(), ...this.localMcpServers()];
+    return new Set(all.filter(m => this.isMcpLinkedToActiveAgent(m.name)).map(m => m.name));
+  });
+  sessionMcpNames = computed(() => new Set(this.activeTabField('sessionMcps')));
+
   toggleManagedMcp(name: string) {
     this.managedMcpNames.update(arr =>
       arr.includes(name) ? arr.filter(n => n !== name) : [...arr, name]
@@ -314,40 +300,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   isMcpRunning(status: string) { return status?.toLowerCase().includes('connected'); }
-
-  // Local MCP Docker config
-  localDockerConfig = signal<{ name: string; containerName: string; composeFile: string; composeService: string; port: string; notes: string } | null>(null);
-  editingDockerMcp = signal<string | null>(null);
-
-  openDockerConfig(m: McpServer) {
-    const cfg = this.localMcpConfigs()[m.name] ?? {};
-    this.localDockerConfig.set({
-      name: m.name,
-      containerName: cfg.containerName ?? m.containerName ?? '',
-      composeFile: cfg.composeFile ?? m.composeFile ?? '',
-      composeService: cfg.composeService ?? m.composeService ?? '',
-      port: cfg.port ?? m.port ?? '',
-      notes: cfg.notes ?? '',
-    });
-    this.editingDockerMcp.set(m.name);
-  }
-
-  saveDockerConfig() {
-    const cfg = this.localDockerConfig();
-    if (!cfg) return;
-    this.claude.saveLocalMcpConfig(cfg.name, cfg).subscribe({
-      next: () => {
-        this.localMcpConfigs.update(all => ({ ...all, [cfg.name]: cfg }));
-        this.showToast(`Docker 設定已儲存：${cfg.name}`, 'success', 2000);
-        this.editingDockerMcp.set(null);
-      },
-      error: (e) => this.showToast(`Docker 設定儲存失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  loadLocalMcpConfigs() {
-    this.claude.getLocalMcpConfig().subscribe(cfg => this.localMcpConfigs.set(cfg));
-  }
 
   getMcpColor(name: string, status: string): string {
     const running = this.isMcpRunning(status);
@@ -358,24 +310,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return '#10b981';                         // 啟動 + 使用中  → 綠
   }
 
-  /** CSS class for the status lamp — encodes the 4-state traffic-light logic. */
-  getMcpLampClass(name: string, status: string): string {
-    const running = this.isMcpRunning(status);
-    const inUse = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse) return 'lamp-red';    // ⚠ 需要關注
-    if (!running) return 'lamp-off';    // ● 停止（灰）
-    if (!inUse) return 'lamp-yellow'; // ● 運行中但未啟用
-    return 'lamp-green';                          // ● 運行中且啟用
-  }
-
-  getMcpLampTitle(name: string, status: string): string {
-    const running = this.isMcpRunning(status);
-    const inUse = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse) return '⚠ 伺服器未啟動，但已被 Agent 使用';
-    if (!running) return '● 已停止';
-    if (!inUse) return '● 運行中（未綁定到目前 Agent）';
-    return '● 運行中 · 已啟用';
-  }
+  // getMcpLampClass / getMcpLampTitle: extracted into components/mcp-panel
+  // (Phase 2) as local pure methods (same 4-state logic, "inUse" now comes
+  // from the precomputed linkedMcpNames @Input instead of calling back into
+  // App per card).
 
   startMcp(name: string) { this.claude.startMcp(name).subscribe({ error: (e) => this.showToast(`MCP 啟動失敗: ${e.message ?? e}`, 'error') }); }
   stopMcp(name: string) { this.claude.stopMcp(name).subscribe({ error: (e) => this.showToast(`MCP 停止失敗: ${e.message ?? e}`, 'error') }); }
@@ -1676,82 +1614,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.renamingId.set(null);
   }
 
-  sendMcpRpcDebug() {
-    if (!this.mcpRpcName || !this.mcpRpcMethod) {
-      this.mcpRpcResult = '錯誤: 必須填寫 MCP 名稱與 Method';
-      return;
-    }
-    if (this.mcpPendingAuth()) {
-      // 上一筆敏感操作還在等待使用者核准/拒絕，直接送出新請求會讓那筆掛起狀態
-      // 從畫面上悄悄消失（後端 pending_id 仍存在，只是 UI 不再追蹤），
-      // 因此在此擋下，要求使用者先處理完再繼續。
-      this.mcpRpcResult = '⚠️ 尚有一筆敏感操作正在等待授權，請先核准或拒絕後再送出新請求。';
-      return;
-    }
-    let paramsObj = {};
-    try {
-      paramsObj = JSON.parse(this.mcpRpcParamsText || '{}');
-    } catch (e: any) {
-      this.mcpRpcResult = `錯誤: Params 不是有效的 JSON - ${e.message}`;
-      return;
-    }
-    this.isMcpRpcSending = true;
-    this.mcpRpcResult = '發送中...';
-
-    this.claude.sendMcpRpc(this.mcpRpcName, this.mcpRpcMethod, paramsObj).subscribe({
-      next: (res) => {
-        this.mcpRpcResult = JSON.stringify(res, null, 2);
-        this.isMcpRpcSending = false;
-      },
-      error: (err) => {
-        // 當遇到後端敏感關鍵字安全閘口攔截 (403 pending_authorization)
-        if (err.status === 403 && (err.error?.status === 'pending_authorization' || err.error?.error?.includes('敏感操作'))) {
-          const errMsg = err.error?.error || '敏感操作已被掛起';
-          const pId = err.error?.pending_id;
-          this.mcpPendingAuth.set({
-            pendingId: pId,
-            name: this.mcpRpcName,
-            method: this.mcpRpcMethod,
-            params: paramsObj
-          });
-          this.mcpRpcResult = `⚠️ ${errMsg}`;
-          this.isMcpRpcSending = false;
-          return;
-        }
-        
-        this.mcpRpcResult = `請求失敗: ${err.error?.error || err.message || JSON.stringify(err)}`;
-        this.isMcpRpcSending = false;
-      }
-    });
-  }
-
-  authorizeMcpRpc(authorized: boolean) {
-    const auth = this.mcpPendingAuth();
-    if (!auth) return;
-
-    if (!authorized) {
-      this.mcpRpcResult = '授權拒絕。敏感操作已取消。';
-      this.mcpPendingAuth.set(null);
-      return;
-    }
-
-    this.isMcpRpcSending = true;
-    this.mcpRpcResult = '授權通過，發送中...';
-
-    this.claude.sendMcpRpc(auth.name, auth.method, auth.params, true, auth.pendingId).subscribe({
-      next: (res) => {
-        this.mcpRpcResult = JSON.stringify(res, null, 2);
-        this.isMcpRpcSending = false;
-        this.mcpPendingAuth.set(null);
-      },
-      error: (err) => {
-        this.mcpRpcResult = `授權執行失敗: ${err.error?.error || err.message || JSON.stringify(err)}`;
-        this.isMcpRpcSending = false;
-        this.mcpPendingAuth.set(null);
-      }
-    });
-  }
-
   loadRunArtifacts(runId: string) {
     if (!runId) return;
     this.claude.getTeamRunArtifacts(runId).subscribe({
@@ -2702,62 +2564,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   updateAvailable = signal(false);
   updateReady = signal(false);
 
-  // MCP log viewer (#15)
-  mcpLogOpen = signal<string | null>(null);
-  mcpLogLines = signal<string[]>([]);
-  private _mcpLogInterval: any = null;
-
-  toggleMcpLog(name: string) {
-    if (this._mcpLogInterval) {
-      clearInterval(this._mcpLogInterval);
-      this._mcpLogInterval = null;
-    }
-
-    if (this.mcpLogOpen() === name) {
-      this.mcpLogOpen.set(null);
-      return;
-    }
-    this.mcpLogOpen.set(name);
-    this.refreshMcpLog(name);
-
-    // 每 2.5 秒自動重整日誌，方便使用者調試
-    this._mcpLogInterval = setInterval(() => {
-      if (this.mcpLogOpen() === name) {
-        this.refreshMcpLog(name);
-      } else {
-        clearInterval(this._mcpLogInterval);
-        this._mcpLogInterval = null;
-      }
-    }, 2500);
-  }
-
-  // T40 健檢修復：關閉 Settings（ESC 或按下儲存）原本只是把 settingsOpen
-  // 設成 false，從未重設 mcpLogOpen 或清掉 _mcpLogInterval —— 開著 MCP 記
-  // 錄檢視器再關閉 Settings，這個每 2.5 秒打一次後端的計時器會永遠留著，
-  // 直到元件銷毀或重新打開 Settings 並手動切換掉同一個 MCP 記錄。
-  private stopMcpLogPolling() {
-    if (this._mcpLogInterval) {
-      clearInterval(this._mcpLogInterval);
-      this._mcpLogInterval = null;
-    }
-    this.mcpLogOpen.set(null);
-  }
-
+  // MCP log viewer (#15): extracted into components/mcp-panel (Phase 2),
+  // including the 2.5s auto-refresh interval and its cleanup — the
+  // component now clears it in ngOnDestroy, which fires whenever Angular
+  // destroys it (leaving the MCP tab via the @if wrapping the @defer
+  // block, or app teardown). This actually fixes the leak T40 patched
+  // around (see removed stopMcpLogPolling()) more correctly than before:
+  // that fix only stopped polling when Settings closed, an unrelated
+  // modal — switching tabs away from 'mcp' with the log open never
+  // stopped it. ngOnDestroy stops it on the transition that actually
+  // matters.
   closeSettings() {
-    this.stopMcpLogPolling();
     this.settingsOpen.set(false);
-  }
-
-  refreshMcpLog(name: string) {
-    this.claude.getMcpLogs(name).subscribe(r => {
-      this.mcpLogLines.set(r.lines);
-      setTimeout(() => {
-        const el = document.querySelector('.mcp-log-body');
-        if (el) {
-          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-        }
-      }, 50);
-    });
   }
 
   // Auto session title (#10)
@@ -3211,7 +3029,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ngOnDestroy() {
     clearInterval(this._healthTimer); clearInterval(this._resourceSyncTimer);
     clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
-    if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
     for (const fn of this.tabStopFns.values()) fn();
     this.tabStopFns.clear();
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
@@ -4061,7 +3878,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   loadMcp() {
     this.mcpLoading.set(true);
-    this.loadLocalMcpConfigs();
     this.claude.runCliCommand(['mcp', 'list']).subscribe({
       next: out => {
         this.mcpList.set(out || '（無已安裝的 MCP）');
@@ -4096,9 +3912,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  objectKeys(obj: Record<string, unknown>): string[] {
-    return Object.keys(obj);
-  }
+  // objectKeys: extracted into components/mcp-panel (Phase 2) as a local
+  // helper — its only caller was the mcp-view template.
 
   openMcpServerEditor() {
     this.mcpServerEditorName = '';
@@ -4556,11 +4371,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.isMcpPermForAgent(agentId, mcpName) || this.isMcpInTab(mcpName);
   }
 
-  // 此 MCP 是否在 activeAgent 的 frontmatter mcp[] 中（P1-F6）
-  isMcpRequiredByActiveAgent(mcpName: string): boolean {
-    const agentId = this.selectedAgent();
-    if (!agentId) return false;
-    return this.agents().find(a => a.id === agentId.replace(/^@/, ''))?.mcp?.includes(mcpName) ?? false;
-  }
+  // isMcpRequiredByActiveAgent: extracted into requiredMcpNames computed()
+  // above (Phase 2) — same P1-F6 frontmatter-mcp[] check, precomputed as a
+  // Set for the mcp-panel component's per-card lookup.
 
 }
