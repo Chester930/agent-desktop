@@ -9,7 +9,6 @@ export interface AppSettings {
   defaultAgent: string;
   backendPort: number;
   backendUrl: string;
-  theme: 'dark' | 'light';
   recentWorkDirs: string[];
   quickPrompts: QuickPrompt[];
   enterToSend: boolean;
@@ -57,7 +56,6 @@ const DEFAULTS: AppSettings = {
   defaultAgent: '',
   backendPort: 8765,
   backendUrl: '',
-  theme: 'dark',
   recentWorkDirs: [],
   quickPrompts: [
     { label: '📋 程式碼審查', text: '幫我 code review 目前的 diff' },
@@ -116,7 +114,6 @@ export class SettingsService {
       }
     }
     this._settings = { ...DEFAULTS, ...parsed };
-    this.applyTheme(this._settings.theme);
 
     if (this.secureStorage) {
       // 舊版遺留：如果 localStorage 那包 JSON 裡還留著明碼 key，搬進安全
@@ -154,10 +151,5 @@ export class SettingsService {
     } else {
       localStorage.setItem(KEY, JSON.stringify(this._settings));
     }
-    this.applyTheme(this._settings.theme);
-  }
-
-  applyTheme(theme: 'dark' | 'light'): void {
-    document.documentElement.setAttribute('data-theme', theme);
   }
 }

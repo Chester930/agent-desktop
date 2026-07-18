@@ -2880,17 +2880,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.settingsForm.lang = next;
   }
 
-  get currentTheme(): 'dark' | 'light' {
-    return this.settings.get().theme || 'dark';
-  }
-
-  toggleTheme() {
-    const current = this.settings.get().theme || 'dark';
-    const next = current === 'dark' ? 'light' : 'dark';
-    this.settings.save({ theme: next });
-    this.settingsForm.theme = next;
-  }
-
   applyQuickPrompt(text: string) {
     this.inputText = text;
     this.saveCurrentTab();
