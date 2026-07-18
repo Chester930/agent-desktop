@@ -9,6 +9,16 @@ RUN apt-get update && apt-get install -y curl && \
 # Install Claude CLI + Codex CLI
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
+# docker.sock is bind-mounted in (docker-compose.yml) so this container can
+# reach the host's Docker daemon, but nothing here was ever installed to
+# actually talk to it — handle_mcp_action() below shells out to
+# `docker`/`docker compose` for docker-type MCP servers' start/stop/restart
+# and the Docker-config UI, and those calls fail with "command not found"
+# without a client. Copying just the CLI (+ compose v2 plugin) from the
+# official image is much lighter than installing the full Docker Engine.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
