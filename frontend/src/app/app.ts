@@ -649,6 +649,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     this.activeChatId.set(tabId);
     this.checkQuotaInMessages(tab.messages);
+    // 切換分頁後預設捲到最新訊息，不然新分頁的畫面會停在瀏覽器預設的捲動
+    // 位置（通常是最上面），使用者切過去看到的是最舊的訊息而不是最新進度。
+    // 不用 shouldScroll + ngAfterViewChecked（這個 app 沒裝 zone.js，這個
+    // 機制只有在由 (click)/(keydown) 這類 DOM 事件同步觸發時才可靠——這個
+    // function 目前雖然都是從 click handler 呼叫，但直接呼叫
+    // scrollIntoView 更穩，不會因為未來新增一個非同步呼叫路徑而悄悄失效）。
+    setTimeout(() => this.chatEnd?.nativeElement?.scrollIntoView({ behavior: 'smooth' }), 0);
   }
 
   checkQuotaInMessages(msgs: ChatMessage[]) {
@@ -4260,7 +4267,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.messages.set([{ role: 'system', text: '載入歷史對話中…' }]);
     this.claude.resumeSession(s.id).subscribe();
     this.claude.getSessionMessages(s.id).subscribe({
-      next: res => { this.messages.set(res.messages); this.saveCurrentTab(); },
+      next: res => {
+        this.messages.set(res.messages);
+        this.saveCurrentTab();
+        // shouldScroll + ngAfterViewChecked (用在 sendMessage 等由 DOM 事件
+        // 觸發的同步流程) 在這裡不可靠：這個 callback 是 HTTP 訂閱的非同步
+        // 回呼，不是由 (click)/(keydown) 這類會自動觸發完整 change
+        // detection tick 的 DOM 事件觸發——這個 app 沒有裝 zone.js，訊號寫入
+        // （messages.set）只會就地更新用到它的 DOM 節點，不會連帶跑一次完整
+        // 的 lifecycle hook 檢查，所以 ngAfterViewChecked 不會被叫到，
+        // shouldScroll 這個旗標永遠不會被消費掉。改成訊息渲染完（下一個
+        // macrotask）後直接呼叫 scrollIntoView，不依賴這個機制。
+        setTimeout(() => this.chatEnd?.nativeElement?.scrollIntoView({ behavior: 'smooth' }), 0);
+      },
       error: () => { this.messages.set([{ role: 'system', text: '無法載入歷史對話' }]); this.saveCurrentTab(); },
     });
   }
