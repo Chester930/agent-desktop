@@ -631,6 +631,15 @@ export class ClaudeService {
     return null;
   }
 
+  listDir(path: string): Observable<{ path: string; parent: string; items: { name: string; path: string; isDir: boolean }[] }> {
+    const q = path ? `?path=${encodeURIComponent(path)}` : '';
+    return this.http.get<{ path: string; parent: string; items: { name: string; path: string; isDir: boolean }[] }>(`${this.api}/files${q}`);
+  }
+
+  mkdir(path: string, name: string): Observable<{ path: string; parent: string } | { error: string }> {
+    return this.http.post<{ path: string; parent: string } | { error: string }>(`${this.api}/files/mkdir`, { path, name });
+  }
+
   streamChat(
     message: string,
     agent: string,

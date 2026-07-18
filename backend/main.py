@@ -2831,6 +2831,27 @@ async def handle_files(request: web.Request) -> web.Response:
         pass
     return web.json_response({"path": str(p), "parent": str(p.parent), "items": items})
 
+async def handle_files_mkdir(request: web.Request) -> web.Response:
+    data = await request.json()
+    raw_parent = data.get("path", "")
+    name = (data.get("name") or "").strip()
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        return web.json_response({"error": "invalid folder name"}, status=400)
+    try:
+        parent = Path(raw_parent).resolve()
+    except Exception:
+        return web.json_response({"error": "invalid path"}, status=400)
+    if not parent.exists() or not parent.is_dir():
+        return web.json_response({"error": "parent directory does not exist"}, status=400)
+    new_dir = parent / name
+    if new_dir.exists():
+        return web.json_response({"error": "already exists"}, status=409)
+    try:
+        new_dir.mkdir()
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"path": str(new_dir), "parent": str(parent)})
+
 _CLI_ALLOWLIST: dict[str, set[str] | None] = {
     "logout": None, "doctor": None, "update": None,
     "mcp": {"list", "remove"},
@@ -3774,6 +3795,7 @@ def build_app() -> web.Application:
         ("GET",    "/api/logs",            handle_logs),
         ("GET",    "/api/status",          handle_status),
         ("GET",    "/api/files",            handle_files),
+        ("POST",   "/api/files/mkdir",      handle_files_mkdir),
         ("POST",   "/api/cli",             handle_cli),
         ("GET",    "/api/config",          handle_config_get),
         ("PUT",    "/api/config",          handle_config_put),

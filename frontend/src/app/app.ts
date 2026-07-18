@@ -1270,10 +1270,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // active tab 是否已鎖定目錄（有訊息就算鎖定）
   isDirLocked = computed(() => (this.activeChat?.messages.length ?? 0) > 0);
 
-  // 瀏覽器版（無 Electron 原生選資料夾對話框）的替代下拉選單
+  // 瀏覽器版（無 Electron 原生選資料夾對話框）的替代方案：可鑽層瀏覽的資料夾選單
   workDirMenuOpen = signal(false);
-  workDirMenuInput = '';
   recentWorkDirs = computed(() => this.settings.get().recentWorkDirs);
+  workDirBrowsePath = signal('');
+  workDirBrowseParent = signal('');
+  workDirBrowseItems = signal<{ name: string; path: string; isDir: boolean }[]>([]);
+  workDirBrowseLoading = signal(false);
+  workDirNewFolderOpen = signal(false);
+  workDirNewFolderName = '';
 
   async pickFolder() {
     if (this.isDirLocked()) return; // 有訊息時禁止更換目錄
@@ -1282,8 +1287,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       if (dir) this.applyWorkDir(dir);
       return;
     }
-    // 瀏覽器版沒有原生資料夾選擇窗，改用最近使用目錄下拉選單
-    this.workDirMenuOpen.update(v => !v);
+    // 瀏覽器版沒有原生資料夾選擇窗，改用可鑽層瀏覽的下拉選單
+    const opening = !this.workDirMenuOpen();
+    this.workDirMenuOpen.set(opening);
+    if (opening) this.browseWorkDir(this.workDir());
   }
 
   private applyWorkDir(dir: string) {
@@ -1301,12 +1308,52 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.workDirMenuOpen.set(false);
   }
 
-  confirmWorkDirMenuInput() {
-    const dir = this.workDirMenuInput.trim();
+  browseWorkDir(path: string) {
+    this.workDirBrowseLoading.set(true);
+    this.workDirNewFolderOpen.set(false);
+    this.claude.listDir(path).subscribe({
+      next: (res) => {
+        this.workDirBrowsePath.set(res.path);
+        this.workDirBrowseParent.set(res.parent);
+        this.workDirBrowseItems.set(res.items.filter(i => i.isDir));
+        this.workDirBrowseLoading.set(false);
+      },
+      error: () => {
+        this.showToast('無法讀取此目錄', 'error');
+        this.workDirBrowseLoading.set(false);
+      },
+    });
+  }
+
+  browseWorkDirUp() {
+    const parent = this.workDirBrowseParent();
+    if (parent && parent !== this.workDirBrowsePath()) this.browseWorkDir(parent);
+  }
+
+  selectCurrentBrowseDir() {
+    const dir = this.workDirBrowsePath();
     if (!dir) return;
     this.applyWorkDir(dir);
-    this.workDirMenuInput = '';
     this.workDirMenuOpen.set(false);
+  }
+
+  toggleNewFolderInput() {
+    this.workDirNewFolderOpen.update(v => !v);
+    this.workDirNewFolderName = '';
+  }
+
+  confirmNewFolder() {
+    const name = this.workDirNewFolderName.trim();
+    if (!name) return;
+    this.claude.mkdir(this.workDirBrowsePath(), name).subscribe({
+      next: (res: any) => {
+        if (res?.error) { this.showToast(`建立資料夾失敗：${res.error}`, 'error'); return; }
+        this.workDirNewFolderOpen.set(false);
+        this.workDirNewFolderName = '';
+        this.browseWorkDir(res.path); // 建立後直接鑽進新資料夾
+      },
+      error: (e) => this.showToast(`建立資料夾失敗：${e.error?.error ?? e.message ?? e}`, 'error'),
+    });
   }
 
   // pickProjectDir / pickClaudeHome: extracted into

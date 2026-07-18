@@ -1802,6 +1802,47 @@ body {
   padding: 5px 10px;
   cursor: pointer;
   &:hover { opacity: 0.85; }
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+}
+.workdir-menu-select-btn { display: block; width: 100%; text-align: center; }
+.workdir-menu-recent-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 2px 4px;
+  max-width: 340px;
+}
+.workdir-menu-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 6px;
+}
+.workdir-menu-up {
+  background: #141420;
+  border: 1px solid #2d2d3d;
+  border-radius: 6px;
+  color: #ccc;
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  &:hover:not(:disabled) { background: #2a2a3a; color: #fff; }
+  &:disabled { opacity: 0.3; cursor: not-allowed; }
+}
+.workdir-menu-path {
+  font-size: 11px;
+  color: #999;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.workdir-menu-list {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 4px;
 }
 
 .input-banner {
