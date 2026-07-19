@@ -67,3 +67,8 @@ frontend/src/environments/environment.local.ts
 # 維護者本機的開發交接筆記（含這台機器的絕對路徑與內部除錯紀錄），
 # 不適合留在公開 repo，但本機保留供個人參考
 docs/HANDOFF.md
+
+# /graphify skill 本機分析快取（含這台機器的絕對路徑），純本機工具產物，
+# 不該進版控
+.graphify_*.json
+.graphify_*.txt
