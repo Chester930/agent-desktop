@@ -101,8 +101,30 @@ async def handle_mcp_servers_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "synced": synced})
 
 
+async def handle_mcp_servers_importable(request: web.Request) -> web.Response:
+    """Claude／Codex 原生已經有、但這個 app 的單一來源還沒採納的 MCP
+    server——resource_sync.py 的 import_native() 對 Agent/Skill 早就有，
+    這是 MCP 版本。"""
+    result = await mcp_sync.compute_importable()
+    return web.json_response(result)
+
+
+async def handle_mcp_servers_import(request: web.Request) -> web.Response:
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not _is_safe_mcp_name(name):
+        return web.json_response({"error": "invalid name"}, status=400)
+    result = await mcp_sync.import_native(name)
+    if not result.get("ok"):
+        status = 409 if result.get("error") == "already in registry" else 404
+        return web.json_response(result, status=status)
+    return web.json_response(result)
+
+
 def register_mcp_server_routes(app: web.Application, cors_add) -> None:
     """Register app-owned MCP server definition CRUD routes."""
     cors_add(app.router.add_get("/api/mcp-servers",         handle_mcp_servers_get))
     cors_add(app.router.add_post("/api/mcp-servers",        handle_mcp_servers_post))
     cors_add(app.router.add_delete("/api/mcp-servers/{name}", handle_mcp_servers_delete))
+    cors_add(app.router.add_get("/api/mcp-servers/importable", handle_mcp_servers_importable))
+    cors_add(app.router.add_post("/api/mcp-servers/import",    handle_mcp_servers_import))
