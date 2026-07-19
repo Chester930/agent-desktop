@@ -14,6 +14,7 @@ backend/build/
 backend/dist/
 backend/*.exe
 backend/*.spec
+backend/claude-backend/
 *.egg-info/
 
 # Electron build artifacts

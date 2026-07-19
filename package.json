@@ -7,7 +7,7 @@
     "start":           "electron . --dev",
     "frontend:build":  "cd frontend && npx ng build --base-href ./",
 
-    "backend:compile:win":   "cd backend && python -m pip install -r requirements-build.txt && python -m PyInstaller --onefile --name claude-backend --add-data \"presets;presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && copy dist\\claude-backend.exe claude-backend.exe",
+    "backend:compile:win":   "cd backend && python -m pip install -r requirements-build.txt && python -m PyInstaller --name claude-backend --add-data \"presets;presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && (if exist claude-backend rmdir /s /q claude-backend) && xcopy /E /I /Y dist\\claude-backend claude-backend",
     "backend:compile:mac":   "cd backend && python3 -m pip install -r requirements-build.txt && pyinstaller --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
     "backend:compile:linux": "cd backend && python3 -m pip install -r requirements-build.txt && pyinstaller --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
 
@@ -37,8 +37,8 @@
     "files": [
       "electron/**/*",
       "frontend/dist/**/*",
-      "backend/claude-backend.exe",
       "backend/claude-backend",
+      "backend/claude-backend/**/*",
       "backend/presets/**/*"
     ],
     "win": {

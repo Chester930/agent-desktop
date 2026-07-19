@@ -33,8 +33,13 @@ const srcBackendPy = path.join(ROOT_DIR, 'backend', 'main.py');
 const useSrc       = !app.isPackaged && fs.existsSync(srcFrontend) && fs.existsSync(srcBackendPy);
 
 // 打包後的路徑
+// Windows 用 PyInstaller --onedir（資料夾內含 exe + _internal/，安裝時就
+// 解壓好，啟動不用再解壓）；mac/linux 仍用 --onefile（單一執行檔），
+// 兩邊編譯腳本與輸出結構不同，這裡分開處理。
 const backendBin      = process.platform === 'win32' ? 'claude-backend.exe' : 'claude-backend';
-const bundledExe      = path.join(__dirname, '..', 'backend', backendBin);
+const bundledExe      = process.platform === 'win32'
+  ? path.join(__dirname, '..', 'backend', 'claude-backend', backendBin)
+  : path.join(__dirname, '..', 'backend', backendBin);
 const bundledFrontend = path.join(__dirname, '..', 'frontend', 'dist', 'frontend', 'browser', 'index.html');
 
 // ── 偵測 Claude Code / Codex 是否已安裝 ───────────────────
@@ -356,6 +361,53 @@ ipcMain.handle('secureStorage:isAvailable', () => safeStorage.isEncryptionAvaila
 ipcMain.handle('secureStorage:get', () => readSecureValue());
 ipcMain.handle('secureStorage:set', (_, value) => writeSecureValue(typeof value === 'string' ? value : ''));
 
+// ── 啟動中畫面 ────────────────────────────────────────────
+// 後端就緒前（PyInstaller onefile 解壓縮＋啟動，實測可能要 45~60 秒）
+// 主視窗完全不會出現，只有系統匣圖示，使用者很容易誤以為沒反應。
+// 顯示一個輕量提示視窗，讓等待期間至少有畫面回饋。
+let splashWindow = null;
+
+function showSplash() {
+  if (process.argv.includes('--hidden')) return; // 開機隱藏啟動不用顯示
+  splashWindow = new BrowserWindow({
+    width: 380, height: 220,
+    frame: false,
+    resizable: false,
+    backgroundColor: '#0d0d0d',
+    show: false,
+  });
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    body {
+      margin: 0; height: 100vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: #0d0d0d; color: #f3f4f6;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-app-region: drag;
+    }
+    .spinner {
+      width: 32px; height: 32px; margin-bottom: 16px;
+      border: 3px solid rgba(124,111,255,0.2);
+      border-top-color: #7c6fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+    p { margin: 0; font-size: 11.5px; color: #9ca3af; text-align: center; padding: 0 24px; }
+  </style></head><body>
+    <div class="spinner"></div>
+    <h3>Agent 桌面版啟動中…</h3>
+    <p>正在啟動後端服務，首次啟動可能需要較長時間，請稍候</p>
+  </body></html>`;
+  splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  splashWindow.once('ready-to-show', () => splashWindow?.show());
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+  splashWindow = null;
+}
+
 // ── 建立主視窗 ────────────────────────────────────────────
 function createWindow() {
   const preloadPath = path.join(__dirname, 'preload.js');
@@ -486,7 +538,9 @@ app.whenReady().then(async () => {
 
   if (isDocker) {
     // Docker 模式：後端已在容器內，直接等待連線
+    showSplash();
     const ready = await waitForBackend();
+    closeSplash();
     if (!ready) {
       dialog.showMessageBox({ message: 'Docker 後端未回應，請確認容器是否已啟動。\n執行：docker compose up -d' });
       app.quit(); return;
@@ -505,8 +559,10 @@ app.whenReady().then(async () => {
     return;
   }
 
+  showSplash();
   startBackend();
   const ready = await waitForBackend();
+  closeSplash();
   if (!ready) {
     dialog.showMessageBox({ message: '後端啟動逾時，請重新啟動應用程式。' });
     app.quit(); return;
