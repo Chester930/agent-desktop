@@ -41,6 +41,40 @@
     </div>
   }
 
+  <!-- 可認領的 MCP——Claude／Codex 原生已經有註冊、但還沒被這個 app 的
+       單一來源（App 管理清單）採納的項目，例如直接手動下 CLI 指令加的。
+       resource_sync.py 對 Agent/Skill 早就有這種「原生已有／registry
+       尚未採納」偵測，這是 MCP 版本。 -->
+  @if (importableMcp().length > 0) {
+    <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
+      <div class="mcp-section-title">
+        <span class="mcp-section-icon">📥</span>
+        <span>可認領的 MCP</span>
+        <span class="mcp-section-count">{{ importableMcp().length }}</span>
+        <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="refreshImportableMcp()" [disabled]="importableMcpLoading()">
+          {{ importableMcpLoading() ? '查詢中…' : '↻ 重新查詢' }}
+        </button>
+      </div>
+      <div class="panel-list">
+        @for (item of importableMcp(); track item.name) {
+          <div class="mcp-card-compact">
+            <div class="mcc-row">
+              <span class="mcc-name">{{ item.name }}</span>
+              @if (item.inClaude) { <span style="font-size:10px;color:#888;margin-left:6px;">Claude</span> }
+              @if (item.inCodex) { <span style="font-size:10px;color:#888;margin-left:6px;">Codex</span> }
+              @if (item.conflict) {
+                <span class="mcp-agent-hint" style="color:#e07070;" title="Claude 跟 Codex 兩邊的設定不一樣，認領會採用其中一份，請自行確認是否符合預期">設定不一致</span>
+              }
+              <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="adoptMcp(item.name)" [disabled]="importingMcpName() === item.name">
+                {{ importingMcpName() === item.name ? '認領中…' : '認領' }}
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  }
+
   <!-- Codex 這邊的 MCP 即時連線狀態——codex mcp list 只回報設定是否
        enabled，不像 claude mcp list 會主動健康檢查，這裡改由後端對每個
        Codex 註冊的 stdio server 做一次真實 MCP initialize 握手，比較慢

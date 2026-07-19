@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NgClass } from '@angular/common';
-import { ClaudeService, McpServer, McpServerDef } from '../../claude.service';
+import { ClaudeService, McpServer, McpServerDef, ImportableMcp } from '../../claude.service';
 
 @Component({
   selector: 'app-mcp-panel',
@@ -84,6 +84,42 @@ export class McpPanelComponent implements OnInit, OnDestroy {
     });
   }
 
+  // 可認領的 MCP——Claude／Codex 原生已經有，但這個 app 自己的單一來源
+  // （App 管理清單）還沒採納的項目（例如直接手動下 claude/codex mcp add
+  // 加的，沒經過「＋新增」）。跟 codexMcpStatus 不同，這裡只是讀設定檔跟
+  // `codex mcp list --json`，不用真的握手測試，夠快可以在 ngOnInit 自動
+  // 載入。
+  importableMcp = signal<ImportableMcp[]>([]);
+  importableMcpLoading = signal(false);
+  importingMcpName = signal<string | null>(null);
+
+  refreshImportableMcp() {
+    this.importableMcpLoading.set(true);
+    this.claude.getImportableMcp().subscribe({
+      next: (res) => { this.importableMcp.set(res.importable); this.importableMcpLoading.set(false); },
+      error: (e) => {
+        this.importableMcpLoading.set(false);
+        this.toast.emit({ text: `可認領 MCP 查詢失敗: ${e.message ?? e}`, type: 'error' });
+      },
+    });
+  }
+
+  adoptMcp(name: string) {
+    this.importingMcpName.set(name);
+    this.claude.importMcp(name).subscribe({
+      next: () => {
+        this.importingMcpName.set(null);
+        this.importableMcp.update(list => list.filter(i => i.name !== name));
+        this.toast.emit({ text: `已將 ${name} 認領進 App 管理，並同步到兩邊 CLI`, type: 'success' });
+        this.refreshList.emit();
+      },
+      error: (e) => {
+        this.importingMcpName.set(null);
+        this.toast.emit({ text: `認領 ${name} 失敗: ${e.error?.error ?? e.message ?? e}`, type: 'error' });
+      },
+    });
+  }
+
   /** 這個名稱是否也在 Claude 那邊註冊過（外部/本地清單或 App 管理定義）。
    * 用一般方法而非 computed()：@Input 是一般欄位不是 signal，computed()
    * 包住它們只會在建立當下算一次，不會隨父層更新的輸入重新求值。 */
@@ -95,6 +131,7 @@ export class McpPanelComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.claude.getLocalMcpConfig().subscribe(cfg => this.localMcpConfigs.set(cfg));
+    this.refreshImportableMcp();
   }
 
   ngOnDestroy() {

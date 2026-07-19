@@ -33,6 +33,14 @@ export interface McpServerDef {
   synced?: { claude: boolean; codex: boolean };
 }
 
+export interface ImportableMcp {
+  name: string;
+  inClaude: boolean;
+  inCodex: boolean;
+  conflict: boolean;
+  preview: McpServerDef;
+}
+
 export interface McpWorkflow {
   type: 'code' | 'node';
   content: string;
@@ -500,6 +508,12 @@ export class ClaudeService {
   }
   getCodexMcpStatus(): Observable<Record<string, { enabled: boolean; connected: boolean; checked: boolean; transportType: string }>> {
     return this.http.get<Record<string, { enabled: boolean; connected: boolean; checked: boolean; transportType: string }>>(`${this.api}/mcp/codex-status`);
+  }
+  getImportableMcp(): Observable<{ importable: ImportableMcp[] }> {
+    return this.http.get<{ importable: ImportableMcp[] }>(`${this.api}/mcp-servers/importable`);
+  }
+  importMcp(name: string): Observable<any> {
+    return this.http.post<any>(`${this.api}/mcp-servers/import`, { name });
   }
   getLocalMcpConfig(): Observable<Record<string, any>> {
     return this.http.get<Record<string, any>>(`${this.api}/mcp-local-config`);
