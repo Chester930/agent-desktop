@@ -1,20 +1,46 @@
 import { test, expect } from '@playwright/test';
 
-// 2026-07-10 team 協作優化健檢：發現 6 — HR 自動組隊「開始執行」後畫面上
-// 完全沒有任何進度顯示（teamRunOpen/teamRunState 這兩個 signal 從未被任何
-// template 讀取過）。修復後改成把 team run 掛在一則 chat message 上
+// 2026-07-10 team 協作優化健檢：發現 6 — 組隊「開始執行」後畫面上完全沒有
+// 任何進度顯示（teamRunOpen/teamRunState 這兩個 signal 從未被任何 template
+// 讀取過）。修復後改成把 team run 掛在一則 chat message 上
 // （ChatMessage.teamRun），比照 executeTeamCodePhase() 已經在畫面上正確
 // render 的模式。之前只驗證到 tsc/ng build 編譯通過，這裡用真實瀏覽器
 // （Playwright + Chromium）驗證修復後的 DOM 真的會顯示進度。
 //
-// 用 page.route() mock 掉 /api/hr/dispatch、/api/team/run、
-// /api/team/run/:id/stream 三個端點，不呼叫真實的 claude CLI（289 個真實
-// agent 會讓一次 HR dispatch 呼叫的 prompt 非常大、且後續多 member 循序
-// 執行會很慢很貴）——這個測試只關心「前端收到 SSE 事件後有沒有正確
-// render」，跟後端/CLI 的真實行為無關（後端邏輯已經在 pytest 用真實 CLI
-// 驗證過，見 docs/HANDOFF.md 十一節）。
+// 入口原本是一次性的 HR 自動組隊，該功能已移除（改用單一 Agent + Plan
+// 模式取代），這裡改用 Project（深度組隊）當入口——執行階段兩者共用同一套
+// _dispatchTeamRun()／/api/team/run，這個測試真正關心的「SSE 事件有沒有
+// 正確 render 進 chat 訊息」跟走哪個入口無關。
+//
+// 用 page.route() mock 掉 /api/hr/plan-team、/api/team/run、
+// /api/team/run/:id/stream 幾個端點，不呼叫真實的 claude CLI——這個測試
+// 只關心「前端收到 SSE 事件後有沒有正確 render」，跟後端/CLI 的真實行為
+// 無關（後端邏輯已經在 pytest 用真實 CLI 驗證過，見 docs/HANDOFF.md 十一節）。
 
+const PLAN_RUN_ID = 'mock-plan-run-e2e-1';
 const RUN_ID = 'mock-run-e2e-1';
+
+const PLAN_SSE_BODY = [
+  `data: ${JSON.stringify({ type: 'plan_step', phase: 'plan', status: 'running' })}`,
+  '',
+  `data: ${JSON.stringify({ type: 'plan_step', phase: 'negotiate', status: 'done' })}`,
+  '',
+  `data: ${JSON.stringify({ type: 'done', summary: '已規劃完成' })}`,
+  '',
+  '',
+].join('\n');
+
+const PLAN_RESULT = {
+  status: 'done',
+  leader: 'mock-agent-1',
+  reused_team_id: '',
+  team_id: 'mock-auto-team',
+  plan_doc: '# Plan\n\n目標是做點什麼。',
+  project_path: '',
+  members: [
+    { agent: 'mock-agent-1', role: 'Coder', task_doc: '請幫我寫一句話', consensus: true, rounds: 1 },
+  ],
+};
 
 const SSE_BODY = [
   `data: ${JSON.stringify({ type: 'step_start', step: 0, agent: 'mock-agent-1', role: 'Coder' })}`,
@@ -36,18 +62,29 @@ test.describe('Team Run 進度顯示（發現 6 修復驗證）', () => {
       localStorage.setItem('claude_onboarding_done', '1');
     });
 
-    await page.route('**/api/hr/dispatch', async (route) => {
+    await page.route('**/api/hr/plan-team', async (route) => {
+      if (route.request().method() !== 'POST') { await route.fallback(); return; }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          name: 'mock-auto-team',
-          description: '測試用自動組隊',
-          execution_mode: 'sequential',
-          members: [
-            { agent: 'mock-agent-1', role: 'Coder', input_memory: [], output_memory: [] },
-          ],
-        }),
+        body: JSON.stringify({ ok: true, run_id: PLAN_RUN_ID }),
+      });
+    });
+
+    await page.route(`**/api/hr/plan-team/${PLAN_RUN_ID}/stream`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' },
+        body: PLAN_SSE_BODY,
+      });
+    });
+
+    await page.route(`**/api/hr/plan-team/${PLAN_RUN_ID}`, async (route) => {
+      if (route.request().method() !== 'GET') { await route.fallback(); return; }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(PLAN_RESULT),
       });
     });
 
@@ -83,23 +120,24 @@ test.describe('Team Run 進度顯示（發現 6 修復驗證）', () => {
     });
   });
 
-  test('HR 自動組隊「開始執行」後，chat 訊息裡真的會顯示團隊進度', async ({ page }) => {
+  test('Project「開始執行」後，chat 訊息裡真的會顯示團隊進度', async ({ page }) => {
     await page.goto('/');
 
     const input = page.locator('.chat-input');
     await input.click();
     await input.fill('請幫我寫一句話');
 
-    await page.locator('.hr-btn').filter({ hasNotText: '深度組隊' }).click();
+    await page.locator('.project-btn').click();
 
-    // HR plan 預覽 modal 出現（mocked 回應）
-    await expect(page.locator('.editor-modal')).toBeVisible();
-    await expect(page.locator('.editor-modal input.editor-input').first()).toHaveValue('mock-auto-team');
+    // Project 規劃結果審閱 modal 出現（mocked 回應）
+    const modal = page.locator('.editor-modal', { hasText: 'Project 規劃結果' });
+    await expect(modal).toBeVisible({ timeout: 10000 });
+    await expect(modal).toContainText('mock-agent-1');
 
-    await page.locator('button', { hasText: '開始執行' }).click();
+    await modal.locator('button', { hasText: '開始執行' }).click();
 
     // modal 應該關閉
-    await expect(page.locator('.editor-modal')).not.toBeVisible();
+    await expect(modal).not.toBeVisible();
 
     // 核心斷言：chat 訊息裡必須出現 embedded team run 進度區塊
     // （修復前：teamRunState/teamRunOpen 沒有任何 template 讀取，畫面上

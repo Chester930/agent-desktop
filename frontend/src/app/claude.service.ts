@@ -361,12 +361,8 @@ export class ClaudeService {
     });
   }
 
-  dispatchHR(task: string, engine?: string): Observable<any> {
-    return this.http.post<any>(`${this.api}/hr/dispatch`, { task, engine: engine ?? '' });
-  }
-
-  // 深度組隊（Leader 協商規劃）——跟 dispatchHR 不同，這是非同步背景流程
-  // （挑 Leader → Leader 決定組隊 → Leader 逐一跟成員協商 Task），要用
+  // Project（深度組隊，Leader 協商規劃）——非同步背景流程（挑 Leader →
+  // Leader 決定組隊 → Leader 逐一跟成員協商 Task），要用
   // planTeam() 起頭拿 run_id，再用 streamPlanTeam()/getPlanTeam() 追蹤進度
   // 跟拿最終結果，跟現有 runTeam()/streamTeamRun() 是同一套模式。
   planTeam(task: string, cwd?: string, model?: string, engine?: string): Observable<{ ok: boolean; run_id: string }> {

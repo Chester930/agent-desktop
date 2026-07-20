@@ -1206,11 +1206,8 @@
               {{ isTranscribing() ? '...' : '🎙️' }}
             </button>
             @if (!activeChat?.teamId) {
-              <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading() || deepPlanLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
-                {{ hrLoading() ? '🤖 組隊中…' : '🤖 自動組隊' }}
-              </button>
-              <button class="sb-btn hr-btn deep-team-btn" (click)="dispatchDeepTeam()" [disabled]="!inputText.trim() || isStreaming() || hrLoading() || deepPlanLoading()" [title]="'🤝 深度組隊：與 Agent CLI 討論計畫、挑選 Leader、Leader 與每位成員協商 Task 後再組隊'">
-                {{ deepPlanLoading() ? ('🤝 ' + (deepPlanPhaseLabel() || '規劃中…')) : '🤝 深度組隊' }}
+              <button class="sb-btn project-btn" (click)="dispatchDeepTeam()" [disabled]="!inputText.trim() || isStreaming() || deepPlanLoading()" [title]="'🤝 Project：與 Agent CLI 討論計畫、挑選 Leader、Leader 與每位成員協商 Task 後再組隊'">
+                {{ deepPlanLoading() ? ('🤝 ' + (deepPlanPhaseLabel() || '規劃中…')) : '🤝 Project' }}
               </button>
             }
           </div>
@@ -1251,7 +1248,7 @@
                   <div class="ihp-title">其他按鈕</div>
                   <div class="ihp-item">➕ <b>附件</b> — 上傳圖片／文字／程式碼檔案給模型參考</div>
                   <div class="ihp-item">🎙️ <b>語音輸入</b> — 錄音並自動轉成文字</div>
-                  <div class="ihp-item">🤖 <b>自動組隊</b> — 分析輸入的任務內容，自動建立臨時 Team 來完成</div>
+                  <div class="ihp-item">🤝 <b>Project</b> — 與 Agent CLI 討論計畫、挑選 Leader，Leader 再與每位成員協商 Task 後組隊執行</div>
                   <div class="ihp-item"><span class="status-dot online" style="margin:0 4px 0 0;"></span><b>狀態燈</b> — 綠色代表後端連線正常、用量充足；紅色代表斷線或已達用量限制</div>
                 </div>
               }
@@ -2041,80 +2038,13 @@
 
 
 
-  <!-- ── HR Agent 編輯計畫 Modal ─────────────────────────────────────────── -->
-  @if (hrPlanOpen()) {
-    <div class="editor-modal-overlay" (click)="hrPlanOpen.set(false)"></div>
-    <div class="editor-modal" (click)="$event.stopPropagation()">
-      <div class="editor-modal-header">
-        <span class="editor-modal-title">🤖 HR Agent 臨時組隊計畫</span>
-        <button class="usage-modal-close" (click)="hrPlanOpen.set(false)">✕</button>
-      </div>
-      <div class="editor-modal-body">
-        <!-- 基本資訊 -->
-        <div class="editor-section">
-          <div class="editor-section-title">團隊設定</div>
-          <label class="editor-label">團隊名稱
-            <input class="editor-input" [value]="hrTeamPlan()?.name || ''" (input)="hrUpdateStep(-1, 'name', $any($event.target).value)" placeholder="auto-team">
-          </label>
-          <label class="editor-label">說明 / 組隊理由
-            <input class="editor-input" [value]="hrTeamPlan()?.description || ''" (input)="hrUpdateStep(-1, 'description', $any($event.target).value)" placeholder="組隊理由">
-          </label>
-        </div>
-        <!-- 執行步驟 -->
-        <div class="editor-section">
-          <div class="editor-section-title">執行步驟順序</div>
-          @for (m of hrTeamPlan()?.members ?? []; track $index) {
-            <div class="team-member-editor-row" style="flex-direction: column; align-items: stretch; border: 1px solid #333; padding: 10px; border-radius: 6px; margin-bottom: 12px; gap: 8px;">
-              <div style="display:flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: bold; color: #6ee7b7;">Step {{ $index + 1 }}</span>
-                <button class="del-btn" (click)="hrRemoveStep($index)">✕ 刪除步驟</button>
-              </div>
-              <div style="display:flex; gap:8px;">
-                <select class="memory-project-select" style="flex:1"
-                  [value]="m.agent"
-                  (change)="hrUpdateStep($index, 'agent', $any($event.target).value)">
-                  <option value="">選擇 Agent…</option>
-                  @for (a of dropdownAgents(); track a.id) {
-                    <option [value]="a.id">@{{ a.name }}</option>
-                  }
-                </select>
-                <input class="editor-input" style="flex:2" placeholder="角色與具體工作說明"
-                  [value]="m.role"
-                  (input)="hrUpdateStep($index, 'role', $any($event.target).value)">
-              </div>
-              <div style="display:flex; gap:8px;">
-                <label style="flex:1; font-size: 11px; color: #888;">
-                  讀取 Memory (以逗號分隔)
-                  <input class="editor-input" style="width:100%; font-size: 12px; margin-top:2px;"
-                    [value]="m.input_memory?.join(', ') || ''"
-                    (input)="hrUpdateStep($index, 'input_memory', $any($event.target).value)">
-                </label>
-                <label style="flex:1; font-size: 11px; color: #888;">
-                  寫入 Memory (以逗號分隔)
-                  <input class="editor-input" style="width:100%; font-size: 12px; margin-top:2px;"
-                    [value]="m.output_memory?.join(', ') || ''"
-                    (input)="hrUpdateStep($index, 'output_memory', $any($event.target).value)">
-                </label>
-              </div>
-            </div>
-          }
-          <button class="btn-secondary" style="width:100%;margin-top:8px;font-size:12px;" (click)="hrAddStep()">＋ 新增執行步驟</button>
-        </div>
-      </div>
-      <div class="editor-modal-footer">
-        <div style="flex:1"></div>
-        <button class="btn-secondary" (click)="hrPlanOpen.set(false)">取消</button>
-        <button class="btn-primary" [disabled]="!(hrTeamPlan()?.members?.length)" (click)="submitHRTeamRun()">▶ 開始執行</button>
-      </div>
-    </div>
-  }
 
-  <!-- ── 深度組隊 審閱 Modal ─────────────────────────────────────────────── -->
+  <!-- ── Project 審閱 Modal ─────────────────────────────────────────────── -->
   @if (deepPlanOpen()) {
     <div class="editor-modal-overlay" (click)="deepPlanOpen.set(false)"></div>
     <div class="editor-modal" (click)="$event.stopPropagation()">
       <div class="editor-modal-header">
-        <span class="editor-modal-title">🤝 深度組隊規劃結果</span>
+        <span class="editor-modal-title">🤝 Project 規劃結果</span>
         <button class="usage-modal-close" (click)="deepPlanOpen.set(false)">✕</button>
       </div>
       <div class="editor-modal-body">

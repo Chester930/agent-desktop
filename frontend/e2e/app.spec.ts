@@ -206,18 +206,6 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
     }
   });
 
-  test('後端 /api/hr/dispatch 缺少 task 回傳 400', async ({ request }) => {
-    const res = await request.post('http://localhost:8765/api/hr/dispatch', {
-      data: {},
-      timeout: 2000,
-    }).catch(() => null);
-    if (!res) { test.skip(true, '後端未啟動'); return; }
-    if (res.status() === 0) { test.skip(); return; }
-    expect(res.status()).toBe(400);
-    const body = await res.json();
-    expect(body).toHaveProperty('error');
-  });
-
   test('後端 /api/teams 回傳清單', async ({ request }) => {
     const res = await request.get('http://localhost:8765/api/teams', { timeout: 2000 }).catch(() => null);
     if (!res) { test.skip(true, '後端未啟動'); return; }
@@ -368,11 +356,10 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
     await expect(schedulingTab).toBeVisible();
   });
 
-  test('自動組隊按鈕（HR）存在', async ({ page }) => {
+  test('Project 按鈕存在', async ({ page }) => {
     await page.goto('/');
-    // HR 按鈕帶有「自動組隊」或 data-testid="hr-btn" 或 class="hr-btn"
-    const hrBtn = page.locator('.hr-btn, [title*="自動組隊"], button:has-text("自動組隊")').first();
-    await expect(hrBtn).toBeVisible();
+    const projectBtn = page.locator('.project-btn, button:has-text("Project")').first();
+    await expect(projectBtn).toBeVisible();
   });
 
 });

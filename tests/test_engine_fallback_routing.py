@@ -253,17 +253,6 @@ async def test_team_execute_reports_error_triplet_when_neither_available(client,
     assert any(e.get("type") == "exec_text" and "都無法使用" in e.get("text", "") for e in agent_events)
 
 
-# ── _run_hr_agent ────────────────────────────────────────────────────────────
-
-async def test_hr_dispatch_reports_error_when_neither_available(client, monkeypatch, app):
-    monkeypatch.setattr(availability, "get_status", _neither_available())
-
-    resp = await client.post("/api/hr/dispatch", json={"task": "幫我組一個團隊"})
-    assert resp.status == 500
-    body = await resp.json()
-    assert "都無法使用" in body["error"]
-
-
 # ── _agent_run_capture (Team Run) ────────────────────────────────────────────
 
 async def test_agent_run_capture_falls_back_and_never_raises(monkeypatch, app):

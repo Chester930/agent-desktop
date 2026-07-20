@@ -663,28 +663,6 @@ class TestHRAgent:
         assert body == []
         database.REGISTRY_AGENTS_DIR = original
 
-    async def test_hr_dispatch_requires_task(self, client):
-        """POST /api/hr/dispatch 不帶 task 應回傳 400"""
-        resp = await client.post("/api/hr/dispatch", json={})
-        assert resp.status == 400
-        body = await resp.json()
-        assert "error" in body
-
-    async def test_hr_dispatch_no_agents_500(self, client, tmp_claude_home):
-        """沒有任何 agent 時 HR dispatch 應回傳錯誤（不需要呼叫 Claude CLI）"""
-        import database
-        empty_dir = tmp_claude_home / "agents_empty"
-        empty_dir.mkdir(exist_ok=True)
-        original = database.REGISTRY_AGENTS_DIR
-        database.REGISTRY_AGENTS_DIR = empty_dir
-        resp = await client.post("/api/hr/dispatch", json={"task": "任意任務"})
-        body = await resp.json()
-        # 預期 500 + error 含有「尚未建立」
-        assert resp.status == 500
-        assert "error" in body
-        assert "Agent" in body["error"] or "agent" in body["error"].lower()
-        database.REGISTRY_AGENTS_DIR = original
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Phase 3 — Sessions & FTS

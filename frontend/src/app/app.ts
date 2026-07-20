@@ -2309,8 +2309,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // ── Team Run (Phase 3) ────────────────────────────────────────────────────
   // 2026-07-10 修復：teamRunOpen/teamRunState 這兩個 signal 從未被任何
   // template 讀取過，openTeamRun()/submitTeamRun() 也從未被任何按鈕呼叫過
-  // ——結果是唯一真正可從 UI 觸發的入口 submitHRTeamRun()（🤖 自動組隊）點下
-  // 「▶ 開始執行」後，後端會真的啟動一個會消耗 API 額度的 team run，但畫面上
+  // ——結果是唯一真正可從 UI 觸發的入口（組隊計畫審閱彈窗的「▶ 開始執行」）點下
+  // 後，後端會真的啟動一個會消耗 API 額度的 team run，但畫面上
   // 完全沒有任何進度顯示、沒有結果、沒有錯誤訊息——使用者只會看到彈窗關閉，
   // 像什麼都沒發生一樣。改成比照 executeTeamCodePhase()（/api/team/execute
   // 那條路徑，已經在畫面上正確 render）的模式：把 team run 掛在一則 chat
@@ -2437,103 +2437,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     );
   }
 
-  // ── HR Agent (Phase 4) ────────────────────────────────────────────────────
-  hrLoading  = signal(false);
-  hrPlanOpen = signal(false);
-  hrTeamPlan = signal<any>(null);
-  hrError    = signal<string | null>(null);
-
-  dispatchHR() {
-    const task = this.inputText.trim();
-    if (!task) return;
-    this.hrLoading.set(true);
-    this.hrError.set(null);
-
-    const agentEngine = this.settings.get().agentEngine;
-    this.claude.dispatchHR(task, agentEngine).subscribe({
-      next: (plan) => {
-        this.hrLoading.set(false);
-        if (plan.error) {
-          this.hrError.set(plan.error);
-          this.showToast(plan.error, 'error');
-        } else {
-          if (plan.engine_notice) this.showToast(plan.engine_notice, 'info', 4000);
-          // Normalise plan fields to avoid undefined errors
-          if (!plan.members) plan.members = [];
-          plan.members.forEach((m: any) => {
-            if (!m.input_memory) m.input_memory = [];
-            if (!m.output_memory) m.output_memory = [];
-          });
-          this.hrTeamPlan.set(plan);
-          this.hrPlanOpen.set(true);
-        }
-      },
-      error: (err) => {
-        this.hrLoading.set(false);
-        const errMsg = err.error?.error || err.message || '自動組隊失敗';
-        this.hrError.set(errMsg);
-        this.showToast(errMsg, 'error');
-      }
-    });
-  }
-
-  hrAddStep() {
-    const plan = this.hrTeamPlan();
-    if (!plan) return;
-    const members = [...(plan.members || []), { agent: '', role: '', input_memory: [], output_memory: [] }];
-    this.hrTeamPlan.set({ ...plan, members });
-  }
-
-  hrRemoveStep(idx: number) {
-    const plan = this.hrTeamPlan();
-    if (!plan) return;
-    const members = (plan.members || []).filter((_: any, i: number) => i !== idx);
-    this.hrTeamPlan.set({ ...plan, members });
-  }
-
-  hrUpdateStep(idx: number, field: string, val: any) {
-    const plan = this.hrTeamPlan();
-    if (!plan) return;
-    if (idx === -1) {
-      this.hrTeamPlan.set({ ...plan, [field]: val });
-      return;
-    }
-    const members = (plan.members || []).map((m: any, i: number) => {
-      if (i === idx) {
-        if (field === 'input_memory' || field === 'output_memory') {
-          return { ...m, [field]: typeof val === 'string' ? val.split(',').map((x: string) => x.trim()).filter((x: string) => x) : val };
-        }
-        return { ...m, [field]: val };
-      }
-      return m;
-    });
-    this.hrTeamPlan.set({ ...plan, members });
-  }
-
-  submitHRTeamRun() {
-    const plan = this.hrTeamPlan();
-    const task = this.inputText.trim();
-    if (!plan || !task) return;
-
-    this.hrPlanOpen.set(false);
-    this.expandedOutputs.set([]);
-    this.inputText = '';
-
-    const tabId = this.activeChatId();
-    const s = this.settings.get();
-    this._dispatchTeamRun(
-      tabId, '', task, s.workDir, s.model,
-      plan.name || '自動組隊任務', plan.members, plan,
-    );
-  }
-
-  // ── 深度組隊（Leader 協商規劃，Phase X）───────────────────────────────────
-  // 跟上面一次性生成的自動組隊（HR Agent）不同：這裡是背景多階段流程
-  // （產生 Plan → 挑 Leader → Leader 決定組隊 → Leader 逐一跟每個成員協商
-  // Task 到共識），透過 SSE 即時回報目前在哪個階段。規劃完成後開審閱彈窗，
-  // 使用者確認後才真的送去執行——執行本身完全重用既有的
-  // _dispatchTeamRun()／submitHRTeamRun() 送出邏輯，只是每個成員的 role
-  // 換成協商定案的完整 Task 內容，不是一句話的職責描述。
+  // ── Project（深度組隊，Leader 協商規劃）───────────────────────────────────
+  // 背景多階段流程（產生 Plan → 挑 Leader → Leader 決定組隊 → Leader 逐一
+  // 跟每個成員協商 Task 到共識），透過 SSE 即時回報目前在哪個階段。規劃
+  // 完成後開審閱彈窗，使用者確認後才真的送去執行——執行本身完全重用既有的
+  // _dispatchTeamRun() 送出邏輯，只是每個成員的 role 換成協商定案的完整
+  // Task 內容，不是一句話的職責描述。
   deepPlanLoading = signal(false);
   deepPlanPhase = signal('');
   deepPlanResult = signal<any>(null);
@@ -2577,7 +2486,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
               next: (result) => {
                 this.deepPlanLoading.set(false);
                 if (result.status === 'error') {
-                  this.showToast(result.summary || '深度組隊規劃失敗', 'error');
+                  this.showToast(result.summary || 'Project 規劃失敗', 'error');
                   return;
                 }
                 this.deepPlanResult.set(result);
@@ -2591,13 +2500,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           },
           () => {
             this.deepPlanLoading.set(false);
-            this.showToast('深度組隊規劃連線中斷', 'error');
+            this.showToast('Project 規劃連線中斷', 'error');
           },
         );
       },
       error: (err) => {
         this.deepPlanLoading.set(false);
-        const errMsg = err.error?.error || err.message || '深度組隊派發失敗';
+        const errMsg = err.error?.error || err.message || 'Project 派發失敗';
         this.showToast(errMsg, 'error');
       },
     });
@@ -2630,7 +2539,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const s = this.settings.get();
     const members = (result.members || []).map((m: any) => ({ agent: m.agent, role: m.task_doc }));
     const inlineTeam = {
-      name: result.team_id || '深度組隊任務',
+      name: result.team_id || 'Project 任務',
       members,
       execution_mode: 'sequential',
       leader: result.leader,

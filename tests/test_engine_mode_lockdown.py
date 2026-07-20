@@ -212,37 +212,6 @@ async def test_team_execute_locked_to_claude_ignores_agent_codex_override(client
     assert not codex_called, "agent 的 engine: codex 在鎖定 'claude' 時不應該生效"
 
 
-# ── _run_hr_agent ────────────────────────────────────────────────────────────
-
-async def test_hr_dispatch_locked_ignores_request_engine(client, monkeypatch, app, tmp_path):
-    import main
-    _set_engine_mode(tmp_path, "claude")
-
-    from engines import codex_engine
-    codex_called = False
-
-    async def fake_codex_run_turn(**kwargs):
-        nonlocal codex_called
-        codex_called = True
-        return None
-
-    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
-
-    from engines import claude_engine
-    from engines.base import RunResult
-
-    async def fake_claude_run_turn(**kwargs):
-        return RunResult(output='{"name":"t","description":"d","execution_mode":"sequential","members":[]}',
-                          session_id="sid-hr-locked")
-
-    monkeypatch.setattr(claude_engine, "run_turn", fake_claude_run_turn)
-
-    # 前端明明送了 engine: "codex"，但鎖定 'claude' 時要被忽略
-    resp = await client.post("/api/hr/dispatch", json={"task": "幫我組一個團隊", "engine": "codex"})
-    assert resp.status == 200
-    assert not codex_called, "HR 派發 request body 的 engine: codex 在鎖定 'claude' 時不應該生效"
-
-
 # ── _agent_run_capture (Team Run) ────────────────────────────────────────────
 
 async def test_agent_run_capture_locked_ignores_frontmatter_and_request(monkeypatch, app, tmp_path):
