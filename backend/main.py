@@ -3940,13 +3940,14 @@ def build_app() -> web.Application:
     import sys
     sys.path.append(str(Path(__file__).parent))
     try:
-        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes, register_resource_sync_routes
+        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_team_planning_routes, register_mcp_server_routes, register_engine_routes, register_resource_sync_routes
     except ImportError:
-        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes, register_resource_sync_routes
+        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_team_planning_routes, register_mcp_server_routes, register_engine_routes, register_resource_sync_routes
 
     register_agent_routes(app, cors.add)
     register_skill_routes(app, cors.add)
     register_team_routes(app, cors.add)
+    register_team_planning_routes(app, cors.add)
     register_mcp_server_routes(app, cors.add)
     register_engine_routes(app, cors.add)
     register_resource_sync_routes(app, cors.add)

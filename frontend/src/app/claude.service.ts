@@ -365,6 +365,51 @@ export class ClaudeService {
     return this.http.post<any>(`${this.api}/hr/dispatch`, { task, engine: engine ?? '' });
   }
 
+  // 深度組隊（Leader 協商規劃）——跟 dispatchHR 不同，這是非同步背景流程
+  // （挑 Leader → Leader 決定組隊 → Leader 逐一跟成員協商 Task），要用
+  // planTeam() 起頭拿 run_id，再用 streamPlanTeam()/getPlanTeam() 追蹤進度
+  // 跟拿最終結果，跟現有 runTeam()/streamTeamRun() 是同一套模式。
+  planTeam(task: string, cwd?: string, model?: string, engine?: string): Observable<{ ok: boolean; run_id: string }> {
+    return this.http.post<{ ok: boolean; run_id: string }>(`${this.api}/hr/plan-team`, {
+      task, cwd: cwd ?? '', model: model ?? '', engine: engine ?? '',
+    });
+  }
+
+  getPlanTeam(runId: string): Observable<any> {
+    return this.http.get<any>(`${this.api}/hr/plan-team/${runId}`);
+  }
+
+  streamPlanTeam(
+    runId: string,
+    onEvent: (ev: any) => void,
+    onDone: () => void,
+    onError: (e: any) => void,
+  ): () => void {
+    const controller = new AbortController();
+    fetch(`${this.api}/hr/plan-team/${runId}/stream`, { signal: controller.signal })
+      .then(async (res) => {
+        if (!res.body) { onError(new Error('no response body')); return; }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop() ?? '';
+          for (const part of parts) {
+            const line = part.replace(/^data: /, '').trim();
+            if (!line) continue;
+            try { onEvent(JSON.parse(line)); } catch {}
+          }
+        }
+        onDone();
+      })
+      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
+    return () => controller.abort();
+  }
+
   getTeamRun(runId: string): Observable<TeamRun> {
     return this.http.get<TeamRun>(`${this.api}/team/run/${runId}`);
   }

@@ -1206,8 +1206,11 @@
               {{ isTranscribing() ? '...' : '🎙️' }}
             </button>
             @if (!activeChat?.teamId) {
-              <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
+              <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading() || deepPlanLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
                 {{ hrLoading() ? '🤖 組隊中…' : '🤖 自動組隊' }}
+              </button>
+              <button class="sb-btn hr-btn deep-team-btn" (click)="dispatchDeepTeam()" [disabled]="!inputText.trim() || isStreaming() || hrLoading() || deepPlanLoading()" [title]="'🤝 深度組隊：與 Agent CLI 討論計畫、挑選 Leader、Leader 與每位成員協商 Task 後再組隊'">
+                {{ deepPlanLoading() ? ('🤝 ' + (deepPlanPhaseLabel() || '規劃中…')) : '🤝 深度組隊' }}
               </button>
             }
           </div>
@@ -2102,6 +2105,62 @@
         <div style="flex:1"></div>
         <button class="btn-secondary" (click)="hrPlanOpen.set(false)">取消</button>
         <button class="btn-primary" [disabled]="!(hrTeamPlan()?.members?.length)" (click)="submitHRTeamRun()">▶ 開始執行</button>
+      </div>
+    </div>
+  }
+
+  <!-- ── 深度組隊 審閱 Modal ─────────────────────────────────────────────── -->
+  @if (deepPlanOpen()) {
+    <div class="editor-modal-overlay" (click)="deepPlanOpen.set(false)"></div>
+    <div class="editor-modal" (click)="$event.stopPropagation()">
+      <div class="editor-modal-header">
+        <span class="editor-modal-title">🤝 深度組隊規劃結果</span>
+        <button class="usage-modal-close" (click)="deepPlanOpen.set(false)">✕</button>
+      </div>
+      <div class="editor-modal-body">
+        <div class="editor-section">
+          <div class="editor-section-title">
+            Leader：@{{ deepPlanResult()?.leader }}
+            @if (deepPlanResult()?.reused_team_id) {
+              <span style="font-weight:normal; color:#888; font-size:12px;"> （沿用既有 Team「{{ deepPlanResult()?.reused_team_id }}」）</span>
+            }
+          </div>
+          <details>
+            <summary style="cursor:pointer; color:#6ee7b7; font-size:13px;">📄 專案計畫文件</summary>
+            <div class="editor-input" style="white-space:pre-wrap; margin-top:8px; max-height:200px; overflow-y:auto; font-size:12px;">{{ deepPlanResult()?.plan_doc }}</div>
+          </details>
+        </div>
+        <div class="editor-section">
+          <div class="editor-section-title">已協商定案的 Task（{{ deepPlanResult()?.members?.length || 0 }} 位成員）</div>
+          @for (m of deepPlanResult()?.members ?? []; track m.agent) {
+            <div class="team-member-editor-row" style="flex-direction: column; align-items: stretch; border: 1px solid #333; padding: 10px; border-radius: 6px; margin-bottom: 12px; gap: 8px;"
+                 [style.border-color]="m.consensus ? '#333' : '#f59e0b'">
+              <div style="display:flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: bold; color: #6ee7b7;">@{{ m.agent }}</span>
+                @if (m.consensus) {
+                  <span style="font-size:11px; color:#6ee7b7;">✅ 已達成共識（{{ m.rounds }} 輪）</span>
+                } @else {
+                  <span style="font-size:11px; color:#f59e0b;">⚠ 未達成共識（談了 {{ m.rounds }} 輪，請檢查以下 Task 是否可用）</span>
+                }
+              </div>
+              <div class="editor-input" style="white-space:pre-wrap; font-size:12px; max-height:160px; overflow-y:auto;">{{ m.task_doc }}</div>
+              @if (!m.consensus && m.last_feedback) {
+                <div style="font-size:11px; color:#f59e0b;">
+                  對方最後一輪的回饋：
+                  <div class="editor-input" style="white-space:pre-wrap; font-size:12px; max-height:100px; overflow-y:auto; margin-top:4px;">{{ m.last_feedback }}</div>
+                </div>
+              }
+            </div>
+          }
+          @if (deepPlanResult()?.project_path) {
+            <div style="font-size:11px; color:#888;">已寫入 Project：{{ deepPlanResult()?.project_path }}</div>
+          }
+        </div>
+      </div>
+      <div class="editor-modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn-secondary" (click)="deepPlanOpen.set(false)">取消</button>
+        <button class="btn-primary" [disabled]="!(deepPlanResult()?.members?.length)" (click)="submitDeepTeamPlan()">▶ 開始執行</button>
       </div>
     </div>
   }

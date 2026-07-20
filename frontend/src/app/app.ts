@@ -2527,6 +2527,120 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     );
   }
 
+  // ── 深度組隊（Leader 協商規劃，Phase X）───────────────────────────────────
+  // 跟上面一次性生成的自動組隊（HR Agent）不同：這裡是背景多階段流程
+  // （產生 Plan → 挑 Leader → Leader 決定組隊 → Leader 逐一跟每個成員協商
+  // Task 到共識），透過 SSE 即時回報目前在哪個階段。規劃完成後開審閱彈窗，
+  // 使用者確認後才真的送去執行——執行本身完全重用既有的
+  // _dispatchTeamRun()／submitHRTeamRun() 送出邏輯，只是每個成員的 role
+  // 換成協商定案的完整 Task 內容，不是一句話的職責描述。
+  deepPlanLoading = signal(false);
+  deepPlanPhase = signal('');
+  deepPlanResult = signal<any>(null);
+  deepPlanOpen = signal(false);
+  deepPlanNegotiating = signal<Set<string>>(new Set());
+
+  private static readonly DEEP_PLAN_PHASE_LABELS: Record<string, string> = {
+    plan: '產生計畫中',
+    leader: '挑選 Leader 中',
+    compose: 'Leader 決定組隊中',
+    negotiate: '協商 Task 中',
+  };
+
+  deepPlanPhaseLabel(): string {
+    const phase = this.deepPlanPhase();
+    const label = App.DEEP_PLAN_PHASE_LABELS[phase] || '';
+    const negotiating = this.deepPlanNegotiating();
+    if (phase === 'negotiate' && negotiating.size > 0) {
+      return `${label}（${Array.from(negotiating).join('、')}）`;
+    }
+    return label;
+  }
+
+  dispatchDeepTeam() {
+    const task = this.inputText.trim();
+    if (!task) return;
+    this.deepPlanLoading.set(true);
+    this.deepPlanPhase.set('');
+    this.deepPlanResult.set(null);
+    this.deepPlanNegotiating.set(new Set());
+
+    const s = this.settings.get();
+    this.claude.planTeam(task, s.workDir, s.model, s.agentEngine).subscribe({
+      next: (r) => {
+        const runId = r.run_id;
+        this.claude.streamPlanTeam(
+          runId,
+          (ev) => this._applyDeepPlanEvent(ev),
+          () => {
+            this.claude.getPlanTeam(runId).subscribe({
+              next: (result) => {
+                this.deepPlanLoading.set(false);
+                if (result.status === 'error') {
+                  this.showToast(result.summary || '深度組隊規劃失敗', 'error');
+                  return;
+                }
+                this.deepPlanResult.set(result);
+                this.deepPlanOpen.set(true);
+              },
+              error: () => {
+                this.deepPlanLoading.set(false);
+                this.showToast('無法取得規劃結果', 'error');
+              },
+            });
+          },
+          () => {
+            this.deepPlanLoading.set(false);
+            this.showToast('深度組隊規劃連線中斷', 'error');
+          },
+        );
+      },
+      error: (err) => {
+        this.deepPlanLoading.set(false);
+        const errMsg = err.error?.error || err.message || '深度組隊派發失敗';
+        this.showToast(errMsg, 'error');
+      },
+    });
+  }
+
+  private _applyDeepPlanEvent(ev: any) {
+    if (ev.type === 'plan_step') {
+      this.deepPlanPhase.set(ev.phase);
+    } else if (ev.type === 'negotiate_start') {
+      this.deepPlanNegotiating.update(s => new Set(s).add(ev.agent));
+    } else if (ev.type === 'negotiate_done') {
+      this.deepPlanNegotiating.update(s => {
+        const next = new Set(s);
+        next.delete(ev.agent);
+        return next;
+      });
+    }
+  }
+
+  submitDeepTeamPlan() {
+    const result = this.deepPlanResult();
+    const task = this.inputText.trim();
+    if (!result || !task) return;
+
+    this.deepPlanOpen.set(false);
+    this.expandedOutputs.set([]);
+    this.inputText = '';
+
+    const tabId = this.activeChatId();
+    const s = this.settings.get();
+    const members = (result.members || []).map((m: any) => ({ agent: m.agent, role: m.task_doc }));
+    const inlineTeam = {
+      name: result.team_id || '深度組隊任務',
+      members,
+      execution_mode: 'sequential',
+      leader: result.leader,
+    };
+    this._dispatchTeamRun(
+      tabId, result.team_id || '', task, s.workDir, s.model,
+      inlineTeam.name, members, inlineTeam,
+    );
+  }
+
   // 清空某個對話欄的訊息
   clearTab(tabId: string, e: Event) {
     e.stopPropagation();

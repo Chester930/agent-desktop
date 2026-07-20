@@ -90,7 +90,7 @@ test.describe('Team Run 進度顯示（發現 6 修復驗證）', () => {
     await input.click();
     await input.fill('請幫我寫一句話');
 
-    await page.locator('.hr-btn').click();
+    await page.locator('.hr-btn').filter({ hasNotText: '深度組隊' }).click();
 
     // HR plan 預覽 modal 出現（mocked 回應）
     await expect(page.locator('.editor-modal')).toBeVisible();
