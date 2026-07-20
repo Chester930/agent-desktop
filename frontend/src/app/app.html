@@ -1221,8 +1221,8 @@
                 {{ inputText.length }}/4000
               </span>
             }
-            <button class="sb-btn" [class.locked]="effectiveEngine() === 'codex'" (click)="cycleModel()" [title]="effectiveEngine() === 'codex' ? 'Codex 沒有穩定的模型分級別名，固定使用預設' : '模型：' + model() + '（點擊切換 · /model 指令）'">
-              {{ MODEL_LABELS[model()] || model() }}
+            <button class="sb-btn" [class.locked]="effectiveEngine() === 'codex' && activeCodexModelOptions().length <= 1" (click)="cycleModel()" [title]="effectiveEngine() === 'codex' ? '模型：' + activeModelLabel() + '（點擊切換，清單即時查詢已安裝的 Codex CLI）' : '模型：' + model() + '（點擊切換 · /model 指令）'">
+              {{ activeModelLabel() }}
             </button>
             @if (effectiveEngine() !== 'codex') {
               <button class="sb-btn" (click)="cycleEffort()" [title]="'思考深度：' + effort() + '（點擊切換 low→medium→high→xhigh→max）'">
@@ -1257,7 +1257,7 @@
                   <div class="ihp-item"><b>Fable 5</b> — 特殊用途模型</div>
 
                   <div class="ihp-title">模型（Codex）</div>
-                  <div class="ihp-item"><b>使用預設</b> — Codex 沒有 Claude 那種穩定的模型分級別名，且版本更新頻繁，這裡固定用「使用預設」讓 Codex CLI 自己決定目前建議的模型，不寫死可能很快過期的版本號</div>
+                  <div class="ihp-item">點擊切換——清單即時查詢已安裝的 Codex CLI（<code>codex debug models</code>），不是寫死在這個 App 裡的，永遠跟你本機的 Codex 版本一致。第一個選項是「使用預設」，讓 Codex CLI 自己決定目前建議的模型</div>
 
                   <div class="ihp-title">思考深度</div>
                   <div class="ihp-item"><b>low → medium → high → xhigh → max</b> — 由快速回應到最深入思考，愈往後回應愈慢、思考愈周全，medium 為預設值。僅 Claude 支援，Codex 沒有對應參數，切到 Codex 時會隱藏</div>

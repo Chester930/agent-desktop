@@ -522,6 +522,13 @@ export class ClaudeService {
     return this.http.get<CodexUsage>(`${this.api}/usage/codex`);
   }
 
+  // 即時查詢已安裝 Codex CLI 支援哪些模型（`codex debug models --bundled`，
+  // 後端快取 1 小時）——Codex 沒有像 Claude opus/sonnet/haiku 那種穩定分級
+  // 別名，版本號改版頻繁，前端不寫死清單，永遠問已安裝的 CLI 自己。
+  getCodexModels(): Observable<{ slug: string; display_name: string; description: string }[]> {
+    return this.http.get<{ slug: string; display_name: string; description: string }[]>(`${this.api}/codex/models`);
+  }
+
   deleteSession(id: string): Observable<any> {
     return this.http.delete(`${this.api}/sessions/${id}`);
   }

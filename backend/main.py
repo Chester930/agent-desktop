@@ -148,6 +148,9 @@ pending_permissions: dict[str, dict] = {}                    # request_id -> dic
 # Usage API 快取（5 分鐘）
 _usage_cache: dict = {"data": None, "expires": 0.0}
 _codex_usage_cache: dict = {"data": None, "expires": 0.0}
+# Codex 模型清單快取（1 小時——不像用量數字，模型清單不會頻繁變動，
+# `codex debug models` 又要真的啟動一次 CLI，快取久一點合理）
+_codex_models_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
@@ -2115,6 +2118,27 @@ async def handle_codex_usage(request: web.Request) -> web.Response:
     return web.json_response(data)
 
 
+async def handle_codex_models(request: web.Request) -> web.Response:
+    """GET /api/codex/models — 即時查詢已安裝 Codex CLI 的模型清單（`codex
+    debug models --bundled`），快取 1 小時。Codex 沒有像 Claude opus/sonnet/
+    haiku 那種穩定分級別名，版本號改版頻繁，這裡刻意不在前端寫死清單，
+    直接問已安裝的 CLI 自己支援哪些模型，永遠準確。"""
+    now = time.time()
+    if _codex_models_cache["data"] and now < _codex_models_cache["expires"]:
+        return web.json_response(_codex_models_cache["data"])
+
+    from codex_models import CodexModelsError, fetch_codex_models
+
+    try:
+        data = await fetch_codex_models(CODEX_BIN)
+    except CodexModelsError as exc:
+        return web.json_response({"error": str(exc)}, status=502)
+
+    _codex_models_cache["data"] = data
+    _codex_models_cache["expires"] = now + 3600
+    return web.json_response(data)
+
+
 
 
 async def handle_memory(request: web.Request) -> web.Response:
@@ -3873,6 +3897,7 @@ def build_app() -> web.Application:
         ("POST",   "/api/mcp/rpc",         handle_mcp_rpc),
         ("GET",    "/api/usage",           handle_usage),
         ("GET",    "/api/usage/codex",     handle_codex_usage),
+        ("GET",    "/api/codex/models",    handle_codex_models),
         ("POST",   "/api/chat",           handle_chat),
         ("POST",   "/api/team/chat",      handle_team_chat),
         ("POST",   "/api/team/execute",   handle_team_execute),

@@ -971,6 +971,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.effectiveEngine() === 'codex' ? this.PERM_OPTIONS_CODEX : this.PERM_OPTIONS_CLAUDE);
   activePermLabels = computed<Record<string, string>>(() =>
     this.effectiveEngine() === 'codex' ? this.PERM_LABELS_CODEX : this.PERM_LABELS_CLAUDE);
+  // Codex 版的「模型選項」——第一個永遠是空字串（使用預設，讓 Codex CLI
+  // 自己決定），後面接 GET /api/codex/models 即時查到的清單（見
+  // loadCodexModels()），不是寫死的別名。
+  activeCodexModelOptions = computed<string[]>(() => ['', ...this.codexModels().map(m => m.slug)]);
+  activeModelLabel = computed<string>(() => {
+    const m = this.model();
+    if (this.effectiveEngine() === 'codex') {
+      if (!m) return '使用預設';
+      return this.codexModels().find(x => x.slug === m)?.display_name || m;
+    }
+    return this.MODEL_LABELS[m] || m;
+  });
   bannerDismissed = signal(false);
   outOfQuota = signal(false);
   usageOpen  = signal(false);
@@ -982,12 +994,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   });
 
   cycleModel() {
-    // Codex 沒有像 Claude opus/sonnet/haiku 那種穩定的分級別名可以循環選——
-    // 查證過官方文件，Codex 的模型是版本號直接命名（例如 gpt-5.4），改版
-    // 頻繁，寫死在這裡很快就會過期，索性不提供切換，固定送空字串讓 Codex
-    // CLI 自己決定目前建議的模型（engines/codex_engine.py 本來就只在
-    // `if model:` 為真時才加 --model，空字串會被正確忽略）。
-    if (this.effectiveEngine() === 'codex') return;
+    if (this.effectiveEngine() === 'codex') {
+      // Codex 沒有像 Claude opus/sonnet/haiku 那種穩定的分級別名可以寫死
+      // 循環——改成即時問已安裝的 CLI 自己支援哪些模型（見
+      // loadCodexModels()），清單抓不到（例如還沒載完/查詢失敗）時，
+      // 保持只能看到「使用預設」，不猜測性地讓使用者選到一個可能不存在
+      // 的模型名稱。
+      const opts = this.activeCodexModelOptions();
+      if (opts.length <= 1) return;
+      const idx = (opts.indexOf(this.model()) + 1) % opts.length;
+      const v = opts[idx]; this.model.set(v); this.settings.save({ model: v });
+      return;
+    }
     const idx = (this.MODEL_OPTIONS.indexOf(this.model() as any) + 1) % this.MODEL_OPTIONS.length;
     const v = this.MODEL_OPTIONS[idx]; this.model.set(v); this.settings.save({ model: v });
     this.bannerDismissed.set(false);
@@ -3105,6 +3123,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnInit() {
     this.reload();
+    this.loadCodexModels();
     // agentEngine 已經在 constructor 裡跟 model/permissionMode 一起同步過了
     // （見該處註解），這裡不用重複做。執行引擎範圍是後端權威值
     // （database.get_engine_mode()），不是純本地
@@ -4100,6 +4119,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.deleteMcpServer(name).subscribe({
       next: () => this.loadMcpServerDefs(),
       error: (e) => this.showToast(e.error?.error || '刪除失敗', 'error'),
+    });
+  }
+
+  // Codex 沒有像 Claude opus/sonnet/haiku 那種穩定分級別名，版本號改版
+  // 頻繁，不在前端寫死清單——GET /api/codex/models 即時問已安裝的 Codex
+  // CLI 自己支援哪些模型（`codex debug models --bundled`，後端快取
+  // 1 小時），App 啟動時抓一次即可。
+  codexModels = signal<{ slug: string; display_name: string; description: string }[]>([]);
+  loadCodexModels() {
+    this.claude.getCodexModels().subscribe({
+      next: models => this.codexModels.set(models),
+      error: () => {},   // 拿不到就維持空陣列，cycleModel() 對 Codex 會保持不可切換、顯示「使用預設」
     });
   }
 
