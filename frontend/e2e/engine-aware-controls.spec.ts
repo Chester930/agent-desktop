@@ -8,19 +8,27 @@ import { test, expect } from '@playwright/test';
 // 來說整個是裝飾品。修復後改成新增一顆「執行引擎」pill，依目前引擎切換
 // 底下三個控制項的可見選項/行為。這裡驗證切換 pill 後，UI 真的會跟著換。
 
-test.describe('引擎感知的輸入欄控制項', () => {
-  // GET /api/codex/models 第一次呼叫要真的 spawn 一次 `codex debug models`
-  // subprocess，後端快取 1 小時——這整個套件平行跑、多個測試檔同時打
-  // 同一個 dev 後端時，這個 subprocess 呼叫本身可能被排擠變慢。這裡在
-  // 任何 UI 互動之前，先用 API context 直接打一次把快取焐熱，讓實際測試
-  // 只需要等瀏覽器那次請求命中快取，不用跟 subprocess 的真實延遲賭時間。
-  test.beforeAll(async ({ request }) => {
-    await request.get('/api/codex/models', { timeout: 60000 }).catch(() => {});
-  });
+const MOCK_CODEX_MODELS = [
+  { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', description: 'Flagship.' },
+  { slug: 'gpt-5.4-mini', display_name: 'GPT-5.4-Mini', description: 'Fast.' },
+];
 
+test.describe('引擎感知的輸入欄控制項', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem('claude_onboarding_done', '1');
+    });
+    // GET /api/codex/models 在真實環境會 shell 出去問已安裝的 Codex CLI
+    // （`codex debug models --bundled`）——CI runner 沒有裝 codex CLI，
+    // 呼叫會失敗，清單永遠是空的，模型按鈕永遠卡在「使用預設」出不來。
+    // 這裡跟其他 e2e 測試一樣直接 mock 掉這個端點，不依賴環境裝了什麼
+    // CLI、也不用等真的 spawn 一次 subprocess，兩個測試檔通用。
+    await page.route('**/api/codex/models', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(MOCK_CODEX_MODELS),
+      });
     });
   });
 
@@ -64,13 +72,9 @@ test.describe('引擎感知的輸入欄控制項', () => {
   // 2026-07-20 續篇：模型控制過去在 Codex 時完全鎖死只能「使用預設」——
   // 改成即時問已安裝的 Codex CLI（GET /api/codex/models → `codex debug
   // models --bundled`），不是寫死在前端的清單。這裡驗證在 Codex 對話下，
-  // 模型按鈕真的可以點擊切換到清單裡的其他模型，不會一直卡在「使用預設」。
-  test('Codex 對話下，模型按鈕可以切換到即時查詢到的模型清單', async ({ page }) => {
-    // 這個測試依賴真的問過一次已安裝的 Codex CLI（`codex debug models`，
-    // 見 GET /api/codex/models），不是純記憶體操作——跟整個 e2e 套件平行
-    // 跑、共用同一個 dev 後端時，這個 subprocess 呼叫可能因為資源競爭
-    // 變慢，預設的 30s 測試逾時不夠寬裕，這裡單獨拉長。
-    test.setTimeout(60000);
+  // 模型按鈕真的可以點擊切換到清單裡的其他模型，不會一直卡在「使用預設」
+  // （用上面 mock 的固定清單，不依賴真實 CLI）。
+  test('Codex 對話下，模型按鈕可以切換到清單裡的模型', async ({ page }) => {
     await page.goto('/');
 
     const engineBtn = page.locator('.engine-btn');
@@ -83,19 +87,16 @@ test.describe('引擎感知的輸入欄控制項', () => {
     await expect(engineBtn).toContainText('Codex');
 
     const modelBtn = page.locator('.input-statusbar button', { hasText: /使用預設|GPT/ });
-    await expect(modelBtn).toBeVisible();
+    await expect(modelBtn).toHaveText('使用預設');
 
-    // GET /api/codex/models 是 ngOnInit 觸發的非阻塞背景請求，不保證這時
-    // 已經回來——用 poll 反覆點擊直到文字真的變成「使用預設」以外的值
-    // （清單還沒載完時 cycleModel() 是無害的 no-op，載完後下一次點擊就會
-    // 真的换到清單裡的模型），比賭一次網路請求的時序穩定。
-    await expect
-      .poll(async () => {
-        await modelBtn.click();
-        return (await modelBtn.textContent())?.trim();
-      }, { timeout: 45000, intervals: [300] })
-      .not.toBe('使用預設');
+    await modelBtn.click();
+    await expect(modelBtn).toHaveText('GPT-5.6-Sol');
 
-    await expect(modelBtn).toHaveText(/GPT/);
+    await modelBtn.click();
+    await expect(modelBtn).toHaveText('GPT-5.4-Mini');
+
+    // 循環到清單尾端後應該繞回「使用預設」
+    await modelBtn.click();
+    await expect(modelBtn).toHaveText('使用預設');
   });
 });
