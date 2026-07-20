@@ -866,6 +866,25 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
     leader_agent_id = team_info.get("leader", "") or members[0]["agent"]
     member_agent_ids = [m["agent"] for m in members]
 
+    # 團隊對話時，每位發言的 Agent（不管是 Leader 還是被 @ 的成員）過去只
+    # 拿得到自己 frontmatter 宣告的 Skills，看不到隊友的——「找資源」等於
+    # 不存在，Leader 明明知道隊友是誰，卻沒辦法真的運用隊友的專長。這裡
+    # 把整個團隊宣告過的 skill id 聯集起來（去重、保留原順序），不管誰
+    # 發言，都能看到整個團隊擁有的技能清單，不再被鎖死在自己那份。
+    team_skill_ids: list[str] = []
+    _seen_skill_ids: set[str] = set()
+    for m in members:
+        m_file = _registry_agents_dir() / f"{m['agent']}.md"
+        if not m_file.exists():
+            continue
+        try:
+            for sid in _agent_dict(m_file).get("skills", []):
+                if sid not in _seen_skill_ids:
+                    _seen_skill_ids.add(sid)
+                    team_skill_ids.append(sid)
+        except Exception:
+            pass
+
     response = web.StreamResponse(headers={
         "Content-Type":    "text/event-stream",
         "Cache-Control":   "no-cache",
@@ -929,9 +948,10 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 body = _read_agent_body(agent_file_path)
                 if body:
                     fp = f"[代理人定義：{agent_id}]\n{body}\n\n---\n\n{fp}"
-                skills_content = _read_skills_content(_registry_skills_dir(), _agent_dict(agent_file_path).get("skills", []))
+            if team_skill_ids:
+                skills_content = _read_skills_content(_registry_skills_dir(), team_skill_ids)
                 if skills_content:
-                    fp = f"[Skills]\n{skills_content}\n\n---\n\n{fp}"
+                    fp = f"[團隊 Skills（整個團隊成員共用，不限於你自己宣告的）]\n{skills_content}\n\n---\n\n{fp}"
             return fp
 
         async def _exec_cmd(fp: str, resume_sid: "str | None") -> tuple[list[str], str, bool]:
