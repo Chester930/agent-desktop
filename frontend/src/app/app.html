@@ -1194,8 +1194,12 @@
         <!-- T01 + T02 底部狀態列 -->
         <div class="input-statusbar">
           <div class="statusbar-left">
+            <button class="sb-btn engine-btn" [class.locked]="engineMode() !== 'both'" (click)="toggleAgentEngine()"
+              [title]="engineMode() !== 'both' ? '執行引擎已鎖定為 ' + (effectiveEngine() === 'claude' ? 'Claude Code' : 'Codex') + '（於 Settings 設定，不可在此切換）' : '這個對話目前使用：' + (effectiveEngine() === 'claude' ? 'Claude Code' : 'Codex') + '（點擊切換，決定底下權限模式／模型選項）'">
+              {{ effectiveEngine() === 'claude' ? '🅲 Claude' : '🅧 Codex' }}
+            </button>
             <button class="sb-btn" (click)="cyclePermission()" [title]="'權限模式：' + permissionMode()">
-              {{ PERM_LABELS[permissionMode()] || permissionMode() }}
+              {{ activePermLabels()[permissionMode()] || permissionMode() }}
             </button>
             <label class="sb-btn attach-icon-btn" [class.uploading]="isUploading()" title="上傳附件" style="margin-left: 4px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0;">
               ➕
@@ -1217,33 +1221,46 @@
                 {{ inputText.length }}/4000
               </span>
             }
-            <button class="sb-btn" (click)="cycleModel()" [title]="'模型：' + model() + '（點擊切換 · /model 指令）'">
+            <button class="sb-btn" [class.locked]="effectiveEngine() === 'codex'" (click)="cycleModel()" [title]="effectiveEngine() === 'codex' ? 'Codex 沒有穩定的模型分級別名，固定使用預設' : '模型：' + model() + '（點擊切換 · /model 指令）'">
               {{ MODEL_LABELS[model()] || model() }}
             </button>
-            <button class="sb-btn" (click)="cycleEffort()" [title]="'思考深度：' + effort() + '（點擊切換 low→medium→high→xhigh→max）'">
-              {{ effort() }}
-            </button>
+            @if (effectiveEngine() !== 'codex') {
+              <button class="sb-btn" (click)="cycleEffort()" [title]="'思考深度：' + effort() + '（點擊切換 low→medium→high→xhigh→max）'">
+                {{ effort() }}
+              </button>
+            }
             <span class="status-dot" [class.online]="!backendDown() && !outOfQuota()" [title]="backendDown() ? '已斷開後端連線' : outOfQuota() ? '已達用量限制' : '後端連線正常，可用量充足'"></span>
             <div class="input-help-wrap">
               <button class="sb-btn input-help-btn" (click)="inputHelpOpen.set(!inputHelpOpen())" title="這一列按鈕的說明">?</button>
               @if (inputHelpOpen()) {
                 <div class="input-help-overlay" (click)="inputHelpOpen.set(false)"></div>
                 <div class="input-help-popover" (click)="$event.stopPropagation()">
-                  <div class="ihp-title">權限模式</div>
+                  <div class="ihp-title">執行引擎</div>
+                  <div class="ihp-item">🅲/🅧 <b>Claude / Codex</b> — 這個對話目前使用哪個引擎，權限模式與模型選項會跟著切換。「兩者都開放」時可點擊切換；後端鎖定成單一引擎時僅顯示、不可切換</div>
+
+                  <div class="ihp-title">權限模式（Claude）</div>
                   <div class="ihp-item"><b>Default</b> — 一般模式，每個工具執行前都會先詢問確認</div>
                   <div class="ihp-item"><b>Accept edits</b> — 自動接受檔案編輯，其餘危險操作仍會詢問</div>
                   <div class="ihp-item"><b>Plan</b> — 先規劃步驟並經確認才執行，不會直接修改檔案</div>
                   <div class="ihp-item"><b>Bypass</b> — 略過所有權限確認，風險最高，僅限信任環境使用</div>
                   <div class="ihp-item"><b>Auto</b> — 依任務內容自動判斷合適的執行方式</div>
 
-                  <div class="ihp-title">模型</div>
+                  <div class="ihp-title">權限模式（Codex）</div>
+                  <div class="ihp-item"><b>Workspace Write</b> — 預設，可寫入工作目錄，但 Windows 上執行 Shell 指令會失敗（Codex CLI 本身的限制）</div>
+                  <div class="ihp-item"><b>Read Only</b> — 唯讀，不能寫入任何檔案</div>
+                  <div class="ihp-item"><b>⚠ Full Access</b> — 完全沒有沙盒限制，Windows 上要跑 Shell 指令目前只能選這個，使用上要謹慎</div>
+
+                  <div class="ihp-title">模型（Claude）</div>
                   <div class="ihp-item"><b>Sonnet 4.6</b> — 預設，速度與能力均衡，多數任務適用</div>
                   <div class="ihp-item"><b>Opus 4.8</b> — 能力最強，適合複雜任務，速度較慢</div>
                   <div class="ihp-item"><b>Haiku 4.5</b> — 速度最快，適合簡單或大量任務</div>
                   <div class="ihp-item"><b>Fable 5</b> — 特殊用途模型</div>
 
+                  <div class="ihp-title">模型（Codex）</div>
+                  <div class="ihp-item"><b>使用預設</b> — Codex 沒有 Claude 那種穩定的模型分級別名，且版本更新頻繁，這裡固定用「使用預設」讓 Codex CLI 自己決定目前建議的模型，不寫死可能很快過期的版本號</div>
+
                   <div class="ihp-title">思考深度</div>
-                  <div class="ihp-item"><b>low → medium → high → xhigh → max</b> — 由快速回應到最深入思考，愈往後回應愈慢、思考愈周全，medium 為預設值</div>
+                  <div class="ihp-item"><b>low → medium → high → xhigh → max</b> — 由快速回應到最深入思考，愈往後回應愈慢、思考愈周全，medium 為預設值。僅 Claude 支援，Codex 沒有對應參數，切到 Codex 時會隱藏</div>
 
                   <div class="ihp-title">其他按鈕</div>
                   <div class="ihp-item">➕ <b>附件</b> — 上傳圖片／文字／程式碼檔案給模型參考</div>

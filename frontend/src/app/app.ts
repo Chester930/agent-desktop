@@ -938,17 +938,39 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // T01 — model / effort / permissionMode（對應 Claude CLI 參數）
   readonly MODEL_OPTIONS = ['sonnet', 'opus', 'haiku', 'fable'] as const;
   readonly EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-  readonly PERM_OPTIONS = ['acceptEdits', 'default', 'plan', 'bypassPermissions', 'auto'] as const;
-  readonly PERM_LABELS: Record<string, string> = {
+  // Claude 跟 Codex 的權限模式是完全不同的兩套詞彙（Claude 6 種細粒度模式，
+  // Codex 3 種沙盒等級），不是一對一對應——engines/codex_engine.py::
+  // _normalize_sandbox_mode() 過去收到 Claude 的值（例如 "bypassPermissions"）
+  // 會直接靜默忽略、退回 Codex 自己的預設值，使用者選了等於沒選。與其硬做
+  // 一個猜測性的轉譯對照表（例如 Claude 的 "plan" 模式在 Codex 完全沒有
+  // 對應概念），改成依 effectiveEngine() 直接切換成該引擎真正支援的選項，
+  // 選什麼就是什麼，不會有落差。
+  readonly PERM_OPTIONS_CLAUDE = ['acceptEdits', 'default', 'plan', 'bypassPermissions', 'auto'] as const;
+  readonly PERM_LABELS_CLAUDE: Record<string, string> = {
     acceptEdits: 'Accept edits', default: 'Default',
     plan: 'Plan', bypassPermissions: 'Bypass', auto: 'Auto',
   };
+  // 跟 engines/codex_engine.py::VALID_PERMISSION_MODES 完全對齊（三者皆已
+  // 用真實 CLI 驗證過，見該檔案 module docstring）。danger-full-access 標
+  // 上警告符號，避免使用者不知情就選到完全沒有沙盒限制的等級。
+  readonly PERM_OPTIONS_CODEX = ['workspace-write', 'read-only', 'danger-full-access'] as const;
+  readonly PERM_LABELS_CODEX: Record<string, string> = {
+    'workspace-write': 'Workspace Write',
+    'read-only': 'Read Only',
+    'danger-full-access': '⚠ Full Access',
+  };
   readonly MODEL_LABELS: Record<string, string> = {
     sonnet: 'Sonnet 4.6', opus: 'Opus 4.8', haiku: 'Haiku 4.5', fable: 'Fable 5',
+    '': '使用預設',
   };
   model = signal('sonnet');
   effort = signal<'low' | 'medium' | 'high' | 'xhigh' | 'max'>('medium');
-  permissionMode = signal<'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto'>('acceptEdits');
+  permissionMode = signal<string>('acceptEdits');
+
+  activePermOptions = computed<readonly string[]>(() =>
+    this.effectiveEngine() === 'codex' ? this.PERM_OPTIONS_CODEX : this.PERM_OPTIONS_CLAUDE);
+  activePermLabels = computed<Record<string, string>>(() =>
+    this.effectiveEngine() === 'codex' ? this.PERM_LABELS_CODEX : this.PERM_LABELS_CLAUDE);
   bannerDismissed = signal(false);
   outOfQuota = signal(false);
   usageOpen  = signal(false);
@@ -960,6 +982,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   });
 
   cycleModel() {
+    // Codex 沒有像 Claude opus/sonnet/haiku 那種穩定的分級別名可以循環選——
+    // 查證過官方文件，Codex 的模型是版本號直接命名（例如 gpt-5.4），改版
+    // 頻繁，寫死在這裡很快就會過期，索性不提供切換，固定送空字串讓 Codex
+    // CLI 自己決定目前建議的模型（engines/codex_engine.py 本來就只在
+    // `if model:` 為真時才加 --model，空字串會被正確忽略）。
+    if (this.effectiveEngine() === 'codex') return;
     const idx = (this.MODEL_OPTIONS.indexOf(this.model() as any) + 1) % this.MODEL_OPTIONS.length;
     const v = this.MODEL_OPTIONS[idx]; this.model.set(v); this.settings.save({ model: v });
     this.bannerDismissed.set(false);
@@ -1234,8 +1262,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const v = this.EFFORT_OPTIONS[idx]; this.effort.set(v); this.settings.save({ effort: v });
   }
   cyclePermission() {
-    const idx = (this.PERM_OPTIONS.indexOf(this.permissionMode() as any) + 1) % this.PERM_OPTIONS.length;
-    const v = this.PERM_OPTIONS[idx]; this.permissionMode.set(v); this.settings.save({ permissionMode: v });
+    const opts = this.activePermOptions();
+    const idx = (opts.indexOf(this.permissionMode()) + 1) % opts.length;
+    const v = opts[idx]; this.permissionMode.set(v); this.settings.save({ permissionMode: v });
   }
 
   // 輸入框底部狀態列的「？」說明彈窗
@@ -2861,6 +2890,20 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.model.set((s.model || 'sonnet') as any);
     this.effort.set((s.effort || 'medium') as any);
     this.permissionMode.set((s.permissionMode || 'acceptEdits') as any);
+    // agentEngine 的預設值（settings.service.ts: 'codex'）跟 model/
+    // permissionMode 的預設值（'sonnet'/'acceptEdits'，都是 Claude 詞彙）
+    // 互相沒有關聯——這兩組設定過去各自獨立存、互不影響，現在 permissionMode
+    // /model 的顯示跟送出的值會依 effectiveEngine() 決定該用哪套詞彙，
+    // 這裡如果不在一開始就對齊，全新安裝或使用者從沒手動切過 agentEngine
+    // 時，畫面會顯示 agentEngine='codex' 但 permissionMode 卻還停留在
+    // Claude 專屬的 'acceptEdits'，兩者對不上。
+    this.agentEngine.set(s.agentEngine);
+    if (s.agentEngine === 'codex' && !this.PERM_OPTIONS_CODEX.includes(this.permissionMode() as any)) {
+      this.permissionMode.set(this.PERM_OPTIONS_CODEX[0]);
+    }
+    if (s.agentEngine === 'codex') {
+      this.model.set('');
+    }
     // T11 — 初始化第一個 tab
     const firstTab = this.makeTab('新對話');
     this.chatTabs.set([firstTab]);
@@ -3041,6 +3084,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   saveSettings() {
     this.settings.save(this.settingsForm);
+    this.agentEngine.set(this.settingsForm.agentEngine);
     this.claude.setConfig({
       projectDir: this.settingsForm.projectDir,
       apiKeyCmd: this.settingsForm.apiKeyCmd,
@@ -3061,7 +3105,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnInit() {
     this.reload();
-    // 執行引擎範圍是後端權威值（database.get_engine_mode()），不是純本地
+    // agentEngine 已經在 constructor 裡跟 model/permissionMode 一起同步過了
+    // （見該處註解），這裡不用重複做。執行引擎範圍是後端權威值
+    // （database.get_engine_mode()），不是純本地
     // localStorage 值——啟動時就先讀一次，這樣 Agent 編輯器不用自己另外
     // 打一次 /api/config 才能判斷目前是否鎖定。
     this.claude.getConfig().subscribe({
@@ -4087,6 +4133,50 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // 再刷新一次。
   engineMode = signal<'claude' | 'codex' | 'both'>('both');
 
+  // 輸入欄狀態列鏡射 settings.agentEngine 的獨立 signal——SettingsService
+  // 是純 snapshot（get()/save()），不是 Angular signal，沒辦法直接放進
+  // computed() 裡追蹤，所以這裡跟 engineMode 用同一套「另開一個 signal，
+  // 在每個實際會改到 agentEngine 的地方手動同步」模式（ngOnInit()／
+  // saveSettings()／_autoCorrectGlobalEngine()／toggleAgentEngine() 這
+  // 四處）。effectiveEngine 是輸入欄權限模式／模型／思考深度三個控制項
+  // 實際要看的值：鎖定範圍時看鎖定值，'both' 時看這個 signal。
+  agentEngine = signal<'claude' | 'codex'>('codex');
+  effectiveEngine = computed<'claude' | 'codex'>(() => {
+    const mode = this.engineMode();
+    return (mode === 'claude' || mode === 'codex') ? mode : this.agentEngine();
+  });
+
+  private _lastClaudeModel = 'sonnet';
+
+  toggleAgentEngine() {
+    if (this.engineMode() !== 'both') return;   // 已鎖定範圍，這顆 pill 只顯示、不可切換
+    const next = this.agentEngine() === 'claude' ? 'codex' : 'claude';
+    this.agentEngine.set(next);
+    this.settings.save({ agentEngine: next });
+    if (this.settingsOpen()) this.settingsForm.agentEngine = next;
+    // 切換引擎後，權限模式可能留著舊引擎的詞彙（例如從 Claude 的
+    // "bypassPermissions" 切到 Codex），該值在新引擎的選項清單裡不存在，
+    // 直接重設成新引擎清單的第一個選項，避免顯示一個實際上不會生效的值。
+    const newPermOptions: readonly string[] = next === 'codex' ? this.PERM_OPTIONS_CODEX : this.PERM_OPTIONS_CLAUDE;
+    if (!newPermOptions.includes(this.permissionMode())) {
+      const v = newPermOptions[0];
+      this.permissionMode.set(v);
+      this.settings.save({ permissionMode: v });
+    }
+    // 模型同理：Codex 沒有 Claude 那幾個別名，切到 Codex 時記住目前選的
+    // Claude 模型（切回來時還原），送出的 model 值改成空字串，讓 Codex
+    // CLI 用自己的預設，不會誤把 "sonnet"/"opus" 這種 Claude 專屬字串
+    // 原封不動傳給 codex --model（會直接被 CLI 判定成不存在的模型）。
+    if (next === 'codex') {
+      this._lastClaudeModel = this.model();
+      this.model.set('');
+      this.settings.save({ model: '' });
+    } else {
+      this.model.set(this._lastClaudeModel);
+      this.settings.save({ model: this._lastClaudeModel });
+    }
+  }
+
   private readonly ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code CLI', codex: 'OpenAI Codex CLI' };
   protected readonly ENGINE_REASON_LABEL: Record<string, string> = {
     not_installed: '未安裝', not_logged_in: '未登入',
@@ -4123,6 +4213,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const other = current === 'claude' ? 'codex' : 'claude';
     if (!status[other]?.available) return;               // 兩邊都不可用，UI 端不硬猜，交給執行期防護網處理
     this.settings.save({ agentEngine: other as 'claude' | 'codex' });
+    this.agentEngine.set(other as 'claude' | 'codex');
     if (this.settingsOpen()) this.settingsForm.agentEngine = other as 'claude' | 'codex';
     this.showToast(
       `全域執行引擎「${this.ENGINE_LABEL[current]}」目前無法使用，已自動切換為「${this.ENGINE_LABEL[other]}」。`,

@@ -1992,6 +1992,14 @@ body {
     &:hover { background: none; color: #555; }
   }
 }
+.engine-btn {
+  font-weight: 600;
+}
+.sb-btn.locked {
+  cursor: default;
+  opacity: 0.6;
+  &:hover { background: rgba(255, 255, 255, 0.02); color: #aaa; border-color: rgba(255, 255, 255, 0.05); }
+}
 
 // ── 輸入框狀態列「？」說明彈窗 ─────────────────────────
 .input-help-wrap { position: relative; }

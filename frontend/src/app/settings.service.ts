@@ -14,7 +14,12 @@ export interface AppSettings {
   enterToSend: boolean;
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-  permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto';
+  // Claude 的 5 種（default/acceptEdits/bypassPermissions/plan/auto）跟
+  // Codex 的 3 種（workspace-write/read-only/danger-full-access）是完全
+  // 不同的詞彙，依 app.ts::effectiveEngine() 決定實際顯示/送出哪一套，
+  // 這裡用 string 讓兩邊的值都能存，不做聯集型別（聯集型別在切引擎時
+  // 反而讓 TS 誤以為兩套值互通，掩蓋掉這其實是兩種語言的事實）。
+  permissionMode: string;
   projectDir: string;
   apiKeyCmd: string;
   codexApiKeyCmd: string;
