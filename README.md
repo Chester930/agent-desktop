@@ -125,18 +125,23 @@ docker compose down
 ### Docker 架構
 
 ```
-Electron 視窗 ──→ localhost:4200 (nginx / 前端)
-              ──→ localhost:8765 (Python 後端)
+Electron 視窗 ──→ localhost:4200（前端；dev 是 Angular dev server，prod 是 nginx）
+                     └─ /api/* 透過 Docker 內部網路轉發給後端 container 的 8765
 LINE 用戶    ──→ ngrok 公開網址 ──→ 後端 (LINE Bot)
 ```
 
-| 容器 | 功能 | Port |
-|------|------|------|
-| `agent-desktop-backend-dev` | Python API + Claude／Codex CLI（dev，`start.bat --docker` 建立） | 8765 |
-| `agent-desktop-frontend-dev` | Angular dev server，HMR（dev） | 4200 |
-| `agent-desktop-ngrok` | LINE Webhook 公開網址（需另外執行 `--profile tunnel`，見上） | 4040 |
+Electron 視窗只會連 `localhost:4200`；前端把 `/api/*` 透過 Docker 內部網路轉給後端
+container，瀏覽器不需要（也不會）直接連後端。如果想用 `curl`／Postman 直接測試
+後端 API，主機對外開放的是 `.env` 裡的 `BACKEND_HOST_PORT`（預設 `8760`，**不是**
+容器內部用的 `8765`）：例如 `http://localhost:8760/api/status`。
 
-> 正式環境（`docker compose --profile prod up`）改用 `agent-desktop-backend` / `agent-desktop-frontend`（無 `-dev` 後綴，nginx 靜態前端而非 dev server）。
+| 容器 | 功能 | 容器內部 Port | 主機對外 Port |
+|------|------|------|------|
+| `agent-desktop-backend-dev` | Python API + Claude／Codex CLI（dev，`start.bat --docker` 建立） | 8765 | `${BACKEND_HOST_PORT:-8760}` |
+| `agent-desktop-frontend-dev` | Angular dev server，HMR（dev） | 4200 | `${FRONTEND_HOST_PORT:-4200}` |
+| `agent-desktop-ngrok` | LINE Webhook 公開網址（需另外執行 `--profile tunnel`，見上） | 4040 | 4040 |
+
+> 正式環境（`docker compose --profile prod up`）改用 `agent-desktop-backend` / `agent-desktop-frontend`（無 `-dev` 後綴，nginx 靜態前端而非 dev server），主機對外 Port 規則相同。
 
 ### LINE Bot 設定（選用）
 
@@ -303,6 +308,9 @@ docker compose restart frontend
 
 ## 首次啟動設定
 
+第一次啟動會自動跳出設定精靈（歡迎 → 確認執行引擎連線 → 設定專案目錄 →
+完成），照畫面指示填入即可；不確定路徑的話可以先跳過，之後再用下面的方式調整。
+
 ### 設定 Claude Code 專案目錄
 
 1. 點右上角齒輪圖示（⚙）開啟設定
@@ -327,13 +335,26 @@ docker compose restart frontend
 
 ### 內建 `/` 指令
 
+在輸入框打 `/` 會列出以下內建指令（跟 skills 混在同一個選單裡）：
+
 | 指令 | 功能 |
 |------|------|
 | `/new` | 開始新對話 |
 | `/clear` | 清除目前訊息 |
+| `/undo` | 撤銷最後一次對話（移除最後一組問答） |
+| `/retry` | 重試上一則訊息 |
+| `/compact` | 壓縮對話以節省 token |
+| `/model` | 切換 AI 模型 |
+| `/usage` | 顯示 token 用量 |
+| `/debug` | 切換 debug 模式 |
+| `/status` | 顯示 Claude 狀態 |
 | `/review` | Code Review |
 | `/plan` | 規劃實作步驟 |
 | `/tdd` | TDD 流程 |
+| `/explain` | 解釋目前的程式碼或問題 |
+| `/git` | 顯示 Git 狀態與最近提交 |
+| `/search` | 搜尋對話歷史 |
+| `/shortcuts` | 顯示所有鍵盤快捷鍵 |
 
 ---
 

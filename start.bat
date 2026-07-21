@@ -67,8 +67,8 @@ if "%DOCKER_MODE%"=="1" (
   if errorlevel 1 ( timeout /t 2 /nobreak >nul & goto wait_backend )
 
   echo.
-  echo Backend:  http://localhost:8765
   echo Frontend: http://localhost:4200 (Dev HMR)
+  echo Backend:  see BACKEND_HOST_PORT in .env (default http://localhost:8760; only needed for direct API debugging, the app itself talks to the backend through the frontend proxy)
   echo.
 
   :: Launch Electron (Docker mode: skip local backend, load from port 4200)
