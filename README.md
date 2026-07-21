@@ -45,6 +45,10 @@ Agent 桌面版是一個桌面 GUI，讓你能以視窗化介面使用 Claude Co
 | 多面板對話 | 最多 4 個平行對話視窗 |
 | Session 歷史 | SQLite 索引 + FTS5 全文搜尋 |
 | Agents / Skills / MCP | 直接從右側面板選取 |
+| **Project（深度組隊）** | 與 Agent CLI 討論計畫、挑選（或沿用既有）Team Leader，Leader 再與每位成員一輪一輪協商 Task 直到雙方都認同，結果寫成可回溯的 Project 記錄，並建立可重複使用的 Team |
+| **團隊對話** | 跟整個 Team 的 Leader 對話，Leader 可以 `@成員` 讓其他 Agent 加入討論，每位發言者都看得到整個團隊成員宣告過的 Skills |
+| **Claude／Codex 執行引擎切換** | 輸入欄一顆 pill 切換這個對話用哪個引擎，權限模式／模型／思考深度會自動換成該引擎真正支援的選項，不會出現「選了跟沒選一樣」的情況；Codex 的模型清單即時查詢本機安裝的 CLI，不寫死版本號 |
+| MCP 雙引擎管理 | Claude／Codex 各自的 MCP 設定同步、原生已有但登錄檔還沒有的 MCP server 可一鍵回收匯入 |
 | Dashboard | Token 用量、熱力圖 |
 | 排程 | Cron 定時觸發，支援 LINE 推送 |
 | LINE Bot | 透過 LINE 官方帳號與 AI 對話 |
@@ -254,6 +258,10 @@ agent-desktop/
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | `POST` | `/api/chat` | SSE 串流對話 |
+| `POST` | `/api/team/chat` | 團隊對話（Leader ↔ 成員 @mention 輪流討論） |
+| `POST` | `/api/team/run` | 執行一個 Team（sequential／parallel／consensus） |
+| `POST` | `/api/hr/plan-team` | Project（深度組隊）背景規劃流程，SSE 回報進度 |
+| `GET` | `/api/codex/models` | 即時查詢已安裝 Codex CLI 支援的模型清單 |
 | `GET` | `/api/sessions` | 列出 / 搜尋 sessions |
 | `GET` | `/api/stats` | Dashboard 統計 |
 | `GET` | `/api/agents` | 列出 agents |
