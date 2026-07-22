@@ -884,8 +884,19 @@ select option {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  &.mcp-section-general  { flex: 1 1 0; overflow-y: auto; }
   &.mcp-section-external { flex: 1 1 0; overflow-y: auto; }
   &.mcp-section-local    { flex: 1 1 0; overflow-y: auto; }
+}
+// Sub-sections stacked inside the combined "一般管理" pane (App 管理 /
+// 可認領的 MCP / Codex MCP) — each keeps its own collapsible title + list,
+// but none of them are independently resizable panes anymore, so no
+// .mcp-pane wrapper (and no risk of the collapsed-pane-height bug below).
+.mcp-subsection {
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  &:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
 }
 
 .mcp-section-title {
@@ -936,6 +947,16 @@ select option {
   color: #888;
   margin-left: auto;
   font-weight: 400;
+  // 本地 API is the only title row with this extra hint span; at narrow
+  // panel widths it could wrap onto a 2nd line, making the row taller than
+  // the collapsed pane's fixed height below and clipping the header out of
+  // view (looked like the whole section vanished). Never wrap — truncate
+  // instead.
+  display: inline-block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 88px;
 }
 .mcp-empty {
   font-size: 10px;

@@ -25,11 +25,13 @@ import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, McpServer, McpTool, McpType, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
 
-// Default % heights for the MCP panel's resizable sections (see
-// App.mcpPaneHeights) — every section except the last (本地 API), which
-// stays the flexible remainder via flex:1.
+// Default % heights for the MCP panel's two resizable panes (see
+// App.mcpPaneHeights): 'general' bundles App 管理 / 可認領的 MCP / Codex MCP
+// into one scrollable region, 'external' is 外部 API. 本地 API (the third,
+// bottom-most section) stays the flexible remainder via flex:1 and has no
+// entry here — it isn't independently resizable.
 const MCP_PANE_DEFAULTS: Record<string, number> = {
-  appManaged: 14, importable: 14, codexStatus: 18, external: 30,
+  general: 26, external: 30,
 };
 
 @Component({
@@ -214,12 +216,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   agentSkillsMap = signal<Record<string, string[]>>({});
   agentMcpsMap = signal<Record<string, string[]>>({}); // agent 直連 MCP，不透過 skill
 
-  // MCP panel pane heights (% of .mcp-view height), one entry per resizable
-  // section — every section except the last (本地 API), which stays the
-  // flexible remainder via flex:1. Keyed the same as mcp-panel's section
-  // keys (appManaged/importable/codexStatus/external) so each divider only
-  // ever adjusts the one pane directly above it — no cross-pane ratio math
-  // needed, same idea as the original single top/bottom split.
+  // MCP panel pane heights (% of .mcp-view height) — 'general' (App 管理 /
+  // 可認領的 MCP / Codex MCP combined) and 'external' (外部 API). 本地 API
+  // is the flexible remainder via flex:1 and isn't independently resizable.
+  // Each divider only ever adjusts the one pane directly above it — no
+  // cross-pane ratio math needed, same idea as the original top/bottom split.
   mcpPaneHeights = signal<Record<string, number>>((() => {
     try {
       const saved = JSON.parse(localStorage.getItem('claude_mcp_pane_heights') || 'null');

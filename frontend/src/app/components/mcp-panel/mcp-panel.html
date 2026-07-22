@@ -11,134 +11,127 @@
     </div>
   </div>
 
-  <!-- App 自己管理的 MCP Server 定義（單一來源，同步到 Claude／Codex 兩邊）
-       跟下面「外部 API／本地」清單（parse claude mcp list 輸出，只反映 Claude
-       那邊看得到什麼）是不同的資料來源。 -->
-  @if (objectKeys(mcpServerDefs).length > 0) {
-    <div class="mcp-pane" [class.mcp-pane-collapsed]="isSectionCollapsed('appManaged')" [style.height.%]="paneHeightPct('appManaged')">
-    <div class="mcp-section" style="height:100%;overflow-y:auto;">
-      <div class="mcp-section-title collapsible" (click)="toggleSection('appManaged')">
-        <span class="mcp-section-chevron">{{ isSectionCollapsed('appManaged') ? '▶' : '▼' }}</span>
-        <span class="mcp-section-icon">🔗</span>
-        <span>App 管理（雙引擎同步）</span>
-        <span class="mcp-section-count">{{ objectKeys(mcpServerDefs).length }}</span>
-      </div>
-      <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('appManaged')">
-        @for (name of objectKeys(mcpServerDefs); track name) {
-          <div class="mcp-card-compact">
-            <div class="mcc-row">
-              <span class="mcc-name">{{ name }}</span>
-              <span style="font-size:10px;color:#888;margin-left:6px;">{{ mcpServerDefs[name].type }}</span>
-              <span style="font-size:10px;margin-left:auto;"
-                [style.color]="mcpServerDefs[name].synced?.claude ? '#4caf50' : '#e07070'"
-                title="Claude 同步狀態——✗ 代表上次同步失敗（例如 Claude CLI 未安裝），不是還沒同步">Claude{{ mcpServerDefs[name].synced?.claude ? ' ✓' : ' ✗' }}</span>
-              <span style="font-size:10px;margin-left:6px;"
-                [style.color]="mcpServerDefs[name].synced?.codex ? '#4caf50' : '#e07070'"
-                title="Codex 同步狀態——✗ 代表上次同步失敗（例如 Codex CLI 未安裝或未登入），不是還沒同步">Codex{{ mcpServerDefs[name].synced?.codex ? ' ✓' : ' ✗' }}</span>
-              <button class="del-btn" style="margin-left:6px;" (click)="deleteServerDef.emit(name)" title="刪除（會同步從兩邊移除）">✕</button>
+  <!-- ══════════════════════════════════════════════════
+       上：一般管理（App 管理 / 可認領的 MCP / Codex MCP）——單一可拖曳
+       高度的區塊，裡面三個子區塊各自可獨立收合，但不再各自有拖曳桿，
+       只有這個群組整體跟「外部 API」之間的一根分隔線。
+  ════════════════════════════════════════════════════ -->
+  <div class="mcp-pane" [style.height.%]="paneHeightPct('general')">
+  <div class="mcp-section mcp-section-general" style="height:100%;overflow-y:auto;">
+
+    <!-- App 自己管理的 MCP Server 定義（單一來源，同步到 Claude／Codex 兩邊）
+         跟下面「外部 API／本地」清單（parse claude mcp list 輸出，只反映 Claude
+         那邊看得到什麼）是不同的資料來源。 -->
+    @if (objectKeys(mcpServerDefs).length > 0) {
+      <div class="mcp-subsection">
+        <div class="mcp-section-title collapsible" (click)="toggleSection('appManaged')">
+          <span class="mcp-section-chevron">{{ isSectionCollapsed('appManaged') ? '▶' : '▼' }}</span>
+          <span class="mcp-section-icon">🔗</span>
+          <span>App 管理（雙引擎同步）</span>
+          <span class="mcp-section-count">{{ objectKeys(mcpServerDefs).length }}</span>
+        </div>
+        <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('appManaged')">
+          @for (name of objectKeys(mcpServerDefs); track name) {
+            <div class="mcp-card-compact">
+              <div class="mcc-row">
+                <span class="mcc-name">{{ name }}</span>
+                <span style="font-size:10px;color:#888;margin-left:6px;">{{ mcpServerDefs[name].type }}</span>
+                <span style="font-size:10px;margin-left:auto;"
+                  [style.color]="mcpServerDefs[name].synced?.claude ? '#4caf50' : '#e07070'"
+                  title="Claude 同步狀態——✗ 代表上次同步失敗（例如 Claude CLI 未安裝），不是還沒同步">Claude{{ mcpServerDefs[name].synced?.claude ? ' ✓' : ' ✗' }}</span>
+                <span style="font-size:10px;margin-left:6px;"
+                  [style.color]="mcpServerDefs[name].synced?.codex ? '#4caf50' : '#e07070'"
+                  title="Codex 同步狀態——✗ 代表上次同步失敗（例如 Codex CLI 未安裝或未登入），不是還沒同步">Codex{{ mcpServerDefs[name].synced?.codex ? ' ✓' : ' ✗' }}</span>
+                <button class="del-btn" style="margin-left:6px;" (click)="deleteServerDef.emit(name)" title="刪除（會同步從兩邊移除）">✕</button>
+              </div>
             </div>
-          </div>
-        }
-      </div>
-    </div>
-    </div><!-- /.mcp-pane -->
-    @if (!isSectionCollapsed('appManaged')) {
-      <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'appManaged'})" title="拖曳調整高度">
-        <div class="mcp-divider-track"><div class="mcp-divider-grip"></div></div>
+          }
+        </div>
       </div>
     }
-  }
 
-  <!-- 可認領的 MCP——Claude／Codex 原生已經有註冊、但還沒被這個 app 的
-       單一來源（App 管理清單）採納的項目，例如直接手動下 CLI 指令加的。
-       resource_sync.py 對 Agent/Skill 早就有這種「原生已有／registry
-       尚未採納」偵測，這是 MCP 版本。 -->
-  @if (importableMcp().length > 0) {
-    <div class="mcp-pane" [class.mcp-pane-collapsed]="isSectionCollapsed('importable')" [style.height.%]="paneHeightPct('importable')">
-    <div class="mcp-section" style="height:100%;overflow-y:auto;">
-      <div class="mcp-section-title collapsible" (click)="toggleSection('importable')">
-        <span class="mcp-section-chevron">{{ isSectionCollapsed('importable') ? '▶' : '▼' }}</span>
-        <span class="mcp-section-icon">📥</span>
-        <span>可認領的 MCP</span>
-        <span class="mcp-section-count">{{ importableMcp().length }}</span>
-        <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshImportableMcp()" [disabled]="importableMcpLoading()">
-          {{ importableMcpLoading() ? '查詢中…' : '↻ 重新查詢' }}
+    <!-- 可認領的 MCP——Claude／Codex 原生已經有註冊、但還沒被這個 app 的
+         單一來源（App 管理清單）採納的項目，例如直接手動下 CLI 指令加的。
+         resource_sync.py 對 Agent/Skill 早就有這種「原生已有／registry
+         尚未採納」偵測，這是 MCP 版本。 -->
+    @if (importableMcp().length > 0) {
+      <div class="mcp-subsection">
+        <div class="mcp-section-title collapsible" (click)="toggleSection('importable')">
+          <span class="mcp-section-chevron">{{ isSectionCollapsed('importable') ? '▶' : '▼' }}</span>
+          <span class="mcp-section-icon">📥</span>
+          <span>可認領的 MCP</span>
+          <span class="mcp-section-count">{{ importableMcp().length }}</span>
+          <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshImportableMcp()" [disabled]="importableMcpLoading()">
+            {{ importableMcpLoading() ? '查詢中…' : '↻ 重新查詢' }}
+          </button>
+        </div>
+        <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('importable')">
+          @for (item of importableMcp(); track item.name) {
+            <div class="mcp-card-compact">
+              <div class="mcc-row">
+                <span class="mcc-name">{{ item.name }}</span>
+                @if (item.inClaude) { <span style="font-size:10px;color:#888;margin-left:6px;">Claude</span> }
+                @if (item.inCodex) { <span style="font-size:10px;color:#888;margin-left:6px;">Codex</span> }
+                @if (item.conflict) {
+                  <span class="mcp-agent-hint" style="color:#e07070;" title="Claude 跟 Codex 兩邊的設定不一樣，認領會採用其中一份，請自行確認是否符合預期">設定不一致</span>
+                }
+                <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="adoptMcp(item.name)" [disabled]="importingMcpName() === item.name">
+                  {{ importingMcpName() === item.name ? '認領中…' : '認領' }}
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+    }
+
+    <!-- Codex 這邊的 MCP 即時連線狀態——codex mcp list 只回報設定是否
+         enabled，不像 claude mcp list 會主動健康檢查，這裡改由後端對每個
+         Codex 註冊的 stdio server 做一次真實 MCP initialize 握手，比較慢
+         所以改成手動觸發，不隨頁面自動載入。 -->
+    <div class="mcp-subsection">
+      <div class="mcp-section-title collapsible" (click)="toggleSection('codexStatus')">
+        <span class="mcp-section-chevron">{{ isSectionCollapsed('codexStatus') ? '▶' : '▼' }}</span>
+        <span class="mcp-section-icon">🤖</span>
+        <span>Codex MCP（即時連線）</span>
+        <span class="mcp-section-count">{{ objectKeys(codexMcpStatus()).length }}</span>
+        <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshCodexMcp()" [disabled]="codexMcpLoading()">
+          {{ codexMcpLoading() ? '檢查中…' : '↻ 檢查連線' }}
         </button>
       </div>
-      <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('importable')">
-        @for (item of importableMcp(); track item.name) {
-          <div class="mcp-card-compact">
-            <div class="mcc-row">
-              <span class="mcc-name">{{ item.name }}</span>
-              @if (item.inClaude) { <span style="font-size:10px;color:#888;margin-left:6px;">Claude</span> }
-              @if (item.inCodex) { <span style="font-size:10px;color:#888;margin-left:6px;">Codex</span> }
-              @if (item.conflict) {
-                <span class="mcp-agent-hint" style="color:#e07070;" title="Claude 跟 Codex 兩邊的設定不一樣，認領會採用其中一份，請自行確認是否符合預期">設定不一致</span>
-              }
-              <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="adoptMcp(item.name)" [disabled]="importingMcpName() === item.name">
-                {{ importingMcpName() === item.name ? '認領中…' : '認領' }}
-              </button>
+      <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('codexStatus')">
+        @if (codexMcpLoading()) {
+          <div class="mcp-empty">正在對每個 Codex MCP server 做連線握手測試，請稍候…</div>
+        } @else if (objectKeys(codexMcpStatus()).length === 0) {
+          <div class="mcp-empty">尚未查詢，點「↻ 檢查連線」開始（會逐一實際啟動每個 server 測試，需要幾秒）</div>
+        } @else {
+          @for (name of objectKeys(codexMcpStatus()); track name) {
+            <div class="mcp-card-compact">
+              <div class="mcc-row">
+                <span class="mcp-status-lamp"
+                  [ngClass]="codexMcpStatus()[name].connected ? 'lamp-green' : (codexMcpStatus()[name].checked ? 'lamp-red' : 'lamp-off')"
+                  [title]="codexMcpStatus()[name].checked
+                    ? (codexMcpStatus()[name].connected ? '✔ 連線正常（已完成 MCP 握手驗證）' : '✗ 連線失敗（啟動或握手逾時）')
+                    : (codexMcpStatus()[name].enabled ? '已啟用但非 stdio 類型，無法用握手測試驗證' : '已在 Codex 停用')"></span>
+                <span class="mcc-name">{{ name }}</span>
+                @if (isInClaudeList(name)) {
+                  <span class="mcp-agent-hint" title="這個名稱在 Claude 那邊（外部/本地 API 或 App 管理）也有註冊">Claude 也有</span>
+                }
+              </div>
             </div>
-          </div>
+          }
         }
       </div>
     </div>
-    </div><!-- /.mcp-pane -->
-    @if (!isSectionCollapsed('importable')) {
-      <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'importable'})" title="拖曳調整高度">
-        <div class="mcp-divider-track"><div class="mcp-divider-grip"></div></div>
-      </div>
-    }
-  }
 
-  <!-- Codex 這邊的 MCP 即時連線狀態——codex mcp list 只回報設定是否
-       enabled，不像 claude mcp list 會主動健康檢查，這裡改由後端對每個
-       Codex 註冊的 stdio server 做一次真實 MCP initialize 握手，比較慢
-       所以改成手動觸發，不隨頁面自動載入。 -->
-  <div class="mcp-pane" [class.mcp-pane-collapsed]="isSectionCollapsed('codexStatus')" [style.height.%]="paneHeightPct('codexStatus')">
-  <div class="mcp-section" style="height:100%;overflow-y:auto;">
-    <div class="mcp-section-title collapsible" (click)="toggleSection('codexStatus')">
-      <span class="mcp-section-chevron">{{ isSectionCollapsed('codexStatus') ? '▶' : '▼' }}</span>
-      <span class="mcp-section-icon">🤖</span>
-      <span>Codex MCP（即時連線）</span>
-      <span class="mcp-section-count">{{ objectKeys(codexMcpStatus()).length }}</span>
-      <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshCodexMcp()" [disabled]="codexMcpLoading()">
-        {{ codexMcpLoading() ? '檢查中…' : '↻ 檢查連線' }}
-      </button>
-    </div>
-    <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('codexStatus')">
-      @if (codexMcpLoading()) {
-        <div class="mcp-empty">正在對每個 Codex MCP server 做連線握手測試，請稍候…</div>
-      } @else if (objectKeys(codexMcpStatus()).length === 0) {
-        <div class="mcp-empty">尚未查詢，點「↻ 檢查連線」開始（會逐一實際啟動每個 server 測試，需要幾秒）</div>
-      } @else {
-        @for (name of objectKeys(codexMcpStatus()); track name) {
-          <div class="mcp-card-compact">
-            <div class="mcc-row">
-              <span class="mcp-status-lamp"
-                [ngClass]="codexMcpStatus()[name].connected ? 'lamp-green' : (codexMcpStatus()[name].checked ? 'lamp-red' : 'lamp-off')"
-                [title]="codexMcpStatus()[name].checked
-                  ? (codexMcpStatus()[name].connected ? '✔ 連線正常（已完成 MCP 握手驗證）' : '✗ 連線失敗（啟動或握手逾時）')
-                  : (codexMcpStatus()[name].enabled ? '已啟用但非 stdio 類型，無法用握手測試驗證' : '已在 Codex 停用')"></span>
-              <span class="mcc-name">{{ name }}</span>
-              @if (isInClaudeList(name)) {
-                <span class="mcp-agent-hint" title="這個名稱在 Claude 那邊（外部/本地 API 或 App 管理）也有註冊">Claude 也有</span>
-              }
-            </div>
-          </div>
-        }
-      }
-    </div>
-  </div>
+  </div><!-- /.mcp-section-general -->
   </div><!-- /.mcp-pane -->
-  @if (!isSectionCollapsed('codexStatus')) {
-    <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'codexStatus'})" title="拖曳調整高度">
-      <div class="mcp-divider-track"><div class="mcp-divider-grip"></div></div>
-    </div>
-  }
+  <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'general'})" title="拖曳調整高度">
+    <div class="mcp-divider-track"><div class="mcp-divider-grip"></div></div>
+  </div>
 
   <!-- ══════════════════════════════════════════════════
-       上半：外部 API（高度由分隔線拖曳控制）
+       中：外部 API（高度由分隔線拖曳控制）
   ════════════════════════════════════════════════════ -->
   <div class="mcp-pane mcp-pane-top" [class.mcp-pane-collapsed]="isSectionCollapsed('external')" [style.height.%]="paneHeightPct('external')">
   <div class="mcp-section mcp-section-external" style="height:100%;overflow-y:auto;">
@@ -211,7 +204,8 @@
   </div>
 
   <!-- ══════════════════════════════════════════════════
-       下半：本地 API（Docker / stdio / local-http）
+       下：本地 API（Docker / stdio / local-http）——填滿剩餘高度，
+       不參與拖曳（跟「外部 API」共用上面那根分隔線）。
   ════════════════════════════════════════════════════ -->
   <div class="mcp-pane mcp-pane-bottom" [class.mcp-pane-collapsed]="isSectionCollapsed('local')">
   <div class="mcp-section mcp-section-local" style="height:100%;overflow-y:auto;">
@@ -366,8 +360,10 @@
     }
     </div><!-- /.panel-list -->
   </div><!-- /.mcp-section-local -->
-  <div class="mcp-footer-hint">
-    新增 MCP：<code>claude mcp add &lt;name&gt; &lt;command&gt;</code>
-  </div>
+  @if (!isSectionCollapsed('local')) {
+    <div class="mcp-footer-hint">
+      新增 MCP：<code>claude mcp add &lt;name&gt; &lt;command&gt;</code>
+    </div>
+  }
   </div><!-- /.mcp-pane-bottom -->
 </div><!-- /.mcp-view -->
