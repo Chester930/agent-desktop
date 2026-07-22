@@ -15,13 +15,15 @@
        跟下面「外部 API／本地」清單（parse claude mcp list 輸出，只反映 Claude
        那邊看得到什麼）是不同的資料來源。 -->
   @if (objectKeys(mcpServerDefs).length > 0) {
-    <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
-      <div class="mcp-section-title">
+    <div class="mcp-pane" [class.mcp-pane-collapsed]="isSectionCollapsed('appManaged')" [style.height.%]="paneHeightPct('appManaged')">
+    <div class="mcp-section" style="height:100%;overflow-y:auto;">
+      <div class="mcp-section-title collapsible" (click)="toggleSection('appManaged')">
+        <span class="mcp-section-chevron">{{ isSectionCollapsed('appManaged') ? '▶' : '▼' }}</span>
         <span class="mcp-section-icon">🔗</span>
         <span>App 管理（雙引擎同步）</span>
         <span class="mcp-section-count">{{ objectKeys(mcpServerDefs).length }}</span>
       </div>
-      <div class="panel-list">
+      <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('appManaged')">
         @for (name of objectKeys(mcpServerDefs); track name) {
           <div class="mcp-card-compact">
             <div class="mcc-row">
@@ -39,6 +41,12 @@
         }
       </div>
     </div>
+    </div><!-- /.mcp-pane -->
+    @if (!isSectionCollapsed('appManaged')) {
+      <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'appManaged'})" title="拖曳調整高度">
+        <div class="mcp-divider-track"><div class="mcp-divider-grip"></div></div>
+      </div>
+    }
   }
 
   <!-- 可認領的 MCP——Claude／Codex 原生已經有註冊、但還沒被這個 app 的
@@ -46,16 +54,18 @@
        resource_sync.py 對 Agent/Skill 早就有這種「原生已有／registry
        尚未採納」偵測，這是 MCP 版本。 -->
   @if (importableMcp().length > 0) {
-    <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
-      <div class="mcp-section-title">
+    <div class="mcp-pane" [class.mcp-pane-collapsed]="isSectionCollapsed('importable')" [style.height.%]="paneHeightPct('importable')">
+    <div class="mcp-section" style="height:100%;overflow-y:auto;">
+      <div class="mcp-section-title collapsible" (click)="toggleSection('importable')">
+        <span class="mcp-section-chevron">{{ isSectionCollapsed('importable') ? '▶' : '▼' }}</span>
         <span class="mcp-section-icon">📥</span>
         <span>可認領的 MCP</span>
         <span class="mcp-section-count">{{ importableMcp().length }}</span>
-        <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="refreshImportableMcp()" [disabled]="importableMcpLoading()">
+        <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshImportableMcp()" [disabled]="importableMcpLoading()">
           {{ importableMcpLoading() ? '查詢中…' : '↻ 重新查詢' }}
         </button>
       </div>
-      <div class="panel-list">
+      <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('importable')">
         @for (item of importableMcp(); track item.name) {
           <div class="mcp-card-compact">
             <div class="mcc-row">
@@ -73,22 +83,30 @@
         }
       </div>
     </div>
+    </div><!-- /.mcp-pane -->
+    @if (!isSectionCollapsed('importable')) {
+      <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'importable'})" title="拖曳調整高度">
+        <div class="mcp-divider-track"><div class="mcp-divider-grip"></div></div>
+      </div>
+    }
   }
 
   <!-- Codex 這邊的 MCP 即時連線狀態——codex mcp list 只回報設定是否
        enabled，不像 claude mcp list 會主動健康檢查，這裡改由後端對每個
        Codex 註冊的 stdio server 做一次真實 MCP initialize 握手，比較慢
        所以改成手動觸發，不隨頁面自動載入。 -->
-  <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
-    <div class="mcp-section-title">
+  <div class="mcp-pane" [class.mcp-pane-collapsed]="isSectionCollapsed('codexStatus')" [style.height.%]="paneHeightPct('codexStatus')">
+  <div class="mcp-section" style="height:100%;overflow-y:auto;">
+    <div class="mcp-section-title collapsible" (click)="toggleSection('codexStatus')">
+      <span class="mcp-section-chevron">{{ isSectionCollapsed('codexStatus') ? '▶' : '▼' }}</span>
       <span class="mcp-section-icon">🤖</span>
       <span>Codex MCP（即時連線）</span>
       <span class="mcp-section-count">{{ objectKeys(codexMcpStatus()).length }}</span>
-      <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="refreshCodexMcp()" [disabled]="codexMcpLoading()">
+      <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshCodexMcp()" [disabled]="codexMcpLoading()">
         {{ codexMcpLoading() ? '檢查中…' : '↻ 檢查連線' }}
       </button>
     </div>
-    <div class="panel-list">
+    <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('codexStatus')">
       @if (codexMcpLoading()) {
         <div class="mcp-empty">正在對每個 Codex MCP server 做連線握手測試，請稍候…</div>
       } @else if (objectKeys(codexMcpStatus()).length === 0) {
@@ -112,18 +130,25 @@
       }
     </div>
   </div>
+  </div><!-- /.mcp-pane -->
+  @if (!isSectionCollapsed('codexStatus')) {
+    <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'codexStatus'})" title="拖曳調整高度">
+      <div class="mcp-divider-track"><div class="mcp-divider-grip"></div></div>
+    </div>
+  }
 
   <!-- ══════════════════════════════════════════════════
        上半：外部 API（高度由分隔線拖曳控制）
   ════════════════════════════════════════════════════ -->
-  <div class="mcp-pane mcp-pane-top" [style.height.%]="mcpSplitPct">
+  <div class="mcp-pane mcp-pane-top" [class.mcp-pane-collapsed]="isSectionCollapsed('external')" [style.height.%]="paneHeightPct('external')">
   <div class="mcp-section mcp-section-external" style="height:100%;overflow-y:auto;">
-    <div class="mcp-section-title">
+    <div class="mcp-section-title collapsible" (click)="toggleSection('external')">
+      <span class="mcp-section-chevron">{{ isSectionCollapsed('external') ? '▶' : '▼' }}</span>
       <span class="mcp-section-icon">🌐</span>
       <span>外部 API</span>
       <span class="mcp-section-count">{{ externalMcpServers.length }}</span>
     </div>
-    <div class="panel-list">
+    <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('external')">
     @for (m of externalMcpServers; track m.id) {
       <div class="mcp-card-compact"
         [class.expanded]="expandedMcpId === m.id"
@@ -179,7 +204,7 @@
   </div><!-- /.mcp-pane-top -->
 
   <!-- ══ 可拖曳分隔線 ══════════════════════════════════ -->
-  <div class="mcp-divider" (mousedown)="dividerMousedown.emit($event)" title="拖曳調整上下比例">
+  <div class="mcp-divider" (mousedown)="dividerMousedown.emit({event: $event, key: 'external'})" title="拖曳調整上下比例">
     <div class="mcp-divider-track">
       <div class="mcp-divider-grip"></div>
     </div>
@@ -188,15 +213,16 @@
   <!-- ══════════════════════════════════════════════════
        下半：本地 API（Docker / stdio / local-http）
   ════════════════════════════════════════════════════ -->
-  <div class="mcp-pane mcp-pane-bottom">
+  <div class="mcp-pane mcp-pane-bottom" [class.mcp-pane-collapsed]="isSectionCollapsed('local')">
   <div class="mcp-section mcp-section-local" style="height:100%;overflow-y:auto;">
-    <div class="mcp-section-title">
+    <div class="mcp-section-title collapsible" (click)="toggleSection('local')">
+      <span class="mcp-section-chevron">{{ isSectionCollapsed('local') ? '▶' : '▼' }}</span>
       <span class="mcp-section-icon">🖥</span>
       <span>本地 API</span>
       <span class="mcp-section-count">{{ localMcpServers.length }}</span>
       <span class="mcp-section-hint">啟動 / 關閉 / 重啟</span>
     </div>
-    <div class="panel-list">
+    <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('local')">
     @for (m of localMcpServers; track m.id) {
       <!-- ── 本地 API 卡片（compact） ── -->
       <div class="mcp-card-compact"

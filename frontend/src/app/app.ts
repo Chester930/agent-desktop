@@ -25,6 +25,13 @@ import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, McpServer, McpTool, McpType, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
 
+// Default % heights for the MCP panel's resizable sections (see
+// App.mcpPaneHeights) — every section except the last (本地 API), which
+// stays the flexible remainder via flex:1.
+const MCP_PANE_DEFAULTS: Record<string, number> = {
+  appManaged: 14, importable: 14, codexStatus: 18, external: 30,
+};
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -207,33 +214,49 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   agentSkillsMap = signal<Record<string, string[]>>({});
   agentMcpsMap = signal<Record<string, string[]>>({}); // agent 直連 MCP，不透過 skill
 
-  // MCP panel split (top section height %, clamped 15–80)
-  mcpSplitPct = signal<number>(
-    Number(localStorage.getItem('claude_mcp_split_pct') || '45')
-  );
+  // MCP panel pane heights (% of .mcp-view height), one entry per resizable
+  // section — every section except the last (本地 API), which stays the
+  // flexible remainder via flex:1. Keyed the same as mcp-panel's section
+  // keys (appManaged/importable/codexStatus/external) so each divider only
+  // ever adjusts the one pane directly above it — no cross-pane ratio math
+  // needed, same idea as the original single top/bottom split.
+  mcpPaneHeights = signal<Record<string, number>>((() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('claude_mcp_pane_heights') || 'null');
+      if (saved && typeof saved === 'object') return { ...MCP_PANE_DEFAULTS, ...saved };
+    } catch { /* fall through to defaults */ }
+    // Migrate the old single-pane split key (pre-multi-pane resize) if present.
+    const legacy = Number(localStorage.getItem('claude_mcp_split_pct'));
+    return legacy
+      ? { ...MCP_PANE_DEFAULTS, external: legacy }
+      : { ...MCP_PANE_DEFAULTS };
+  })());
   private _mcpDragActive = false;
+  private _mcpDragKey: string | null = null;
   private _mcpDragStartY = 0;
-  private _mcpDragStartPct = 45;
+  private _mcpDragStartPct = 0;
 
-  onMcpDividerDown(e: MouseEvent) {
+  onMcpDividerDown(e: MouseEvent, key: string) {
     e.preventDefault();
     this._mcpDragActive = true;
+    this._mcpDragKey = key;
     this._mcpDragStartY = e.clientY;
-    this._mcpDragStartPct = this.mcpSplitPct();
+    this._mcpDragStartPct = this.mcpPaneHeights()[key] ?? 20;
 
     const onMove = (mv: MouseEvent) => {
-      if (!this._mcpDragActive) return;
+      if (!this._mcpDragActive || !this._mcpDragKey) return;
       const container = document.querySelector('.mcp-view') as HTMLElement;
       if (!container) return;
       const totalH = container.clientHeight;
       const delta = mv.clientY - this._mcpDragStartY;
-      const newPct = Math.max(15, Math.min(80, this._mcpDragStartPct + (delta / totalH) * 100));
-      this.mcpSplitPct.set(Math.round(newPct));
+      const newPct = Math.max(8, Math.min(70, this._mcpDragStartPct + (delta / totalH) * 100));
+      this.mcpPaneHeights.update(h => ({ ...h, [this._mcpDragKey!]: Math.round(newPct) }));
     };
 
     const onUp = () => {
       this._mcpDragActive = false;
-      localStorage.setItem('claude_mcp_split_pct', String(this.mcpSplitPct()));
+      this._mcpDragKey = null;
+      localStorage.setItem('claude_mcp_pane_heights', JSON.stringify(this.mcpPaneHeights()));
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       document.body.style.cursor = '';
