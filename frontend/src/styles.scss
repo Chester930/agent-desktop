@@ -902,6 +902,25 @@ select option {
   top: 0;
   background: #0d0d0d;
   z-index: 2;
+
+  &.collapsible {
+    cursor: pointer;
+    user-select: none;
+    &:hover { color: #ccc; background: #141414; }
+  }
+}
+.mcp-section-chevron {
+  font-size: 9px;
+  width: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: color 0.15s;
+  .collapsible:hover & { color: #aaa; }
+}
+.panel-list.section-collapsed {
+  display: none;
 }
 .mcp-section-icon { font-size: 13px; }
 .mcp-section-count {
@@ -1043,6 +1062,17 @@ select option {
 }
 .mcp-pane-bottom {
   flex: 1 1 0;
+}
+// Collapsed section (header only, list hidden via .section-collapsed) —
+// pin to a fixed header-sized height rather than "auto": the section inside
+// uses flex: 1 1 0 (basis 0, grow-to-fill), which needs a *definite* parent
+// size to grow into. An auto/content-sized parent has no definite size for
+// a basis-0 child to resolve against, so both collapse to 0px — hiding the
+// header (and its click target) along with the list, with no way to
+// re-expand. A fixed px height sidesteps that entirely.
+.mcp-pane.mcp-pane-collapsed {
+  flex: 0 0 32px;
+  min-height: 32px;
 }
 
 .mcp-divider {

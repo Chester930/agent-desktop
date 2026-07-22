@@ -15,7 +15,9 @@ export class McpPanelComponent implements OnInit, OnDestroy {
   @Input() localMcpServers: McpServer[] = [];
   @Input() expandedMcpId = '';
   @Input() mcpLoading = false;
-  @Input() mcpSplitPct = 45;
+  // % of panel height for each resizable section above the last one
+  // (本地 API, which is the flexible remainder) — keyed by section key.
+  @Input() mcpPaneHeights: Record<string, number> = {};
   // Precomputed by App — same reasoning as skill-panel's Sets: avoids
   // re-running a full cross-tab lookup per card on every change-detection
   // pass (see app.ts requiredMcpNames/linkedMcpNames/sessionMcpNames).
@@ -33,7 +35,7 @@ export class McpPanelComponent implements OnInit, OnDestroy {
   @Output() toggleExpand = new EventEmitter<string>();
   @Output() toggleInTab = new EventEmitter<string>();
   @Output() toggleManaged = new EventEmitter<string>();
-  @Output() dividerMousedown = new EventEmitter<MouseEvent>();
+  @Output() dividerMousedown = new EventEmitter<{ event: MouseEvent; key: string }>();
   @Output() start = new EventEmitter<string>();
   @Output() stop = new EventEmitter<string>();
   @Output() restart = new EventEmitter<string>();
@@ -72,6 +74,29 @@ export class McpPanelComponent implements OnInit, OnDestroy {
   // ngOnInit 自動打。
   codexMcpStatus = signal<Record<string, { enabled: boolean; connected: boolean; checked: boolean; transportType: string }>>({});
   codexMcpLoading = signal(false);
+
+  // 各區塊折疊狀態（持久化到 localStorage）
+  collapsedSections = signal<Record<string, boolean>>(
+    JSON.parse(localStorage.getItem('mcp_collapsed_sections') || '{}')
+  );
+
+  toggleSection(key: string) {
+    this.collapsedSections.update(s => {
+      const next = { ...s, [key]: !s[key] };
+      localStorage.setItem('mcp_collapsed_sections', JSON.stringify(next));
+      return next;
+    });
+  }
+
+  isSectionCollapsed(key: string): boolean {
+    return !!this.collapsedSections()[key];
+  }
+
+  /** Height % for a resizable pane, or null when collapsed (falls back to
+   * the pane's CSS `flex: 0 0 auto`, i.e. header-only height). */
+  paneHeightPct(key: string): number | null {
+    return this.isSectionCollapsed(key) ? null : (this.mcpPaneHeights[key] ?? 20);
+  }
 
   refreshCodexMcp() {
     this.codexMcpLoading.set(true);
