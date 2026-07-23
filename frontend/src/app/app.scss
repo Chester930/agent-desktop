@@ -1013,6 +1013,9 @@ body {
   color-scheme: dark;
 }
 
+// 設定面板內容比其他 modal 多很多（9 個子區塊），跟說明中心用同樣尺寸
+.settings-modal { width: 640px; max-width: 95vw; max-height: 85vh; }
+
 .modal-header {
   display: flex;
   align-items: center;

@@ -238,7 +238,7 @@
   <!-- ── 設定 Modal ──────────────────────────────────── -->
   @if (settingsOpen()) {
     <div class="modal-backdrop" (click)="closeSettings()">
-      <div class="modal" (click)="$event.stopPropagation()">
+      <div class="modal settings-modal" (click)="$event.stopPropagation()">
         <div class="modal-header">
           <span>⚙ 設定</span>
           <button class="icon-btn" (click)="closeSettings()">✕</button>
@@ -484,7 +484,7 @@
               -->
 
               <button class="umenu-item" (click)="openHelp()">
-                <span class="umenu-icon">❓</span><span>說明文件</span>
+                <span class="umenu-icon">❓</span><span>說明中心</span>
               </button>
 
               <div class="umenu-sep"></div>
@@ -1541,7 +1541,7 @@
                 <div class="help-step-num">2</div>
                 <div>
                   <strong>設定專案工作目錄</strong><br>
-                  <span class="help-sub">點右上角 ⚙ 設定，在「工作目錄」填入你的專案絕對路徑，Claude Code 與 Codex 會共用同一個路徑。<br>
+                  <span class="help-sub">點右上角 ⚙ 設定，在「預設工作目錄（全域）」填入你的專案絕對路徑，Claude Code 與 Codex 會共用同一個路徑。<br>
                   若使用 Claude Code，這也決定了記憶、排程和靈魂設定存放的位置。</span>
                 </div>
               </div>
@@ -1632,7 +1632,7 @@
               <div class="help-qa">
                 <div class="help-q">Session 列表是空的，怎麼辦？</div>
                 <div class="help-a">
-                  確認「工作目錄」設定是否正確（⚙ 設定）。<br>
+                  確認「預設工作目錄（全域）」設定是否正確（⚙ 設定）。<br>
                   Claude Code 的對話記錄存在 <code>~/.claude/sessions/</code>，若從未使用過 CLI，該目錄可能是空的。
                 </div>
               </div>
@@ -1657,7 +1657,7 @@
               </div>
 
               <div class="help-qa">
-                <div class="help-q">「工作目錄」要填什麼？</div>
+                <div class="help-q">「預設工作目錄（全域）」要填什麼？</div>
                 <div class="help-a">
                   填你平常在終端機 <code>cd</code> 到的專案根目錄的<strong>絕對路徑</strong>，Claude Code 與 Codex 會共用這個路徑作為執行起點。<br>
                   例：<code>C:\Users\你的名字\Desktop\my-project</code><br><br>

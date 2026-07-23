@@ -27,7 +27,7 @@
 </label>
 <label>工作目錄
   <input [(ngModel)]="settingsForm.workDir" placeholder="C:\Users\mycena">
-  <small>Claude 執行時的起始目錄</small>
+  <small>新對話欄的預設起始目錄，Claude Code 與 Codex 皆會套用（未個別選擇資料夾時的 fallback）</small>
   <!-- 最近使用的工作目錄（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
   @defer (on immediate) {
     <app-recent-work-dirs (pickDir)="settingsForm.workDir = $event" />
