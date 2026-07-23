@@ -77,28 +77,34 @@
           </div>
         }
 
-        <!-- Step 3: 設定專案目錄 -->
+        <!-- Step 3: 設定專案工作目錄 -->
         @if (onboardingStep() === 3) {
           <div class="ob-body">
             <div class="ob-icon">📁</div>
-            <h2 class="ob-title">設定 Claude Code 專案目錄</h2>
+            <h2 class="ob-title">設定專案工作目錄</h2>
             <p class="ob-desc">
-              Claude Code 為每個專案目錄儲存獨立的<strong>記憶、排程和靈魂設定</strong>。<br>
-              請輸入你平常使用 Claude Code CLI 時的主要專案路徑。
+              這是 <strong>Claude Code</strong> 與 <strong>Codex</strong> 共用的執行工作目錄。<br>
+              @if (engineUserKind() !== 'codex') {
+                Claude Code 會依此路徑在 <code>~/.claude/projects/</code> 儲存獨立的<strong>記憶、排程和靈魂設定</strong>；
+              }
+              @if (engineUserKind() !== 'claude') {
+                Codex 則會直接以此路徑作為執行時的起始目錄。
+              }
+              <br>請輸入你平常使用的主要專案路徑。
             </p>
             <div class="ob-dir-row">
               <input class="ob-dir-input" [ngModel]="onboardingDir()" (ngModelChange)="onboardingDir.set($event)"
                 placeholder="例：C:\Users\你的名字\Desktop\my-project">
               <button class="btn-secondary ob-pick-btn" (click)="pickOnboardingDir()">選擇…</button>
             </div>
-            @if (onboardingSlug()) {
+            @if (onboardingSlug() && engineUserKind() !== 'codex') {
               <div class="ob-slug-preview">
-                <span class="ob-slug-label">資料目錄：</span>
+                <span class="ob-slug-label">Claude Code 資料目錄：</span>
                 <code>~/.claude/projects/{{ onboardingSlug() }}/</code>
               </div>
             }
             <p class="ob-hint">
-              不確定路徑？可以先<button class="ob-skip-link" (click)="skipOnboarding()">跳過</button>，之後在 ⚙ 設定中調整。
+              不確定路徑？可以先<button class="ob-skip-link" (click)="skipOnboarding()">跳過</button>，之後在 ⚙ 設定中調整，兩個引擎都會套用同一個路徑。
             </p>
           </div>
         }
@@ -1534,9 +1540,9 @@
               <div class="help-step">
                 <div class="help-step-num">2</div>
                 <div>
-                  <strong>設定 Claude Code 專案目錄</strong><br>
-                  <span class="help-sub">點右上角 ⚙ 設定，在「Claude Code 專案目錄」填入你的專案絕對路徑。<br>
-                  這決定了記憶、排程和靈魂設定存放的位置。</span>
+                  <strong>設定專案工作目錄</strong><br>
+                  <span class="help-sub">點右上角 ⚙ 設定，在「工作目錄」填入你的專案絕對路徑，Claude Code 與 Codex 會共用同一個路徑。<br>
+                  若使用 Claude Code，這也決定了記憶、排程和靈魂設定存放的位置。</span>
                 </div>
               </div>
               <div class="help-step">
@@ -1626,7 +1632,7 @@
               <div class="help-qa">
                 <div class="help-q">Session 列表是空的，怎麼辦？</div>
                 <div class="help-a">
-                  確認「Claude Code 專案目錄」設定是否正確（⚙ 設定）。<br>
+                  確認「工作目錄」設定是否正確（⚙ 設定）。<br>
                   Claude Code 的對話記錄存在 <code>~/.claude/sessions/</code>，若從未使用過 CLI，該目錄可能是空的。
                 </div>
               </div>
@@ -1651,11 +1657,11 @@
               </div>
 
               <div class="help-qa">
-                <div class="help-q">「專案目錄」要填什麼？</div>
+                <div class="help-q">「工作目錄」要填什麼？</div>
                 <div class="help-a">
-                  填你平常在終端機 <code>cd</code> 到的專案根目錄的<strong>絕對路徑</strong>。<br>
+                  填你平常在終端機 <code>cd</code> 到的專案根目錄的<strong>絕對路徑</strong>，Claude Code 與 Codex 會共用這個路徑作為執行起點。<br>
                   例：<code>C:\Users\你的名字\Desktop\my-project</code><br><br>
-                  這個路徑決定從 <code>~/.claude/projects/</code> 的哪個子目錄讀取資料。<br>
+                  若使用 Claude Code，這個路徑也決定從 <code>~/.claude/projects/</code> 的哪個子目錄讀取資料。<br>
                   若不確定，可暫時留空，記憶和排程功能仍可使用。
                 </div>
               </div>
