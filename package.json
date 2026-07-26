@@ -1,19 +1,21 @@
 {
   "name": "agent-desktop",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Agent Desktop - 可切換 Claude Code／Codex CLI 的多引擎 Agent 協作平台",
   "main": "electron/main.js",
   "scripts": {
     "start":           "electron . --dev",
     "frontend:build":  "cd frontend && npx ng build --base-href ./",
 
-    "backend:compile:win":   "cd backend && python -m pip install -r requirements-build.txt && python -m PyInstaller --name claude-backend --add-data \"presets;presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && (if exist claude-backend rmdir /s /q claude-backend) && xcopy /E /I /Y dist\\claude-backend claude-backend",
-    "backend:compile:mac":   "cd backend && python3 -m pip install -r requirements-build.txt && pyinstaller --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
-    "backend:compile:linux": "cd backend && python3 -m pip install -r requirements-build.txt && pyinstaller --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
+    "backend:compile:win":   "cd backend && python -m pip install -r requirements-build.txt && python -m PyInstaller --noconfirm --name claude-backend --add-data \"presets;presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && (if exist claude-backend rmdir /s /q claude-backend) && xcopy /E /I /Y dist\\claude-backend claude-backend",
+    "backend:compile:mac":   "cd backend && python3 -m pip install -r requirements.txt -r requirements-build.txt && pyinstaller --noconfirm --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
+    "backend:compile:linux": "cd backend && grep -v '^nvidia-' requirements.txt > /tmp/agent-desktop-package-requirements.txt && python3 -m pip install -r /tmp/agent-desktop-package-requirements.txt -r requirements-build.txt && pyinstaller --noconfirm --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
 
     "dist:win":   "npm run frontend:build && npm run backend:compile:win   && electron-builder --win",
     "dist:mac":   "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac",
-    "dist:linux": "npm run frontend:build && npm run backend:compile:linux && electron-builder --linux",
+    "dist:mac:x64":   "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac --x64",
+    "dist:mac:arm64": "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac --arm64",
+    "dist:linux": "npm run frontend:build && npm run backend:compile:linux && electron-builder --linux --x64",
     "dist":       "npm run dist:win",
 
     "build:win":   "npm run frontend:build && electron-builder --win   --dir",
@@ -54,10 +56,7 @@
     "mac": {
       "icon": "electron/icon.icns",
       "category": "public.app-category.developer-tools",
-      "target": [
-        { "target": "dmg",  "arch": ["x64", "arm64"] },
-        { "target": "zip",  "arch": ["x64", "arm64"] }
-      ]
+      "target": ["dmg", "zip"]
     },
     "linux": {
       "icon": "electron/icon.png",
