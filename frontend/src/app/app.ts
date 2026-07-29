@@ -611,6 +611,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Session pagination
   sessionOffset = 0;
   hasMoreSessions = signal(false);
+  private _sessionSearchDebounce: any;
 
   // Debug mode
   debugMode = signal(false);
@@ -3376,6 +3377,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.sessions.set(r.items);
       this.hasMoreSessions.set(r.has_more);
     });
+  }
+
+  // 搜尋框 (input) 專用：每個按鍵都直接呼叫 searchSessions() 會在每次
+  // keystroke 都打一次後端（含全量 session 掃描），對話一多就很明顯卡頓。
+  // 這裡 debounce 掉，其餘程式化呼叫（切換引擎等）維持即時不受影響。
+  onSessionSearchInput() {
+    clearTimeout(this._sessionSearchDebounce);
+    this._sessionSearchDebounce = setTimeout(() => this.searchSessions(), 250);
   }
 
   loadMoreSessions() {
