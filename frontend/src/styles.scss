@@ -876,6 +876,7 @@ select option {
 
   &.collapsible {
     cursor: pointer;
+    -webkit-user-select: none;
     user-select: none;
     &:hover { color: #ccc; background: #141414; }
   }
@@ -1065,6 +1066,7 @@ select option {
   justify-content: center;
   position: relative;
   z-index: 3;
+  -webkit-user-select: none;
   user-select: none;
 }
 .mcp-divider-track {

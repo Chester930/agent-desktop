@@ -341,7 +341,13 @@
           <button class="new-chat-btn" (click)="newChat()">＋ 新對話</button>
         </div>
 
-        <!-- 搜尋 + 分組切換 -->
+        <!-- 歷史來源 + 搜尋 + 分組切換 -->
+        @if (showSessionEngineSwitch()) {
+          <div class="session-engine-toggle">
+            <button [class.active]="sessionEngineFilter() === 'claude'" (click)="setSessionEngineFilter('claude')">Claude</button>
+            <button [class.active]="sessionEngineFilter() === 'codex'"  (click)="setSessionEngineFilter('codex')">Codex</button>
+          </div>
+        }
         <div class="session-search">
           <input [(ngModel)]="sessionSearch" (input)="searchSessions()"
             placeholder="搜尋對話…" class="session-search-input">
@@ -365,6 +371,9 @@
 
                 @if (renamingId() === s.id) {
                   <input class="session-rename-input" [(ngModel)]="renameTitle"
+                    aria-label="Rename session"
+                    title="Rename session"
+                    placeholder="Enter session name"
                     (keydown.enter)="confirmRename(s)"
                     (keydown.escape)="renamingId.set(null)"
                     (blur)="confirmRename(s)"
@@ -425,8 +434,10 @@
                         <button class="sess-act-btn" (click)="togglePin(s.id, $event)"
                           [title]="isPinned(s.id) ? '取消置頂' : '置頂'"
                           [class.active]="isPinned(s.id)">📌</button>
-                        <button class="sess-act-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
-                          title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
+                        @if ((s.engine || 'claude') === 'claude') {
+                          <button class="sess-act-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
+                            title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
+                        }
                         <button class="sess-act-btn danger" (click)="deleteSession(s, $event)" title="刪除">✕</button>
                       </div>
                       <span class="session-time">{{ s.mtime * 1000 | date:'M/d HH:mm' }}</span>
@@ -661,9 +672,11 @@
         <button class="ctx-item" (click)="togglePin(contextMenu()!.session.id, $event); closeContextMenu()">
           📌 {{ isPinned(contextMenu()!.session.id) ? '取消置頂' : '置頂' }}
         </button>
-        <button class="ctx-item" (click)="generateSkillFromSession(contextMenu()!.session.id); closeContextMenu()">
-          ✦ 產生 Skill
-        </button>
+        @if (($any(contextMenu()!.session).engine || 'claude') === 'claude') {
+          <button class="ctx-item" (click)="generateSkillFromSession(contextMenu()!.session.id); closeContextMenu()">
+            ✦ 產生 Skill
+          </button>
+        }
         <button class="ctx-item" (click)="ctxCopyId(contextMenu()!.session)">
           🔗 複製 Session ID
         </button>
@@ -715,7 +728,7 @@
                 
                 <!-- 對話框專屬代理人選擇器 -->
                 <div class="panel-agent-selector" (click)="$event.stopPropagation()" style="display: inline-flex; align-items: center; margin-right: 6px; margin-left: 2px;">
-                  <select [value]="tab.selectedAgent || ''" [disabled]="!!tab.teamId" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
+                  <select title="選擇代理人" aria-label="選擇代理人" [value]="tab.selectedAgent || ''" [disabled]="!!tab.teamId" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
                     <option value="" [selected]="!tab.selectedAgent">🤖 無代理人</option>
                     @for (a of dropdownAgents(); track a.id) {
                       <option [value]="a.id" [selected]="a.id === tab.selectedAgent">🤖 {{ a.name }}</option>
@@ -764,6 +777,9 @@
                         @if (editingMsgIdx() === $index) {
                           <div class="msg-edit-wrap">
                             <textarea class="msg-edit-input"
+                              aria-label="編輯訊息內容"
+                              title="編輯訊息"
+                              placeholder="編輯訊息..."
                               [value]="editingMsgText()"
                               (input)="editingMsgText.set($any($event.target).value)"
                               (keydown.control.enter)="confirmEditMsg($index)"
@@ -1132,7 +1148,7 @@
           <div class="input-banner">
             <span>{{ bannerMessage() }}</span>
             <div class="banner-actions">
-              <a href="https://support.anthropic.com" target="_blank" class="banner-link">Learn more</a>
+              <a href="https://support.anthropic.com" target="_blank" rel="noopener noreferrer" class="banner-link">Learn more</a>
               <button class="banner-close" (click)="bannerDismissed.set(true)">✕</button>
             </div>
           </div>
@@ -1164,7 +1180,7 @@
             @for (f of attachedFiles(); track f.path) {
               <span class="attachment-chip">
                 @if (f.preview) {
-                  <img class="img-thumb" [src]="f.preview" [alt]="f.name">
+                  <img class="img-thumb" [src]="f.preview" [alt]="f.name" [title]="f.name" alt="{{ f.name }}" title="{{ f.name }}">
                 } @else {
                   📎
                 }
@@ -1179,7 +1195,7 @@
           @if (selectedAgent()) {
             <span class="active-agent-badge">&#64;{{ selectedAgent() }}</span>
           }
-          <textarea
+          <textarea aria-label="輸入訊息"
             #inputRef
             class="chat-input"
             [(ngModel)]="inputText"
@@ -1293,6 +1309,8 @@
         @if (['teams','agents','skills','mcp'].includes(activeTab())) {
           <div class="right-panel-search">
             <input class="right-panel-search-input"
+              aria-label="搜尋"
+              title="搜尋"
               [ngModel]="rightPanelFilter()"
               (ngModelChange)="rightPanelFilter.set($event)"
               [placeholder]="activeTab() === 'teams' ? '搜尋 TEAM…' : activeTab() === 'agents' ? '搜尋 AGENT…' : activeTab() === 'skills' ? '搜尋 SKILL…' : '搜尋 MCP…'">
@@ -1574,22 +1592,22 @@
 
               <div class="help-feature">
                 <div class="help-feature-title">🤖 Agents（代理人）</div>
-                <p>Agent 定義 Claude 的角色和行為。放在 <code>~/.claude/agents/</code> 目錄的 <code>.md</code> 檔案會自動出現在右側面板。<br>
+                <p>Agent 定義執行角色和行為。放在資料根目錄的 <code>agents/</code> 目錄中，<code>.md</code> 檔案會自動出現在右側面板。<br>
                 在右側面板點「啟用」即可套用。</p>
-                <code class="help-code">~/.claude/agents/my-agent.md</code>
+                <code class="help-code">資料根目錄/agents/my-agent.md</code>
               </div>
 
               <div class="help-feature">
                 <div class="help-feature-title">🛠 Skills（技能）</div>
                 <p>Skill 提供特定任務的專業知識。在輸入框打 <code>/skill名稱</code> 即可使用。<br>
-                放在 <code>~/.claude/skills/</code> 目錄的 <code>.md</code> 檔案或子目錄都會被讀取。</p>
+                放在資料根目錄的 <code>skills/</code> 目錄中，<code>.md</code> 檔案或子目錄都會被讀取。</p>
                 <p>也可以點對話歷史的 <strong>✦ 按鈕</strong>，讓 AI 自動從對話生成 Skill 草稿。</p>
               </div>
 
               <div class="help-feature">
                 <div class="help-feature-title">🧠 記憶（Memory）</div>
                 <p>跨對話的持久資訊。以 key-value 形式存在右側 Memory 頁籤。<br>
-                存放位置：<code>~/.claude/projects/&lt;slug&gt;/memory/</code></p>
+                存放位置：<code>資料根目錄/projects/&lt;slug&gt;/memory/</code></p>
               </div>
 
               <div class="help-feature">
@@ -1600,7 +1618,7 @@
 
               <div class="help-feature">
                 <div class="help-feature-title">👤 靈魂（Soul）</div>
-                <p>讓 Claude 在每次對話開頭都載入特定人格設定。<br>
+                <p>讓目前使用的執行引擎在每次對話開頭都載入特定人格設定。<br>
                 可以建立多個靈魂並隨時切換。</p>
               </div>
 
@@ -1631,7 +1649,7 @@
                 <div class="help-q">Session 列表是空的，怎麼辦？</div>
                 <div class="help-a">
                   確認「預設工作目錄（全域）」設定是否正確（⚙ 設定）。<br>
-                  Claude Code 的對話記錄存在 <code>~/.claude/sessions/</code>，若從未使用過 CLI，該目錄可能是空的。
+                  左側歷史紀錄可在 Claude / Codex 之間切換；若目前只啟用單一引擎，只會顯示該引擎的紀錄。
                 </div>
               </div>
 
@@ -1639,8 +1657,8 @@
                 <div class="help-q">Agents / Skills 頁籤顯示空白？</div>
                 <div class="help-a">
                   需要在對應目錄建立 <code>.md</code> 檔案：<br>
-                  <code>~/.claude/agents/</code> — 放 Agent 檔案<br>
-                  <code>~/.claude/skills/</code> — 放 Skill 檔案<br>
+                  <code>資料根目錄/agents/</code> — 放 Agent 檔案<br>
+                  <code>資料根目錄/skills/</code> — 放 Skill 檔案<br>
                   建立後點右上角 ↻ 重新整理。
                 </div>
               </div>
@@ -1659,7 +1677,7 @@
                 <div class="help-a">
                   填你平常在終端機 <code>cd</code> 到的專案根目錄的<strong>絕對路徑</strong>，Claude Code 與 Codex 會共用這個路徑作為執行起點。<br>
                   例：<code>C:\Users\你的名字\Desktop\my-project</code><br><br>
-                  若使用 Claude Code，這個路徑也決定從 <code>~/.claude/projects/</code> 的哪個子目錄讀取資料。<br>
+                  記憶、排程與靈魂設定會使用資料根目錄中的專案 slug 子目錄。<br>
                   若不確定，可暫時留空，記憶和排程功能仍可使用。
                 </div>
               </div>
@@ -2029,7 +2047,7 @@
           <div class="editor-section-title">成員</div>
           @for (m of teamEditorData().members ?? []; track $index) {
             <div class="team-member-editor-row">
-              <select class="memory-project-select" style="flex:1"
+              <select class="memory-project-select" style="flex:1" title="選擇 Agent" aria-label="選擇 Agent"
                 [value]="m.agent"
                 (change)="teamEditorUpdateMember($index, 'agent', $any($event.target).value)">
                 <option value="">選擇 Agent…</option>

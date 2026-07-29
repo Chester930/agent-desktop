@@ -108,11 +108,60 @@ def _all_session_files() -> list[Path]:
             files.extend(slug_dir.glob("*.jsonl"))
     return files
 
+def _codex_home() -> Path:
+    raw = os.environ.get("CODEX_HOME", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".codex"
+
+def _all_codex_session_files() -> list[Path]:
+    """Yield Codex CLI session JSONL files without touching its private SQLite DBs."""
+    sessions_dir = _codex_home() / "sessions"
+    if not sessions_dir.exists():
+        return []
+    return [p for p in sessions_dir.rglob("*.jsonl") if p.is_file()]
+
+def _codex_session_id_from_path(f: Path) -> str:
+    stem = f.stem
+    prefix = "rollout-"
+    if stem.startswith(prefix):
+        parts = stem.split("-")
+        if len(parts) >= 8:
+            return "-".join(parts[-5:])
+    return stem
+
+def _load_codex_session_index() -> dict[str, dict]:
+    index_file = _codex_home() / "session_index.jsonl"
+    result: dict[str, dict] = {}
+    if not index_file.exists():
+        return result
+    try:
+        for line in index_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            sid = str(row.get("id") or row.get("session_id") or "").strip()
+            if sid:
+                result[sid] = row
+    except Exception:
+        pass
+    return result
+
+def _parse_iso_timestamp(value: str) -> float:
+    if not value:
+        return 0.0
+    try:
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        return 0.0
+
 def _find_session_file(sid: str) -> Path | None:
     """Find a session .jsonl file by ID; check DB path first, then scan."""
     try:
         with _db_ctx() as c:
-            row = c.execute("SELECT file_path FROM sessions WHERE id=?", (sid,)).fetchone()
+            row = c.execute("SELECT file_path FROM sessions WHERE id=? AND engine='claude'", (sid,)).fetchone()
             if row and row["file_path"]:
                 p = Path(row["file_path"])
                 if p.exists():
@@ -123,6 +172,25 @@ def _find_session_file(sid: str) -> Path | None:
     for f in _all_session_files():
         if f.stem == sid:
             return f
+    return None
+
+def _find_session_record(sid: str) -> tuple[Path, str] | None:
+    """Find a session file and its owning engine."""
+    try:
+        with _db_ctx() as c:
+            row = c.execute("SELECT file_path, engine FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row and row["file_path"]:
+                p = Path(row["file_path"])
+                if p.exists():
+                    return p, row["engine"] or "claude"
+    except Exception:
+        pass
+    f = _find_session_file(sid)
+    if f:
+        return f, "claude"
+    for f in _all_codex_session_files():
+        if _codex_session_id_from_path(f) == sid:
+            return f, "codex"
     return None
 
 
@@ -226,6 +294,7 @@ def _db_ctx():
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
+    engine        TEXT NOT NULL DEFAULT 'claude',
     title         TEXT NOT NULL DEFAULT '',
     mtime         REAL NOT NULL DEFAULT 0,
     search_text   TEXT NOT NULL DEFAULT '',
@@ -286,6 +355,8 @@ def _migrate_db() -> None:
     """Add missing columns introduced in newer schema versions."""
     with _db_ctx() as c:
         cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
+        if "engine" not in cols:
+            c.execute("ALTER TABLE sessions ADD COLUMN engine TEXT NOT NULL DEFAULT 'claude'")
         if "message_count" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0")
         if "file_path" not in cols:
@@ -389,28 +460,94 @@ def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int]:
         pass
     return title, " ".join(parts)[:2000], inp, out, msg_count
 
+def _message_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+                continue
+            if block.get("type") in ("input_text", "output_text", "text") and isinstance(block.get("content"), str):
+                parts.append(block["content"])
+        return "\n".join(parts)
+    return ""
+
+def _parse_codex_session(f: Path, index_row: dict | None = None) -> tuple[str, str, int, int, int, str, float]:
+    """Parse Codex session JSONL into the shared session index shape."""
+    sid = _codex_session_id_from_path(f)
+    title = str((index_row or {}).get("thread_name") or "").strip() or sid
+    updated_at = _parse_iso_timestamp(str((index_row or {}).get("updated_at") or ""))
+    project_path = ""
+    parts: list[str] = []
+    msg_count = 0
+    got_title = bool(title and title != sid)
+    try:
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                if ev.get("type") == "session_meta":
+                    payload = ev.get("payload", {})
+                    if isinstance(payload, dict):
+                        sid = str(payload.get("session_id") or payload.get("id") or sid)
+                        project_path = str(payload.get("cwd") or project_path)
+                        updated_at = updated_at or _parse_iso_timestamp(str(payload.get("timestamp") or ""))
+                    continue
+                if ev.get("type") != "response_item":
+                    continue
+                payload = ev.get("payload", {})
+                if not isinstance(payload, dict) or payload.get("type") != "message":
+                    continue
+                role = payload.get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                text = _message_text(payload.get("content", ""))
+                if text:
+                    msg_count += 1
+                    if not got_title and role == "user":
+                        title = text[:80]
+                        got_title = True
+                    parts.append(text[:200])
+    except Exception:
+        pass
+    return title, " ".join(parts)[:2000], 0, 0, msg_count, project_path, updated_at or f.stat().st_mtime
+
 def _sync_index() -> None:
-    """Incrementally sync ALL project JSONL files into SQLite; remove orphaned rows."""
-    all_files = _all_session_files()
-    if not all_files:
+    """Incrementally sync Claude and Codex JSONL histories into SQLite."""
+    claude_files = _all_session_files()
+    codex_files = _all_codex_session_files()
+    if not claude_files and not codex_files:
         return
     try:
         with _db_ctx() as c:
-            indexed = {r["id"]: (r["mtime"], r["project_path"]) for r in c.execute("SELECT id, mtime, project_path FROM sessions")}
-            existing_ids: set[str] = set()
-            for f in all_files:
+            indexed = {
+                (r["engine"] or "claude", r["id"]): (r["mtime"], r["project_path"])
+                for r in c.execute("SELECT id, engine, mtime, project_path FROM sessions")
+            }
+            existing_keys: set[tuple[str, str]] = set()
+            for f in claude_files:
                 sid = f.stem
-                existing_ids.add(sid)
+                existing_keys.add(("claude", sid))
                 mtime = f.stat().st_mtime
-                entry = indexed.get(sid)
+                entry = indexed.get(("claude", sid))
                 if entry and entry[0] == mtime and entry[1]:  # same mtime AND has project_path
                     continue
                 title, search_text, inp, out, msg_count = _parse_jsonl_session(f)
                 project_path = _read_session_cwd(f)
                 c.execute("""
-                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
-                    VALUES(?,?,?,?,?,?,?,?,?)
+                    INSERT INTO sessions(id, engine, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET
+                        engine=excluded.engine,
                         title=excluded.title, mtime=excluded.mtime,
                         search_text=excluded.search_text,
                         input_tokens=excluded.input_tokens,
@@ -418,12 +555,36 @@ def _sync_index() -> None:
                         message_count=excluded.message_count,
                         file_path=excluded.file_path,
                         project_path=excluded.project_path
-                """, (sid, title, mtime, search_text, inp, out, msg_count, str(f), project_path))
+                """, (sid, "claude", title, mtime, search_text, inp, out, msg_count, str(f), project_path))
+                c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
+                c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
+                          (sid, title, search_text))
+            codex_index = _load_codex_session_index()
+            for f in codex_files:
+                sid = _codex_session_id_from_path(f)
+                existing_keys.add(("codex", sid))
+                title, search_text, inp, out, msg_count, project_path, mtime = _parse_codex_session(f, codex_index.get(sid))
+                entry = indexed.get(("codex", sid))
+                if entry and entry[0] == mtime and entry[1] == project_path:
+                    continue
+                c.execute("""
+                    INSERT INTO sessions(id, engine, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        engine=excluded.engine,
+                        title=excluded.title, mtime=excluded.mtime,
+                        search_text=excluded.search_text,
+                        input_tokens=excluded.input_tokens,
+                        output_tokens=excluded.output_tokens,
+                        message_count=excluded.message_count,
+                        file_path=excluded.file_path,
+                        project_path=excluded.project_path
+                """, (sid, "codex", title, mtime, search_text, inp, out, msg_count, str(f), project_path))
                 c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
                 c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
                           (sid, title, search_text))
             # remove orphaned rows
-            for sid in set(indexed) - existing_ids:
+            for engine, sid in set(indexed) - existing_keys:
                 c.execute("DELETE FROM sessions WHERE id=?", (sid,))
                 c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
     except Exception as e:

@@ -17,6 +17,7 @@ export interface Skill {
 export interface Session {
   id: string; title: string; mtime: number; snippet?: string;
   projectDir?: string; projectPath?: string; messageCount?: number;
+  engine?: 'claude' | 'codex';
 }
 export interface Profile { slug: string; mtime: number; memoryCount: number; hasSoul: boolean; hasSchedules: boolean; }
 export interface SoulProfile { id: string; name: string; content: string; }
@@ -287,10 +288,11 @@ export class ClaudeService {
   updateSkill(id: string, data: Partial<Skill>): Observable<{ ok: boolean }> {
     return this.http.put<{ ok: boolean }>(`${this.api}/skills/${id}`, data);
   }
-  getSessions(q = '', offset = 0): Observable<{ items: Session[]; has_more: boolean }> {
+  getSessions(q = '', offset = 0, engine: 'claude' | 'codex' | 'all' = 'claude'): Observable<{ items: Session[]; has_more: boolean }> {
     const params = new URLSearchParams();
     if (q) params.set('q', q);
     if (offset) params.set('offset', String(offset));
+    params.set('engine', engine);
     const url = `${this.api}/sessions${params.toString() ? '?' + params : ''}`;
     return this.http.get<{ items: Session[]; has_more: boolean }>(url);
   }
@@ -503,10 +505,11 @@ export class ClaudeService {
       });
   }
 
-  resumeSession(sessionId: string): Observable<any> {
+  resumeSession(sessionId: string, engine: 'claude' | 'codex' = 'claude'): Observable<any> {
     return this.http.post(`${this.api}/sessions/resume`, {
       client_id: this.clientId,
       session_id: sessionId,
+      engine,
     });
   }
 

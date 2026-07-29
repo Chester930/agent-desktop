@@ -122,7 +122,7 @@ class _PersistentSessions(dict):
         except Exception:
             pass
 
-active_sessions: dict[str, str] = _PersistentSessions()   # client_id -> claude session_id
+active_sessions: dict[str, str | dict] = _PersistentSessions()   # client_id -> session id or {id, engine}
 if _SESSIONS_FILE.exists():
     try:
         active_sessions.update(json.loads(_SESSIONS_FILE.read_text(encoding="utf-8")))
@@ -143,6 +143,42 @@ active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
 _team_pool = SessionPool() if HAS_AGENT_SDK else None  # persistent ClaudeSDKClient pool for team chat/execute
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
+
+
+def _active_session_id(key: str) -> str:
+    value = active_sessions.get(key)
+    if isinstance(value, dict):
+        return str(value.get("id") or "")
+    return str(value or "")
+
+
+def _active_session_engine(key: str) -> str:
+    value = active_sessions.get(key)
+    if isinstance(value, dict):
+        engine = str(value.get("engine") or "claude")
+        return engine if engine in ("claude", "codex") else "claude"
+    return "claude"
+
+
+def _set_active_session(key: str, session_id: str, engine: str = "claude") -> None:
+    if not session_id:
+        active_sessions.pop(key, None)
+        return
+    active_sessions[key] = {
+        "id": session_id,
+        "engine": engine if engine in ("claude", "codex") else "claude",
+    }
+
+
+def _active_session_for_engine(key: str, engine: str) -> str:
+    session_id = _active_session_id(key)
+    if not session_id:
+        return ""
+    return session_id if _active_session_engine(key) == engine else ""
+
+
+def _has_active_session_for_engine(key: str, engine: str) -> bool:
+    return bool(_active_session_for_engine(key, engine))
 pending_permissions: dict[str, dict] = {}                    # request_id -> dict with process, event, etc.
 
 # Usage API 快取（5 分鐘）
@@ -296,6 +332,80 @@ async def _resolve_agent_engine_and_key(agent_id: str, request_engine: str = "")
     return engine, engine_api_key, notice
 
 
+def _model_for_engine(model: str, engine_name: str) -> str:
+    if engine_name != "claude" and model in ("sonnet", "opus", "haiku", "fable"):
+        return ""
+    return model
+
+
+async def _run_automation_prompt(prompt: str, *, preferred_engine: str = "", timeout: float = 120.0) -> str:
+    cfg = _load_config()
+    request_engine = preferred_engine or cfg.get("agentEngine", "")
+    engine, engine_api_key, _notice = await _resolve_agent_engine_and_key("", request_engine)
+    chunks: list[str] = []
+
+    def _on_text(text: str) -> None:
+        chunks.append(text)
+
+    run_kwargs = {
+        "prompt": prompt,
+        "cwd": str(Path.home()),
+        "model": _model_for_engine(str(cfg.get("model", "") or ""), engine.name),
+        "permission_mode": str(cfg.get("permissionMode", "") or ""),
+        "resume_session_id": None,
+        "api_key": engine_api_key,
+        "on_text": _on_text,
+        "on_process": None,
+    }
+    if engine.name == "codex":
+        run_kwargs.update({"attachments": None, "bin_override": ""})
+    result = await asyncio.wait_for(engine.run_turn(**run_kwargs), timeout=timeout)
+    if result.error:
+        raise RuntimeError(result.error)
+    return result.output or "".join(chunks)
+
+
+def _session_messages_from_record(f: Path, engine: str) -> list[dict]:
+    messages: list[dict] = []
+    try:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                ev = json.loads(line)
+                if engine == "codex":
+                    if ev.get("type") != "response_item":
+                        continue
+                    payload = ev.get("payload", {})
+                    if not isinstance(payload, dict) or payload.get("type") != "message":
+                        continue
+                    role = payload.get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    text = _message_text(payload.get("content", ""))
+                    timestamp = ev.get("timestamp", "")
+                else:
+                    role = ev.get("type", "")
+                    if role not in ("user", "assistant"):
+                        continue
+                    content = ev.get("message", {}).get("content", "")
+                    timestamp = ev.get("timestamp", "")
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        text = "\n".join(
+                            b["text"] for b in content
+                            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+                        )
+                    else:
+                        text = ""
+                if text.strip():
+                    messages.append({"role": role, "text": text, "time": timestamp})
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return messages
+
+
 def load_schedules() -> list:
     if SCHEDULES_FILE.exists():
         try:
@@ -320,7 +430,7 @@ async def _natural_to_cron(natural_text: str) -> str:
         if re.match(r"^(\S+\s+){4}\S+$", natural_text):
             return natural_text
 
-    # 2. Otherwise, translate via Claude CLI
+    # 2. Otherwise, translate via the configured automation engine
     prompt = (
         "請將以下的自然語言時間，轉換為 5 欄的標準 Cron 表達式（分 時 日 月 週）。\n"
         "每個欄位用空格分隔。不要輸出任何其他欄位（如秒或年），只保留 5 欄格式。\n"
@@ -333,20 +443,8 @@ async def _natural_to_cron(natural_text: str) -> str:
         "請嚴格只輸出 Cron 表達式本身，絕對不要包含任何 Markdown 程式碼區塊包裹、引號、說明、前言或後記。\n"
         f"時間：{natural_text}"
     )
-    env = os.environ.copy()
-    key = _resolve_api_key()
-    if key:
-        env["ANTHROPIC_API_KEY"] = key
-    proc = None
     try:
-        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--output-format", "text"])
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env=env, cwd=str(Path.home()),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-        res = stdout.decode("utf-8", errors="replace").strip()
+        res = (await _run_automation_prompt(prompt, timeout=20)).strip()
         res = re.sub(r"[`'\"“”]", "", res)
         lines = [l.strip() for l in res.splitlines() if l.strip()]
         for cand in lines:
@@ -357,11 +455,6 @@ async def _natural_to_cron(natural_text: str) -> str:
             return lines[0]
     except Exception as e:
         print(f"[schedule] Error translating natural time to cron: {e}")
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
     return natural_text
 
 
@@ -623,7 +716,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     })
     await response.prepare(request)
 
-    has_persisted = client_id in active_sessions
+    has_persisted = bool(_active_session_id(client_id))
     in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(client_id)
     use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
 
@@ -670,7 +763,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                         }
                         await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
                 elif isinstance(message_obj, ResultMessage):
-                    active_sessions[client_id] = message_obj.session_id
+                    _set_active_session(client_id, message_obj.session_id, "claude")
                     usage = message_obj.usage or {}
                     env_msg = {
                         "type": "result",
@@ -701,8 +794,9 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
         for att in attachments:
             if Path(att).exists():
                 cmd += ["--input-file", att]
-        if client_id in active_sessions:
-            cmd += ["--resume", active_sessions[client_id]]
+        resume_sid = _active_session_for_engine(client_id, "claude")
+        if resume_sid:
+            cmd += ["--resume", resume_sid]
 
         proc = None
         try:
@@ -730,7 +824,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 try:
                     event = json.loads(raw)
                     if event.get("type") == "result" and "session_id" in event:
-                        active_sessions[client_id] = event["session_id"]
+                        _set_active_session(client_id, event["session_id"], "claude")
                     await response.write(f"data: {raw}\n\n".encode())
                 except json.JSONDecodeError:
                     payload = json.dumps({"type": "text", "text": raw})
@@ -766,7 +860,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 prompt=full_message, cwd=cwd,
                 model=(model if model and model not in ("sonnet", "") else None),
                 permission_mode=permission_mode,
-                resume_session_id=active_sessions.get(client_id), api_key=engine_api_key,
+                resume_session_id=_active_session_for_engine(client_id, engine.name), api_key=engine_api_key,
                 on_text=_on_text, on_process=_on_process, attachments=attachments,
                 bin_override=(codex_bin_override if engine.name == "codex" else ""),
                 on_tool_event=_on_tool_event,
@@ -775,7 +869,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             active_procs.pop(client_id, None)
 
         if result.session_id:
-            active_sessions[client_id] = result.session_id
+            _set_active_session(client_id, result.session_id, engine.name)
         if result.error:
             payload = json.dumps({"type": "error", "text": result.error})
             await response.write(f"data: {payload}\n\n".encode())
@@ -786,12 +880,13 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             notice_msg = {"type": "assistant", "message": {"content": [{"type": "text", "text": engine_notice}]}}
             await response.write(f"data: {json.dumps(notice_msg)}\n\n".encode())
         if engine.name != "claude":
-            full_message = message if client_id in active_sessions else await _build_full_message()
+            full_message = message if _has_active_session_for_engine(client_id, engine.name) else await _build_full_message()
             await _run_engine_turn(engine, engine_api_key, full_message)
         elif use_pool:
-            needs_full_rebuild = not (in_pool_now or has_persisted)
+            has_persisted_claude = _has_active_session_for_engine(client_id, "claude")
+            needs_full_rebuild = not (in_pool_now or has_persisted_claude)
             prompt_to_send = await _build_full_message() if needs_full_rebuild else message
-            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(client_id)
+            resume_target = None if (in_pool_now or needs_full_rebuild) else _active_session_for_engine(client_id, "claude")
             try:
                 await _run_pooled(prompt_to_send, resume_target)
             except ConnectionError:
@@ -801,7 +896,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 active_sessions.pop(client_id, None)
                 await _run_legacy(await _build_full_message())
         else:
-            full_message = message if client_id in active_sessions else await _build_full_message()
+            full_message = message if _has_active_session_for_engine(client_id, "claude") else await _build_full_message()
             await _run_legacy(full_message)
         await response.write(b'data: {"type":"done"}\n\n')
     except Exception as e:
@@ -1011,7 +1106,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                         event = json.loads(raw)
                         if event.get("type") == "result" and "session_id" in event:
                             new_sid = event["session_id"]
-                            active_sessions[session_key] = new_sid
+                            _set_active_session(session_key, new_sid, "claude")
                         if event.get("type") == "assistant" and event.get("message", {}).get("content"):
                             for block in event["message"]["content"]:
                                 if block.get("type") == "text":
@@ -1063,7 +1158,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                                 await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': block.text})}\n\n".encode())
                     elif isinstance(message, ResultMessage):
                         new_sid = message.session_id
-                        active_sessions[session_key] = new_sid
+                        _set_active_session(session_key, new_sid, "claude")
             except Exception:
                 await _team_pool.evict(session_key, force=True)
                 raise
@@ -1101,7 +1196,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 active_procs.pop(client_id, None)
 
             if result.session_id:
-                active_sessions[session_key] = result.session_id
+                _set_active_session(session_key, result.session_id, engine.name)
             if result.error:
                 err_text = f"[Error: {result.error}]"
                 collected.append(err_text)
@@ -1110,7 +1205,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
             return collected, result.session_id
 
-        has_persisted = session_key in active_sessions
+        has_persisted = bool(_active_session_id(session_key))
         in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(session_key)
         use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
         engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent_id, agent_engine)
@@ -1123,14 +1218,15 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 resume_sid  = None
             else:
                 full_prompt = prompt_text
-                resume_sid  = active_sessions.get(session_key)
+                resume_sid  = _active_session_for_engine(session_key, engine.name)
             collected_list, new_session_id = await _exec_engine_turn(full_prompt, resume_sid)
             return "".join(collected_list), new_session_id
 
         if use_pool:
-            needs_full_rebuild = not (in_pool_now or has_persisted)
+            has_persisted_claude = _has_active_session_for_engine(session_key, "claude")
+            needs_full_rebuild = not (in_pool_now or has_persisted_claude)
             prompt_to_send = await _build_full_prompt(prompt_text) if needs_full_rebuild else prompt_text
-            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(session_key)
+            resume_target = None if (in_pool_now or needs_full_rebuild) else _active_session_for_engine(session_key, "claude")
             try:
                 collected_list, new_session_id = await _exec_pooled(prompt_to_send, resume_target)
                 return "".join(collected_list), new_session_id
@@ -1148,7 +1244,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             resume_sid  = None
         else:
             full_prompt = prompt_text
-            resume_sid  = active_sessions.get(session_key)
+            resume_sid  = _active_session_for_engine(session_key, "claude")
 
         collected_list, new_session_id, resume_failed = await _exec_cmd(full_prompt, resume_sid)
         if resume_failed:
@@ -1170,7 +1266,11 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             import hashlib
             cwd_hash = hashlib.md5(cwd.encode("utf-8")).hexdigest()[:8] if cwd else "default"
             session_key = f"{client_id}_{current_agent}_{cwd_hash}"
-            has_session = session_key in active_sessions
+            try:
+                current_engine, _, _ = await _resolve_agent_engine_and_key(current_agent, agent_engine)
+                has_session = bool(_active_session_for_engine(session_key, current_engine.name))
+            except Exception:
+                has_session = bool(_active_session_id(session_key))
 
             # 後續 Turn 且有 session：只傳最新增量；否則傳完整 history
             prompt_to_send = last_increment if (has_session and not is_first) else discussion_history
@@ -1476,7 +1576,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                     try:
                         event = json.loads(raw)
                         if event.get("type") == "result" and "session_id" in event:
-                            active_sessions[exec_key] = event["session_id"]
+                            _set_active_session(exec_key, event["session_id"], "claude")
                         if event.get("type") == "assistant" and event.get("message", {}).get("content"):
                             for block in event["message"]["content"]:
                                 if block.get("type") == "text":
@@ -1567,7 +1667,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                                     pass
                                 await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block.text})}\n\n".encode())
                     elif isinstance(message, ResultMessage):
-                        active_sessions[exec_key] = message.session_id
+                        _set_active_session(exec_key, message.session_id, "claude")
             except Exception:
                 await _team_pool.evict(proc_key, force=True)
                 raise
@@ -1621,7 +1721,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                 active_procs.pop(proc_key, None)
 
             if result.session_id:
-                active_sessions[exec_key] = result.session_id
+                _set_active_session(exec_key, result.session_id, engine.name)
             if result.error:
                 err_text = f"[Error: {result.error}]"
                 collected.append(err_text)
@@ -1630,7 +1730,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
             return "".join(collected)
 
-        has_persisted = exec_key in active_sessions
+        has_persisted = bool(_active_session_id(exec_key))
         in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(proc_key)
         use_pool = HAS_AGENT_SDK and _team_pool is not None
 
@@ -1655,16 +1755,17 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                 resume_sid = None
             else:
                 prompt = f"請繼續完成上述任務。追加說明：\n{agent_task}"
-                resume_sid = active_sessions.get(exec_key)
+                resume_sid = _active_session_for_engine(exec_key, engine.name)
             return await _exec_engine_turn(prompt, resume_sid)
 
         if use_pool:
-            needs_full_rebuild = not (in_pool_now or has_persisted)
+            has_persisted_claude = _has_active_session_for_engine(exec_key, "claude")
+            needs_full_rebuild = not (in_pool_now or has_persisted_claude)
             if needs_full_rebuild:
                 prompt_to_send = _build_full_exec_prompt()
             else:
                 prompt_to_send = f"請繼續完成上述任務。追加說明：\n{agent_task}"
-            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(exec_key)
+            resume_target = None if (in_pool_now or needs_full_rebuild) else _active_session_for_engine(exec_key, "claude")
             try:
                 return await _pooled_exec(prompt_to_send, resume_target)
             except ConnectionError:
@@ -1679,7 +1780,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             resume_sid = None
         else:
             prompt = f"請繼續完成上述任務。追加說明：\n{agent_task}"
-            resume_sid = active_sessions.get(exec_key)
+            resume_sid = _active_session_for_engine(exec_key, "claude")
 
         return await _legacy_exec(prompt, resume_sid)
 
@@ -1727,6 +1828,9 @@ async def handle_team_authorize(request: web.Request) -> web.Response:
 async def handle_sessions(request: web.Request) -> web.Response:
     q      = request.rel_url.query.get("q", "").strip()
     offset = int(request.rel_url.query.get("offset", "0"))
+    engine = request.rel_url.query.get("engine", "claude").strip().lower()
+    if engine not in ("claude", "codex", "all"):
+        return web.json_response({"error": "invalid engine"}, status=400)
     PAGE   = 30
     await asyncio.to_thread(_sync_index)
     custom_names = load_session_names()
@@ -1734,7 +1838,9 @@ async def handle_sessions(request: web.Request) -> web.Response:
     # 只保留最近 30 天的對話
     cutoff = datetime.now(timezone.utc).timestamp() - 30 * 24 * 3600
 
-    def _proj_dir(file_path: str) -> str:
+    def _proj_dir(file_path: str, project_path: str = "", row_engine: str = "claude") -> str:
+        if row_engine == "codex" and project_path:
+            return Path(project_path).name
         if not file_path:
             return ""
         parts = Path(file_path).parent.name.split('--')
@@ -1752,14 +1858,15 @@ async def handle_sessions(request: web.Request) -> web.Response:
                 # html.escape() 再把標記換回真正的 <mark> 標籤，確保只有
                 # 「刻意插入的」標記會被當成 HTML，其餘內容一律跳脫。
                 raw_rows = c.execute("""
-                    SELECT s.id, s.title, s.mtime, s.message_count, s.file_path, s.project_path,
+                    SELECT s.id, s.engine, s.title, s.mtime, s.message_count, s.file_path, s.project_path,
                            snippet(sessions_fts, 2, ?, ?, '…', 12) AS snippet
                     FROM sessions_fts f
                     JOIN sessions s ON s.id = f.id
                     WHERE sessions_fts MATCH ?
                       AND s.mtime >= ?
+                      AND (? = 'all' OR s.engine = ?)
                     ORDER BY s.mtime DESC
-                """, ("\x01", "\x02", q, cutoff)).fetchall()
+                """, ("\x01", "\x02", q, cutoff, engine, engine)).fetchall()
                 rows = []
                 for r in raw_rows:
                     safe_snippet = html.escape(r["snippet"] or "").replace("\x01", "<mark>").replace("\x02", "</mark>")
@@ -1768,11 +1875,11 @@ async def handle_sessions(request: web.Request) -> web.Response:
                 # short (1-2 char) queries: trigram can't match these at all, so
                 # fall back to LIKE -- table is small enough that this is cheap.
                 like_rows = c.execute("""
-                    SELECT id, title, mtime, message_count, file_path, project_path, search_text
+                    SELECT id, engine, title, mtime, message_count, file_path, project_path, search_text
                     FROM sessions
-                    WHERE mtime >= ? AND (title LIKE ? OR search_text LIKE ?)
+                    WHERE mtime >= ? AND (? = 'all' OR engine = ?) AND (title LIKE ? OR search_text LIKE ?)
                     ORDER BY mtime DESC
-                """, (cutoff, f"%{q}%", f"%{q}%")).fetchall()
+                """, (cutoff, engine, engine, f"%{q}%", f"%{q}%")).fetchall()
                 rows = []
                 for r in like_rows:
                     text = r["search_text"] or ""
@@ -1792,22 +1899,23 @@ async def handle_sessions(request: web.Request) -> web.Response:
                     rows.append({**dict(r), "snippet": snippet})
             else:
                 raw_rows = c.execute("""
-                    SELECT id, title, mtime, message_count, file_path, project_path,
+                    SELECT id, engine, title, mtime, message_count, file_path, project_path,
                            substr(search_text, 1, 120) AS snippet
                     FROM sessions
-                    WHERE mtime >= ?
+                    WHERE mtime >= ? AND (? = 'all' OR engine = ?)
                     ORDER BY mtime DESC
-                """, (cutoff,)).fetchall()
+                """, (cutoff, engine, engine)).fetchall()
                 rows = [{**dict(r), "snippet": html.escape(r["snippet"] or "")} for r in raw_rows]
         total = len(rows)
         items = [
             {
                 "id":           r["id"],
+                "engine":       r["engine"] or "claude",
                 "title":        custom_names.get(r["id"]) or r["title"],
                 "mtime":        r["mtime"],
                 "snippet":      r["snippet"] or "",
                 "messageCount": r["message_count"],
-                "projectDir":   _proj_dir(r["file_path"]),
+                "projectDir":   _proj_dir(r["file_path"], r["project_path"] or "", r["engine"] or "claude"),
                 "projectPath":  r["project_path"] or "",
             }
             for r in rows[offset: offset + PAGE]
@@ -1963,10 +2071,11 @@ async def handle_chat_clear(request: web.Request) -> web.Response:
 
 async def handle_session_delete(request: web.Request) -> web.Response:
     sid = request.match_info["id"]
-    f = _find_session_file(sid)
+    record = _find_session_record(sid)
+    f = record[0] if record else None
     if f and f.exists():
         f.unlink()
-    for k in [k for k, v in active_sessions.items() if v == sid]:
+    for k in [k for k in active_sessions.keys() if _active_session_id(k) == sid]:
         active_sessions.pop(k, None)
 
     # 主動從 SQLite 數據庫中清除該 Session 索引，保持即時一致
@@ -1986,9 +2095,12 @@ async def handle_session_truncate(request: web.Request) -> web.Response:
     data = await request.json()
     count = data.get("count", 0)
 
-    f = _find_session_file(sid)
-    if not f:
+    record = _find_session_record(sid)
+    if not record:
         return web.json_response({"error": "session not found"}, status=404)
+    f, engine = record
+    if engine == "codex":
+        return web.json_response({"error": "truncate is not supported for Codex sessions"}, status=400)
 
     try:
         lines = f.read_text(encoding="utf-8", errors="replace").strip().splitlines()
@@ -2020,42 +2132,24 @@ async def handle_resume_session(request: web.Request) -> web.Response:
     data = await request.json()
     client_id = data.get("client_id", "default")
     session_id = data.get("session_id", "")
-    active_sessions[client_id] = session_id
-    return web.json_response({"ok": True})
+    engine = str(data.get("engine", "") or "").strip().lower()
+    record = _find_session_record(session_id) if session_id else None
+    if record:
+        engine = record[1]
+    if engine not in ("claude", "codex"):
+        engine = "claude"
+    _set_active_session(client_id, session_id, engine)
+    return web.json_response({"ok": True, "engine": engine})
 
 
 async def handle_session_messages(request: web.Request) -> web.Response:
     """GET /api/sessions/{id}/messages — 讀取 JSONL 回傳完整對話紀錄"""
     sid = request.match_info["id"]
-    f = _find_session_file(sid)
-    if not f:
+    record = _find_session_record(sid)
+    if not record:
         return web.json_response({"error": "session not found"}, status=404)
-
-    messages = []
-    try:
-        lines = f.read_text(encoding="utf-8", errors="replace").strip().splitlines()
-        for line in lines:
-            try:
-                ev = json.loads(line)
-                t = ev.get("type", "")
-                if t not in ("user", "assistant"):
-                    continue
-                content = ev.get("message", {}).get("content", "")
-                timestamp = ev.get("timestamp", "")
-                text = ""
-                if isinstance(content, str):
-                    text = content
-                elif isinstance(content, list):
-                    parts = [b["text"] for b in content if b.get("type") == "text" and b.get("text")]
-                    text = "\n".join(parts)
-                if text.strip():
-                    messages.append({"role": t, "text": text, "time": timestamp})
-            except Exception:
-                pass
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
-
-    return web.json_response({"messages": messages})
+    f, engine = record
+    return web.json_response({"messages": _session_messages_from_record(f, engine)})
 
 
 async def handle_usage(request: web.Request) -> web.Response:
@@ -2700,32 +2794,10 @@ Now convert this: {text}"""
             print(f"[parse-cron] HTTP API failed: {e}")
 
     if not cron_result:
-        # Fallback to CLAUDE_BIN
-        cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "stream-json"]
         try:
-            env = {**os.environ}
-            if api_key:
-                env["ANTHROPIC_API_KEY"] = api_key
-            cmd = wrap_cmd(cmd[0], cmd[1:])
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                stdin=asyncio.subprocess.DEVNULL,
-                env=env
-            )
-            stdout, _ = await proc.communicate()
-            text_parts = []
-            for line in stdout.decode("utf-8", errors="replace").splitlines():
-                try:
-                    event = json.loads(line.strip())
-                    if event.get("type") == "text":
-                        text_parts.append(event.get("text", ""))
-                except Exception:
-                    pass
-            cron_result = "".join(text_parts).strip()
+            cron_result = (await _run_automation_prompt(prompt, timeout=20)).strip()
         except Exception as e:
-            print(f"[parse-cron] CLAUDE_BIN failed: {e}")
+            print(f"[parse-cron] automation engine failed: {e}")
 
     if cron_result:
         cron_result = cron_result.replace("`", "").replace("'", "").replace("\"", "").strip()
@@ -2793,60 +2865,35 @@ async def handle_skill_generate(request: web.Request) -> web.Response:
     session_id = data.get("session_id", "").strip()
     if not session_id:
         return web.json_response({"error": "session_id required"}, status=400)
-    f = _find_session_file(session_id)
-    if not f or not f.exists():
+    record = _find_session_record(session_id)
+    if not record:
         return web.json_response({"error": "session not found"}, status=404)
+    f, engine = record
 
     # extract last 20 user messages as context
-    snippets: list[str] = []
-    try:
-        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
-            try:
-                ev = json.loads(line)
-                if ev.get("type") == "user":
-                    content = ev.get("message", {}).get("content", "")
-                    text = ""
-                    if isinstance(content, list):
-                        for c in content:
-                            if c.get("type") == "text": text = c["text"]; break
-                    elif isinstance(content, str):
-                        text = content
-                    if text: snippets.append(text[:300])
-            except Exception:
-                pass
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+    snippets = [
+        m["text"][:300]
+        for m in _session_messages_from_record(f, engine)
+        if m.get("role") == "user" and m.get("text")
+    ]
 
     context = "\n".join(snippets[-20:])
     prompt = (
-        "根據以下對話摘錄，生成一個 Claude Code skill 的 Markdown 草稿。"
+        "根據以下對話摘錄，生成一個 Agent Desktop skill 的 Markdown 草稿。"
         "格式：\n---\nname: <slug>\ndescription: <一行說明>\n---\n\n## When to Use\n...\n"
         "## How It Works\n...\n## Example\n...\n\n"
         f"對話摘錄：\n{context}"
     )
-    proc = None
     try:
-        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--output-format", "json"])
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            cwd=str(Path.home()),
-        )
-        raw, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-        result = json.loads(raw.decode("utf-8", errors="replace"))
-        skill_md = result.get("result", "") or result.get("content", "")
+        skill_md = (await _run_automation_prompt(prompt, preferred_engine=engine, timeout=60)).strip()
     except Exception as e:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return web.json_response({"error": str(e)}, status=500)
 
-    # auto-save to ~/.claude/skills/auto-<session_id[:8]>.md
-    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    # auto-save to the canonical Agent Desktop skill registry
+    skills_dir = _registry_skills_dir()
+    skills_dir.mkdir(parents=True, exist_ok=True)
     slug = f"auto-{session_id[:8]}"
-    out_path = SKILLS_DIR / f"{slug}.md"
+    out_path = skills_dir / f"{slug}.md"
     out_path.write_text(skill_md, encoding="utf-8")
     return web.json_response({"ok": True, "slug": slug, "path": str(out_path), "content": skill_md})
 
@@ -3036,37 +3083,19 @@ async def handle_mcp_info(request: web.Request) -> web.Response:
 
 
 async def handle_session_auto_title(request: web.Request) -> web.Response:
-    """Generate a concise session title using Claude from the first few messages."""
+    """Generate a concise session title using the session's own engine."""
     sid = request.match_info["id"]
-    f = _find_session_file(sid)
-    if not f or not f.exists():
+    record = _find_session_record(sid)
+    if not record:
         return web.json_response({"error": "session not found"}, status=404)
+    f, engine = record
 
     # Extract first user+assistant messages
-    snippets: list[str] = []
-    try:
-        for line in f.read_text(encoding="utf-8", errors="replace").strip().splitlines()[:30]:
-            try:
-                ev = json.loads(line)
-                role = ev.get("type", "")
-                if role not in ("user", "assistant"):
-                    continue
-                content = ev.get("message", {}).get("content", "")
-                text = ""
-                if isinstance(content, list):
-                    for c in content:
-                        if c.get("type") == "text":
-                            text = c["text"]; break
-                elif isinstance(content, str):
-                    text = content
-                if text:
-                    snippets.append(f"[{role}] {text[:300]}")
-                if len(snippets) >= 4:
-                    break
-            except Exception:
-                pass
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+    snippets = [
+        f"[{m['role']}] {m['text'][:300]}"
+        for m in _session_messages_from_record(f, engine)[:4]
+        if m.get("text")
+    ]
 
     if not snippets:
         return web.json_response({"error": "no messages"}, status=400)
@@ -3077,27 +3106,10 @@ async def handle_session_auto_title(request: web.Request) -> web.Response:
         + "\n".join(snippets)
     )
 
-    env = os.environ.copy()
-    key = _resolve_api_key()
-    if key:
-        env["ANTHROPIC_API_KEY"] = key
-
-    proc = None
     try:
-        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--model", "claude-haiku-4-5-20251001", "--output-format", "text"])
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env=env, cwd=str(Path.home()),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-        title = stdout.decode("utf-8", errors="replace").strip().splitlines()[0][:60]
+        raw_title = (await _run_automation_prompt(prompt, preferred_engine=engine, timeout=20)).strip()
+        title = raw_title.splitlines()[0][:60].strip("`'\"“” ")
     except Exception as e:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return web.json_response({"error": str(e)}, status=500)
 
     if not title:
@@ -3411,42 +3423,11 @@ async def _tg_send_msg(session: aiohttp.ClientSession, token: str, chat_id: int,
     except Exception as e:
         _log(f"[telegram] send error: {e}")
 
-async def _tg_run_claude(prompt: str) -> str:
-    cfg = _load_config()
-    permission_mode = cfg.get("permissionMode", "")
-    model = cfg.get("model", "")
-    effort = cfg.get("effort", "")
-    
-    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "text"]
-    if permission_mode and permission_mode not in ("default", ""):
-        cmd += ["--permission-mode", permission_mode]
-    if model and model not in ("sonnet", ""):
-        cmd += ["--model", model]
-    if effort and effort != "medium":
-        cmd += ["--effort", effort]
-
-    env = os.environ.copy()
-    key = _resolve_api_key()
-    if key:
-        env["ANTHROPIC_API_KEY"] = key
-    proc = None
+async def _tg_run_engine(prompt: str) -> str:
     try:
-        cmd = wrap_cmd(cmd[0], cmd[1:])
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,  # 防止卡死
-            env=env,
-            cwd=str(Path.home()),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-        return stdout.decode("utf-8", errors="replace").strip() or "[no response]"
+        return (await _run_automation_prompt(prompt, timeout=60)).strip() or "[no response]"
     except Exception as e:
         return f"[Error: {e}]"
-    finally:
-        if proc and proc.returncode is None:
-            safe_kill_process(proc)
 
 async def _telegram_poll() -> None:
     cfg  = _tg_state
@@ -3470,7 +3451,7 @@ async def _telegram_poll() -> None:
                         text    = msg.get("text", "")
                         if text and chat_id:
                             await _tg_send_msg(session, cfg["token"], chat_id, "⏳ 處理中…")
-                            reply = await _tg_run_claude(text)
+                            reply = await _tg_run_engine(text)
                             for i in range(0, len(reply), 4000):
                                 await _tg_send_msg(session, cfg["token"], chat_id, reply[i:i+4000])
             except asyncio.CancelledError:
@@ -3525,7 +3506,7 @@ def _verify_line_signature(body: bytes, signature: str) -> bool:
     # 打進來（跟其他端點「同機/同網段可信任」的假設不同），簽章驗證是唯一的
     # 身分驗證機制。原本 lineChannelSecret 未設定時直接放行（fail-open），
     # 代表設定到一半、還沒填 secret 的期間，任何人都能偽造 webhook payload
-    # 觸發 _line_run_claude（實際執行 Claude CLI）。改成 fail-closed：
+    # 觸發 _line_run_engine（實際執行使用者允許的本機 engine）。改成 fail-closed：
     # 沒設定 secret 就一律拒絕，直到使用者完成設定為止。
     secret = _load_config().get("lineChannelSecret", "").strip()
     if not secret:
@@ -3555,33 +3536,13 @@ async def _line_reply(reply_token: str, text: str) -> None:
     except Exception as e:
         _log(f"[line] reply exception: {e}")
 
-async def _line_run_claude(user_message: str) -> str:
+async def _line_run_engine(user_message: str) -> str:
     soul = _load_pi_soul()
     prompt = f"<instructions>\n{soul}\n</instructions>\n\n{user_message}"
-    proc = None
     try:
-        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--output-format", "json"])
-        env = os.environ.copy()
-        key = _resolve_api_key()
-        if key:
-            env["ANTHROPIC_API_KEY"] = key
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            cwd=str(Path.home()),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
-        output = json.loads(stdout.decode("utf-8", errors="replace"))
-        return output.get("result", "[Pi 無回應]").strip()
+        return (await _run_automation_prompt(prompt, timeout=90)).strip() or "[Pi 無回應]"
     except Exception as e:
-        _log(f"[line] claude call exception: {e}")
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
+        _log(f"[line] engine call exception: {e}")
         return "[Pi 暫時無法回應，請稍後再試]"
 
 async def handle_line_webhook(request: web.Request) -> web.Response:
@@ -3612,7 +3573,7 @@ async def handle_line_webhook(request: web.Request) -> web.Response:
 
 async def _process_line_message(text: str, reply_token: str) -> None:
     _log(f"[line] received: {text[:50]}")
-    reply = await _line_run_claude(text)
+    reply = await _line_run_engine(text)
     await _line_reply(reply_token, reply)
     _log(f"[line] replied, length={len(reply)}")
 
@@ -4076,42 +4037,8 @@ _SCHEDULE_TIMEOUT = 300  # 5 分鐘，防止 schedule 無限 hang
 
 async def run_schedule_prompt(schedule: dict) -> None:
     prompt = schedule["prompt"] if isinstance(schedule, dict) else schedule
-    
-    cfg = _load_config()
-    permission_mode = cfg.get("permissionMode", "")
-    model = cfg.get("model", "")
-    effort = cfg.get("effort", "")
-    
-    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json"]
-    if permission_mode and permission_mode not in ("default", ""):
-        cmd += ["--permission-mode", permission_mode]
-    if model and model not in ("sonnet", ""):
-        cmd += ["--model", model]
-    if effort and effort != "medium":
-        cmd += ["--effort", effort]
-
-    env = os.environ.copy()
-    key = _resolve_api_key()
-    if key:
-        env["ANTHROPIC_API_KEY"] = key
-    proc = None
     try:
-        cmd = wrap_cmd(cmd[0], cmd[1:])
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,  # 防止背景卡死
-            env=env,
-            cwd=str(Path.home()),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_SCHEDULE_TIMEOUT)
-        result_text = ""
-        try:
-            output = json.loads(stdout.decode("utf-8", errors="replace"))
-            result_text = output.get("result", "")
-        except Exception:
-            pass
+        result_text = (await _run_automation_prompt(prompt, timeout=_SCHEDULE_TIMEOUT)).strip()
         print(f"[schedule] Prompt finished, result length: {len(result_text)}")
         if result_text:
             # 依使用者需求，預設直接推送至 LINE Admin 帳號
@@ -4119,15 +4046,8 @@ async def run_schedule_prompt(schedule: dict) -> None:
             await _send_line_message(to, result_text)
     except asyncio.TimeoutError:
         print(f"[schedule] Prompt timed out after {_SCHEDULE_TIMEOUT}s")
-        if proc:
-            safe_kill_process(proc)
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
 
 
 

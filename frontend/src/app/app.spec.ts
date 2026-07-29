@@ -8,6 +8,7 @@ describe('App', () => {
 
   beforeEach(async () => {
     localStorage.setItem('claude_onboarding_done', '1');
+    Element.prototype.scrollIntoView = vi.fn();
     await TestBed.configureTestingModule({
       imports: [App],
       providers: [provideHttpClient(), provideHttpClientTesting()],
@@ -59,6 +60,80 @@ describe('App', () => {
     expect(compiled.querySelector('.logo')?.textContent).toContain('Agent 桌面版');
     expect(compiled.querySelector('.sidebar')).not.toBeNull();
     expect(compiled.querySelector('.chat-input')).not.toBeNull();
+  });
+
+  it('should show the session engine switch only when both engines are available', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    const app = fixture.componentInstance;
+
+    app.engineMode.set('both');
+    app.engineStatus.set({
+      claude: { available: true, installed: true, loggedIn: true, reason: '' },
+      codex: { available: true, installed: true, loggedIn: true, reason: '' },
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.session-engine-toggle')).not.toBeNull();
+
+    app.engineMode.set('claude');
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.session-engine-toggle')).toBeNull();
+  });
+
+  it('should reload session history with the selected Codex engine', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    const app = fixture.componentInstance;
+
+    app.engineMode.set('both');
+    app.engineStatus.set({
+      claude: { available: true, installed: true, loggedIn: true, reason: '' },
+      codex: { available: true, installed: true, loggedIn: true, reason: '' },
+    });
+    fixture.detectChanges();
+
+    const buttons = Array.from(
+      fixture.nativeElement.querySelectorAll('.session-engine-toggle button'),
+    ) as HTMLButtonElement[];
+    buttons.find(button => button.textContent?.trim() === 'Codex')?.click();
+
+    const req = http.expectOne(request => {
+      const url = new URL(request.urlWithParams, 'http://localhost');
+      return url.pathname.endsWith('/sessions') && url.searchParams.get('engine') === 'codex';
+    });
+    req.flush({ items: [], has_more: false });
+  });
+
+  it('should switch runtime engine and resume with Codex when loading Codex history', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    const app = fixture.componentInstance;
+
+    app.engineMode.set('both');
+    app.loadSession({
+      id: '019fabcd-0000-7000-8000-000000000006',
+      title: 'Codex History',
+      mtime: 1,
+      engine: 'codex',
+    });
+
+    expect(app.agentEngine()).toBe('codex');
+
+    const resumeReq = http.expectOne(request => {
+      const url = new URL(request.urlWithParams, 'http://localhost');
+      return url.pathname.endsWith('/sessions/resume');
+    });
+    expect(resumeReq.request.body.engine).toBe('codex');
+    resumeReq.flush({ ok: true, engine: 'codex' });
+
+    const messagesReq = http.expectOne(request => {
+      const url = new URL(request.urlWithParams, 'http://localhost');
+      return url.pathname.endsWith('/sessions/019fabcd-0000-7000-8000-000000000006/messages');
+    });
+    messagesReq.flush({ messages: [{ role: 'user', text: 'hello from codex' }] });
   });
 
   it('should prepare assistant markdown for speech output', () => {

@@ -9,7 +9,7 @@
     <label>Bot Token
       <input type="password" [(ngModel)]="telegramToken"
         placeholder="從 @BotFather 取得的 bot token">
-      <small>留空並關閉即可停止 Bot。Token 儲存於 ~/.claude/ 本地端，不上傳。</small>
+      <small>留空並關閉即可停止 Bot。Token 儲存於本機資料根目錄，不上傳。</small>
     </label>
     <label class="toggle-label">
       <input type="checkbox" [(ngModel)]="telegramEnabled" [ngModelOptions]="{standalone: true}"

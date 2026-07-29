@@ -1579,6 +1579,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // ── Session metadata: colors + tags ─────────────────────────────────────
   sessionMeta = signal<Record<string, { tags: string[]; color: string }>>({});
+  sessionEngineFilter = signal<'claude' | 'codex'>('claude');
   sessionGroupMode = signal<'date' | 'project'>('date');
   tagInputId = signal<string | null>(null);
   tagInputVal = '';
@@ -1764,7 +1765,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const title = this.renameTitle.trim();
     if (title && title !== s.title) {
       this.claude.renameSession(s.id, title).subscribe(() =>
-        this.claude.getSessions(this.sessionSearch, 0).subscribe(r => this.sessions.set(r.items))
+        this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => this.sessions.set(r.items))
       );
     }
     this.renamingId.set(null);
@@ -1829,7 +1830,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ctxDelete(s: Session) {
     this.closeContextMenu();
     this.claude.deleteSession(s.id).subscribe(() =>
-      this.claude.getSessions(this.sessionSearch, 0).subscribe(r => this.sessions.set(r.items))
+      this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => this.sessions.set(r.items))
     );
   }
 
@@ -3126,6 +3127,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const mode = c.engineMode ?? 'both';
       this.settingsForm.engineMode = mode;
       this.engineMode.set(mode);
+      this.syncSessionEngineFilter();
     });
     // 從 Electron 讀取真實的 login item 狀態
     const eAPI = (window as any).electronAPI;
@@ -3144,7 +3146,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       claudeHome: this.settingsForm.claudeHome,
       engineMode: this.settingsForm.engineMode,
     }).subscribe({
-      next: () => this.engineMode.set(this.settingsForm.engineMode),
+      next: () => {
+        this.engineMode.set(this.settingsForm.engineMode);
+        this.syncSessionEngineFilter();
+      },
       error: (e) => this.showToast(`後端設定儲存失敗: ${e.message ?? e}`, 'error'),
     });
     // 同步 Electron login item
@@ -3164,7 +3169,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     // localStorage 值——啟動時就先讀一次，這樣 Agent 編輯器不用自己另外
     // 打一次 /api/config 才能判斷目前是否鎖定。
     this.claude.getConfig().subscribe({
-      next: c => this.engineMode.set(c.engineMode ?? 'both'),
+      next: c => {
+        this.engineMode.set(c.engineMode ?? 'both');
+        this.syncSessionEngineFilter();
+      },
       error: () => {},
     });
     this._healthTimer = setInterval(() => {
@@ -3364,7 +3372,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   searchSessions() {
     this.sessionOffset = 0;
-    this.claude.getSessions(this.sessionSearch, 0).subscribe(r => {
+    this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => {
       this.sessions.set(r.items);
       this.hasMoreSessions.set(r.has_more);
     });
@@ -3372,10 +3380,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   loadMoreSessions() {
     this.sessionOffset += 30;
-    this.claude.getSessions(this.sessionSearch, this.sessionOffset).subscribe(r => {
+    this.claude.getSessions(this.sessionSearch, this.sessionOffset, this.sessionEngineFilter()).subscribe(r => {
       this.sessions.update(s => [...s, ...r.items]);
       this.hasMoreSessions.set(r.has_more);
     });
+  }
+
+  setSessionEngineFilter(engine: 'claude' | 'codex') {
+    if (this.sessionEngineFilter() === engine) return;
+    this.sessionEngineFilter.set(engine);
+    this.searchSessions();
   }
 
   reload() {
@@ -3383,7 +3397,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getStats().subscribe(s => this.stats.set(s));
     this.claude.getAgents().subscribe(a => this.agents.set(a));
     this.claude.getSkills().subscribe(s => this.skills.set(s));
-    this.claude.getSessions(this.sessionSearch, 0).subscribe(r => {
+    this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => {
       this.sessions.set(r.items);
       this.hasMoreSessions.set(r.has_more);
     });
@@ -4231,6 +4245,32 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // 再刷新一次。
   engineMode = signal<'claude' | 'codex' | 'both'>('both');
 
+  showSessionEngineSwitch = computed(() =>
+    this.engineMode() === 'both'
+    && this.engineStatus()['claude']?.available === true
+    && this.engineStatus()['codex']?.available === true
+  );
+
+  private syncSessionEngineFilter() {
+    const mode = this.engineMode();
+    const status = this.engineStatus();
+    const current = this.sessionEngineFilter();
+    let next: 'claude' | 'codex' = current;
+    if (mode === 'claude') {
+      next = 'claude';
+    } else if (mode === 'codex') {
+      next = 'codex';
+    } else if (status['claude']?.available && !status['codex']?.available) {
+      next = 'claude';
+    } else if (status['codex']?.available && !status['claude']?.available) {
+      next = 'codex';
+    }
+    if (next !== current) {
+      this.sessionEngineFilter.set(next);
+      this.searchSessions();
+    }
+  }
+
   // 輸入欄狀態列鏡射 settings.agentEngine 的獨立 signal——SettingsService
   // 是純 snapshot（get()/save()），不是 Angular signal，沒辦法直接放進
   // computed() 裡追蹤，所以這裡跟 engineMode 用同一套「另開一個 signal，
@@ -4246,9 +4286,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   private _lastClaudeModel = 'sonnet';
 
-  toggleAgentEngine() {
-    if (this.engineMode() !== 'both') return;   // 已鎖定範圍，這顆 pill 只顯示、不可切換
-    const next = this.agentEngine() === 'claude' ? 'codex' : 'claude';
+  private setAgentEngine(next: 'claude' | 'codex') {
+    if (this.agentEngine() === next) return;
     this.agentEngine.set(next);
     this.settings.save({ agentEngine: next });
     if (this.settingsOpen()) this.settingsForm.agentEngine = next;
@@ -4275,6 +4314,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
+  toggleAgentEngine() {
+    if (this.engineMode() !== 'both') return;   // 已鎖定範圍，這顆 pill 只顯示、不可切換
+    this.setAgentEngine(this.agentEngine() === 'claude' ? 'codex' : 'claude');
+  }
+
   private readonly ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code CLI', codex: 'OpenAI Codex CLI' };
   protected readonly ENGINE_REASON_LABEL: Record<string, string> = {
     not_installed: '未安裝', not_logged_in: '未登入',
@@ -4285,6 +4329,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getEngineStatus(force).subscribe({
       next: status => {
         this.engineStatus.set(status);
+        this.syncSessionEngineFilter();
         this._autoCorrectGlobalEngine(status);
         this._warnIfLockedEngineUnavailable(status);
       },
@@ -4539,9 +4584,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.chatTabs.update(tabs => tabs.map(t =>
       t.id === id ? { ...t, label: s.title.slice(0, 20) } : t
     ));
+    const sessionEngine = (s.engine || 'claude') as 'claude' | 'codex';
+    if (this.engineMode() === 'both') {
+      this.setAgentEngine(sessionEngine);
+    }
     // 先顯示載入中，再取得完整對話
     this.messages.set([{ role: 'system', text: '載入歷史對話中…' }]);
-    this.claude.resumeSession(s.id).subscribe();
+    this.claude.resumeSession(s.id, sessionEngine).subscribe();
     this.claude.getSessionMessages(s.id).subscribe({
       next: res => {
         this.messages.set(res.messages);
@@ -4563,7 +4612,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   deleteSession(s: Session, event: Event) {
     event.stopPropagation();
     this.claude.deleteSession(s.id).subscribe(() =>
-      this.claude.getSessions(this.sessionSearch, 0).subscribe(r => this.sessions.set(r.items))
+      this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => this.sessions.set(r.items))
     );
   }
 
