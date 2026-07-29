@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import asyncio
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -521,8 +522,23 @@ def _parse_codex_session(f: Path, index_row: dict | None = None) -> tuple[str, s
         pass
     return title, " ".join(parts)[:2000], 0, 0, msg_count, project_path, updated_at or f.stat().st_mtime
 
-def _sync_index() -> None:
-    """Incrementally sync Claude and Codex JSONL histories into SQLite."""
+_last_sync_ts = 0.0
+_SYNC_MIN_INTERVAL_SEC = 1.5  # 見下方註解
+
+def _sync_index(force: bool = False) -> None:
+    """Incrementally sync Claude and Codex JSONL histories into SQLite.
+
+    這支函式在每次 GET /api/sessions、/api/stats 都會被呼叫一次，單次
+    reload() 前端就會連續觸發兩者（見 app.ts reload()），且使用中的對話
+    jsonl 檔案每則訊息都會改變 mtime，導致整份逐漸變大的檔案被重新讀取
+    解析——對話越長，側欄「顯示延遲」越明顯。這裡用極短的 TTL 把短時間內
+    的重複呼叫合併成一次，session 清單本來就不需要次毫秒等級的即時性。
+    """
+    global _last_sync_ts
+    now = time.monotonic()
+    if not force and now - _last_sync_ts < _SYNC_MIN_INTERVAL_SEC:
+        return
+    _last_sync_ts = now
     claude_files = _all_session_files()
     codex_files = _all_codex_session_files()
     if not claude_files and not codex_files:

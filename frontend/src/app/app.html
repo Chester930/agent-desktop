@@ -349,7 +349,7 @@
           </div>
         }
         <div class="session-search">
-          <input [(ngModel)]="sessionSearch" (input)="searchSessions()"
+          <input [(ngModel)]="sessionSearch" (input)="onSessionSearchInput()"
             placeholder="搜尋對話…" class="session-search-input">
         </div>
         <div class="session-group-toggle">
