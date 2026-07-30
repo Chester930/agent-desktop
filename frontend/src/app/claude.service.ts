@@ -74,13 +74,44 @@ export interface McpServer {
   tools?: McpTool[];
 }
 
-// 引擎可用性偵測（backend/engines/availability.py）——只做「已安裝／已登入」
-// 偵測，用量／額度數字兩邊 CLI 都沒有可腳本化的資料來源，這輪沒有做。
+export type EngineQuotaState = 'ok' | 'low' | 'exhausted' | 'unknown';
+export type EngineRuntimeState =
+  | 'ready'
+  | 'quota_low'
+  | 'quota_exhausted'
+  | 'not_installed'
+  | 'not_logged_in'
+  | 'check_timeout'
+  | 'unexpected_output'
+  | 'runtime_error'
+  | 'unknown';
+
+export interface EngineQuota {
+  state: EngineQuotaState;
+  remainingPercent: number | null;
+  resetsAt: string | number | null;
+  windows?: Record<string, { usedPercent: number; remainingPercent: number; resetsAt: string | number | null }>;
+}
+
+export interface EngineRuntimeFailure {
+  reason: 'rate_limit' | 'quota' | 'auth' | 'timeout' | 'unknown';
+  message: string;
+  at: number;
+}
+
+// 引擎可用性偵測（backend/engines/availability.py）分層回傳：
+// installed/loggedIn 是環境與身份；quota 是額度；runnable/available 才是
+// 目前能不能拿來執行新任務。
 export interface EngineAvailability {
   installed: boolean;
   loggedIn: boolean;
   available: boolean;
-  reason: '' | 'not_installed' | 'not_logged_in' | 'check_timeout' | 'unexpected_output';
+  runnable?: boolean;
+  state?: EngineRuntimeState;
+  reason: '' | 'not_installed' | 'not_logged_in' | 'check_timeout' | 'unexpected_output' | 'quota_exhausted' | 'runtime_error';
+  detail?: string;
+  quota?: EngineQuota;
+  lastFailure?: EngineRuntimeFailure;
 }
 
 export interface ResourceSyncGroupStatus {

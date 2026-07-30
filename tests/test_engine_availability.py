@@ -145,6 +145,9 @@ async def test_check_codex_not_installed(monkeypatch):
 
 async def test_get_status_caches_within_ttl(monkeypatch):
     monkeypatch.setattr(availability, "get_status", _REAL_GET_STATUS)
+    async def _quota_unknown():
+        return availability._base_quota()
+    monkeypatch.setattr(availability, "_fetch_claude_quota", _quota_unknown)
     call_count = {"n": 0}
 
     async def _fake_check():
@@ -160,6 +163,9 @@ async def test_get_status_caches_within_ttl(monkeypatch):
 
 async def test_get_status_force_bypasses_cache(monkeypatch):
     monkeypatch.setattr(availability, "get_status", _REAL_GET_STATUS)
+    async def _quota_unknown():
+        return availability._base_quota()
+    monkeypatch.setattr(availability, "_fetch_claude_quota", _quota_unknown)
     call_count = {"n": 0}
 
     async def _fake_check():
@@ -175,6 +181,9 @@ async def test_get_status_force_bypasses_cache(monkeypatch):
 
 async def test_get_status_refreshes_after_ttl_expiry(monkeypatch):
     monkeypatch.setattr(availability, "get_status", _REAL_GET_STATUS)
+    async def _quota_unknown():
+        return availability._base_quota()
+    monkeypatch.setattr(availability, "_fetch_claude_quota", _quota_unknown)
     call_count = {"n": 0}
 
     async def _fake_check():
@@ -187,6 +196,41 @@ async def test_get_status_refreshes_after_ttl_expiry(monkeypatch):
     await availability.get_status()
     await availability.get_status()
     assert call_count["n"] == 4
+
+
+def test_normalize_claude_quota_marks_exhausted():
+    quota = availability.normalize_claude_quota({
+        "five_hour": {"utilization": 100, "resets_at": "2026-07-30T12:00:00Z"},
+        "seven_day": {"utilization": 40, "resets_at": "2026-08-01T12:00:00Z"},
+    })
+    assert quota["state"] == "exhausted"
+    assert quota["remainingPercent"] == 0
+    assert quota["resetsAt"] == "2026-07-30T12:00:00Z"
+
+
+async def test_get_status_layers_claude_quota_exhaustion(monkeypatch):
+    monkeypatch.setattr(availability, "get_status", _REAL_GET_STATUS)
+
+    async def _fake_check_claude():
+        return {"installed": True, "loggedIn": True, "available": True, "reason": ""}
+
+    async def _fake_check_codex():
+        return {"installed": True, "loggedIn": True, "available": True, "reason": ""}
+
+    async def _quota_exhausted():
+        return availability._base_quota("exhausted", 0, "2026-07-30T12:00:00Z")
+
+    monkeypatch.setattr(availability, "_CHECKS", {"claude": _fake_check_claude, "codex": _fake_check_codex})
+    monkeypatch.setattr(availability, "_fetch_claude_quota", _quota_exhausted)
+
+    status = await availability.get_status(force=True)
+    assert status["claude"]["installed"] is True
+    assert status["claude"]["loggedIn"] is True
+    assert status["claude"]["available"] is False
+    assert status["claude"]["runnable"] is False
+    assert status["claude"]["state"] == "quota_exhausted"
+    assert status["claude"]["reason"] == "quota_exhausted"
+    assert status["codex"]["available"] is True
 
 
 async def test_apply_availability_fallback_preferred_available_is_noop(monkeypatch):

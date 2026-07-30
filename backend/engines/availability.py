@@ -9,9 +9,10 @@ engines/availability.py — 「這個引擎現在真的能跑嗎」的偵測與�
   apply_availability_fallback()，供既有呼叫點在「resolve 完引擎名稱之後、
   真的執行前」多包一層防護。
 
-用量／額度數字沒有做：claude/codex 兩邊 CLI 都沒有任何文件化、可腳本化
-的管道可以查到「剩餘用量」（已在真實已登入的 claude/codex CLI 上驗證過，
-只查得到 installed/loggedIn，查不到任何 usage/limit/quota 欄位）。
+Claude 的額度不是從 CLI 查，而是沿用 Claude Code OAuth credentials 呼叫
+Anthropic usage API，成功時疊到 quota layer；查不到時標成 unknown，不阻擋。
+Codex 目前仍以 installed/loggedIn 為 runtime gate，前端另有 Codex usage
+面板可顯示 app-server 回傳的限制。
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ import json
 import sys
 import time
 from pathlib import Path
+
+import aiohttp
 
 from helpers import safe_kill_process, wrap_cmd
 
@@ -33,6 +36,8 @@ _REASON_LABEL = {
     "not_logged_in": "未登入",
     "check_timeout": "狀態檢查逾時",
     "unexpected_output": "狀態檢查失敗",
+    "quota_exhausted": "用量已滿",
+    "runtime_error": "執行失敗",
     "": "",
 }
 
@@ -48,6 +53,145 @@ def _bin_for(engine_name: str) -> str:
         if mod and hasattr(mod, attr):
             return getattr(mod, attr, engine_name)
     return engine_name  # "claude" / "codex" 字面值，讓 OS 自己解析 PATH
+
+
+def _main_attr(name: str, default=None):
+    for mod_name in ("main", "backend.main", "__main__"):
+        mod = sys.modules.get(mod_name)
+        if mod and hasattr(mod, name):
+            return getattr(mod, name)
+    return default
+
+
+def _claude_home() -> Path:
+    return Path(_main_attr("CLAUDE_HOME", Path.home() / ".claude"))
+
+
+def _claude_version() -> str:
+    return str(_main_attr("CLAUDE_VERSION", "unknown") or "unknown")
+
+
+def _base_quota(state: str = "unknown", remaining=None, resets_at=None, windows=None) -> dict:
+    return {
+        "state": state,
+        "remainingPercent": remaining,
+        "resetsAt": resets_at,
+        "windows": windows or {},
+    }
+
+
+def _quota_window(raw: dict | None) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    used = raw.get("utilization")
+    try:
+        used_f = float(used)
+    except (TypeError, ValueError):
+        return None
+    remaining = max(0.0, min(100.0, 100.0 - used_f))
+    return {
+        "usedPercent": used_f,
+        "remainingPercent": remaining,
+        "resetsAt": raw.get("resets_at"),
+    }
+
+
+def normalize_claude_quota(usage: dict) -> dict:
+    """Normalize Claude OAuth usage response into the shared quota layer."""
+    five_hour = _quota_window(usage.get("five_hour") if isinstance(usage, dict) else None)
+    seven_day = _quota_window(usage.get("seven_day") if isinstance(usage, dict) else None)
+    windows = {}
+    if five_hour:
+        windows["five_hour"] = five_hour
+    if seven_day:
+        windows["seven_day"] = seven_day
+    if not windows:
+        return _base_quota()
+
+    limiting = min(windows.values(), key=lambda w: w["remainingPercent"])
+    remaining = limiting["remainingPercent"]
+    state = "ok"
+    if any(w["usedPercent"] >= 100 for w in windows.values()):
+        state = "exhausted"
+    elif remaining <= 20:
+        state = "low"
+    return _base_quota(state, remaining, limiting.get("resetsAt"), windows)
+
+
+async def _fetch_claude_quota() -> dict:
+    creds_file = _claude_home() / ".credentials.json"
+    if not creds_file.exists():
+        return _base_quota()
+    try:
+        creds = json.loads(creds_file.read_text(encoding="utf-8"))
+        access_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+    except Exception:
+        return _base_quota()
+    if not access_token:
+        return _base_quota()
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.anthropic.com/api/oauth/usage",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "anthropic-beta": "oauth-2025-04-20",
+                    "User-Agent": f"claude-code/{_claude_version()}",
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    return _base_quota()
+                return normalize_claude_quota(await resp.json())
+    except Exception:
+        return _base_quota()
+
+
+def _state_detail(engine_name: str, status: dict) -> tuple[str, str, str]:
+    quota = status.get("quota") if isinstance(status.get("quota"), dict) else _base_quota()
+    if not status.get("installed"):
+        return "not_installed", "not_installed", f"{_LABEL[engine_name]} 未安裝。"
+    if not status.get("loggedIn"):
+        reason = status.get("reason") or "not_logged_in"
+        return reason, reason, f"{_LABEL[engine_name]} 尚未登入。"
+    if quota.get("state") == "exhausted":
+        reset = quota.get("resetsAt")
+        suffix = f"，重置時間：{reset}" if reset else ""
+        return "quota_exhausted", "quota_exhausted", f"{_LABEL[engine_name]} 用量已滿{suffix}。"
+    if quota.get("state") == "low":
+        remaining = quota.get("remainingPercent")
+        suffix = f"（剩餘 {remaining:.0f}%）" if isinstance(remaining, (int, float)) else ""
+        return "quota_low", "", f"{_LABEL[engine_name]} 用量偏低{suffix}。"
+    reason = status.get("reason") or ""
+    if reason:
+        return reason, reason, _REASON_LABEL.get(reason, reason)
+    return "ready", "", f"{_LABEL[engine_name]} 已就緒。"
+
+
+async def _decorate_status(engine_name: str, status: dict) -> dict:
+    decorated = dict(status)
+    decorated.setdefault("installed", False)
+    decorated.setdefault("loggedIn", False)
+    decorated.setdefault("available", False)
+    decorated.setdefault("reason", "")
+    decorated.setdefault("quota", _base_quota())
+
+    if engine_name == "claude" and decorated.get("installed") and decorated.get("loggedIn"):
+        decorated["quota"] = await _fetch_claude_quota()
+
+    state, reason, detail = _state_detail(engine_name, decorated)
+    runnable = (
+        bool(decorated.get("installed"))
+        and bool(decorated.get("loggedIn"))
+        and state not in {"quota_exhausted", "check_timeout", "unexpected_output", "not_installed", "not_logged_in"}
+    )
+    decorated["state"] = state
+    decorated["reason"] = reason
+    decorated["runnable"] = runnable
+    decorated["available"] = runnable
+    decorated["detail"] = detail
+    return decorated
 
 
 async def _check_claude() -> dict:
@@ -127,7 +271,8 @@ async def get_status(force: bool = False) -> dict:
         stale = [n for n in _CHECKS if force or n not in _cache or now - _cache[n][0] >= CACHE_TTL]
         if stale:
             results = await asyncio.gather(*[_CHECKS[n]() for n in stale])
-            for n, r in zip(stale, results):
+            decorated = await asyncio.gather(*[_decorate_status(n, r) for n, r in zip(stale, results)])
+            for n, r in zip(stale, decorated):
                 _cache[n] = (now, r)
         return {n: _cache[n][1] for n in _CHECKS}
 

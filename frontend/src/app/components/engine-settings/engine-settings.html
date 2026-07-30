@@ -9,13 +9,14 @@
         <option value="both">兩者都開放，Agent 可自行指定</option>
       </select>
       <div style="font-size:11px;display:flex;gap:14px;margin:4px 0 2px">
-        <span [style.color]="engineStatus['claude']?.available ? '#4caf50' : '#e07070'">
-          {{ engineStatus['claude']?.available ? '✓' : '✗' }} Claude{{ engineOptionDisabled('claude') ? '（' + (engineStatus['claude']?.reason === 'not_logged_in' ? '未登入' : '未安裝') + '）' : '' }}
+        <span [style.color]="engineRunnable('claude') ? '#4caf50' : '#e07070'" [title]="engineStatusDetail('claude')">
+          {{ engineRunnable('claude') ? '✓' : '✗' }} Claude（{{ engineStatusLabel('claude') }}）
         </span>
-        <span [style.color]="engineStatus['codex']?.available ? '#4caf50' : '#e07070'">
-          {{ engineStatus['codex']?.available ? '✓' : '✗' }} Codex{{ engineOptionDisabled('codex') ? '（' + (engineStatus['codex']?.reason === 'not_logged_in' ? '未登入' : '未安裝') + '）' : '' }}
+        <span [style.color]="engineRunnable('codex') ? '#4caf50' : '#e07070'" [title]="engineStatusDetail('codex')">
+          {{ engineRunnable('codex') ? '✓' : '✗' }} Codex（{{ engineStatusLabel('codex') }}）
         </span>
       </div>
+      <small>這裡可保存偏好的引擎範圍；若鎖定的引擎目前不可執行，聊天、Project、Team Run、Team Execute 會被暫停並顯示原因。</small>
       <small>鎖定為「只用 Claude」或「只用 Codex」時，個別 Agent 的 <code>engine:</code> 覆寫會被完全忽略，一律使用這裡選的引擎；選擇「兩者都開放」時才會依 Agent 自己的設定（或下方的預設引擎）決定，混用不同引擎的成員。</small>
       <small>Codex 需先 <code>codex login</code>；Windows 上 <code>workspace-write</code> sandbox 目前無法執行 shell 指令（Codex CLI 本身的限制），已驗證 <code>danger-full-access</code> 可繞過此限制，但該等級完全沒有沙盒保護，請謹慎使用。</small>
     </label>
@@ -25,7 +26,7 @@
           <option value="claude" [disabled]="engineOptionDisabled('claude')">{{ engineOptionLabel('claude') }}</option>
           <option value="codex" [disabled]="engineOptionDisabled('codex')">{{ engineOptionLabel('codex') }}（預設）</option>
         </select>
-        <small>沒有 Agent 自行指定時使用哪個引擎；Agent 的 <code>engine:</code> 覆寫優先於這裡。即使選了不可用的引擎，實際執行時也會自動切換到還可用的那個。</small>
+        <small>沒有 Agent 自行指定時使用哪個引擎；Agent 的 <code>engine:</code> 覆寫優先於這裡。若預設引擎暫時不可執行，執行期會先嘗試切換到另一個可執行引擎。</small>
       </label>
     }
     <label>Claude 執行路徑

@@ -25,6 +25,26 @@ import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, McpServer, McpTool, McpType, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
 
+type EngineName = 'claude' | 'codex';
+type EngineTone = 'ok' | 'warn' | 'error' | 'muted';
+interface EngineRuntimeView {
+  name: EngineName;
+  label: string;
+  state: string;
+  reason: string;
+  detail: string;
+  runnable: boolean;
+  tone: EngineTone;
+  fallback?: EngineName;
+}
+interface EngineRunDecision {
+  ok: boolean;
+  engine: EngineName;
+  reason: string;
+  tone: EngineTone;
+  fallback?: EngineName;
+}
+
 // Default % heights for the MCP panel's two resizable panes (see
 // App.mcpPaneHeights): 'general' bundles App 管理 / 可認領的 MCP / Codex MCP
 // into one scrollable region, 'external' is 外部 API. 本地 API (the third,
@@ -2427,6 +2447,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         copy[lastIdx] = { ...lastMsg, isStreaming: false, teamRun: { ...tr, status: 'cancelled', steps } };
         return copy;
       } else if (ev.type === 'error') {
+        if (ev.text) this._noteEngineRuntimeFailure(ev.text);
         copy[lastIdx] = { ...lastMsg, isStreaming: false, teamRun: { ...tr, status: 'error', steps } };
         return copy;
       }
@@ -2439,7 +2460,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   private _dispatchTeamRun(
     tabId: string, teamId: string, task: string, cwd: string, model: string,
     teamName: string, members: { agent: string; role: string }[], inlineTeam?: any,
+    runtimeChecked = false,
   ) {
+    if (!runtimeChecked && !this._requireRuntimeAction('Team Run')) return;
     const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
     const teamRun: TeamRun = {
       id: '', team_id: teamId, name: teamName, task,
@@ -2497,6 +2520,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       error: (err) => {
         this.tabStreaming(tabId, false);
         const errMsg = err.error?.error || err.message || '執行失敗';
+        this._noteEngineRuntimeFailure(errMsg);
         this.showToast(errMsg, 'error');
         this.tabMessages(tabId, msgs => {
           const lastIdx = msgs.length - 1;
@@ -2551,6 +2575,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   dispatchDeepTeam() {
     const task = this.inputText.trim();
     if (!task) return;
+    if (!this._requireRuntimeAction('Project 規劃')) return;
     this.deepPlanLoading.set(true);
     this.deepPlanPhase.set('');
     this.deepPlanResult.set(null);
@@ -2589,6 +2614,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       error: (err) => {
         this.deepPlanLoading.set(false);
         const errMsg = err.error?.error || err.message || 'Project 派發失敗';
+        this._noteEngineRuntimeFailure(errMsg);
         this.showToast(errMsg, 'error');
       },
     });
@@ -2612,6 +2638,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const result = this.deepPlanResult();
     const task = this.inputText.trim();
     if (!result || !task) return;
+    if (!this._requireRuntimeAction('Project Team Run')) return;
 
     this.deepPlanOpen.set(false);
     this.expandedOutputs.set([]);
@@ -2628,7 +2655,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     };
     this._dispatchTeamRun(
       tabId, result.team_id || '', task, s.workDir, s.model,
-      inlineTeam.name, members, inlineTeam,
+      inlineTeam.name, members, inlineTeam, true,
     );
   }
 
@@ -3445,6 +3472,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   send() {
     const text = this.inputText.trim();
     if (!text || this.isStreaming()) return;
+    const curTab = this.activeChat;
+    if (!this._requireRuntimeAction(curTab?.teamId ? '團隊對話' : '對話', !curTab?.teamId)) return;
     this.lastUserText = text;
     this.lastAttachments = this.attachedFiles().map(f => f.path);
     this.inputText = '';
@@ -3456,7 +3485,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const attachments = this.attachedFiles().map(f => f.path);
     this.attachedFiles.set([]);
 
-    const curTab = this.activeChat;
     const tabId = this.activeChatId();
     if (curTab && curTab.teamId) {
       this.submitTeamMessage(text, attachments);
@@ -3487,9 +3515,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
               return copy;
             });
             if (tabId === this.activeChatId()) this.shouldScroll = true;
-            if (block.text && (block.text.toLowerCase().includes('session limit') || block.text.toLowerCase().includes('rate limit') || block.text.toLowerCase().includes('limit · resets') || block.text.toLowerCase().includes('quota'))) {
-              this.outOfQuota.set(true);
-            }
+            if (block.text) this._noteEngineRuntimeFailure(block.text);
           }
         }
       } else if (ev.type === 'text') {
@@ -3500,9 +3526,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           return copy;
         });
         if (tabId === this.activeChatId()) this.shouldScroll = true;
-        if (ev.text && (ev.text.toLowerCase().includes('session limit') || ev.text.toLowerCase().includes('rate limit') || ev.text.toLowerCase().includes('limit · resets') || ev.text.toLowerCase().includes('quota'))) {
-          this.outOfQuota.set(true);
-        }
+        if (ev.text) this._noteEngineRuntimeFailure(ev.text);
       } else if (ev.type === 'tool_use') {
         this.tabMessages(tabId, m => [...m, {
           role: 'tool', text: JSON.stringify(ev.input ?? {}, null, 2),
@@ -3572,9 +3596,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.tabMessages(tabId, m => [...m, { role: 'error', text: errStr }]);
       this.tabStreaming(tabId, false);
       this.tabStopFns.delete(tabId);
-      if (errStr.toLowerCase().includes('session limit') || errStr.toLowerCase().includes('rate limit') || errStr.toLowerCase().includes('limit · resets') || errStr.toLowerCase().includes('quota')) {
-        this.outOfQuota.set(true);
-      }
+      this._noteEngineRuntimeFailure(errStr);
     };
 
     if (this.useProvider()) {
@@ -3666,6 +3688,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, projectDir: ev.project_path } : t));
           if (tabId === this.activeChatId()) this.shouldScroll = true;
         } else if (ev.type === 'error') {
+          if (ev.text) this._noteEngineRuntimeFailure(ev.text);
           this.tabMessages(tabId, m => [...m, { role: 'error', text: ev.text }]);
           this.tabStreaming(tabId, false);
           if (tabId === this.activeChatId()) this.shouldScroll = true;
@@ -3691,6 +3714,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       },
       (err) => {
         console.error('team chat error', err);
+        this._noteEngineRuntimeFailure(String(err));
         this.tabStreaming(tabId, false);
         this.tabStopFns.delete(tabId);
         this.tabMessages(tabId, m => [...m, { role: 'error', text: `團隊討論異常斷開: ${err}` }]);
@@ -3710,12 +3734,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   approveAndExecuteTeam(msg: ChatMessage, index: number) {
     if (msg.pendingExec) {
+      if (!this._requireRuntimeAction('Team Execute')) return;
       msg.hasExecuted = true;
-      this.executeTeamCodePhase(msg.pendingExec.teamId, msg.pendingExec.projectPath, msg.pendingExec.task);
+      this.executeTeamCodePhase(msg.pendingExec.teamId, msg.pendingExec.projectPath, msg.pendingExec.task, true);
     }
   }
 
-  executeTeamCodePhase(teamId: string, projectPath: string, task: string) {
+  executeTeamCodePhase(teamId: string, projectPath: string, task: string, runtimeChecked = false) {
+    if (!runtimeChecked && !this._requireRuntimeAction('Team Execute')) return;
     const tabId = this.activeChatId();
     const team = this.teams().find(t => t.id === teamId);
     const teamName = team ? team.name : 'Auto Team';
@@ -3733,7 +3759,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     const execMsg: ChatMessage = {
       role: 'assistant',
-      text: '🤖 各 Agent 啟動 Claude Code 進行實作中...',
+      text: `🤖 各 Agent 啟動 ${this.effectiveEngine() === 'claude' ? 'Claude Code' : 'Codex'} 進行實作中...`,
       isStreaming: true,
       time: now,
       teamRun
@@ -3822,6 +3848,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           this.reload();
           if (tabId === this.activeChatId()) setTimeout(() => this.scrollToBottom(), 100);
         } else if (ev.type === 'error') {
+          if (ev.text) this._noteEngineRuntimeFailure(ev.text);
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
@@ -3846,6 +3873,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       },
       (err) => {
         console.error('exec error', err);
+        this._noteEngineRuntimeFailure(String(err));
         this.tabStreaming(tabId, false);
         this.tabStopFns.delete(tabId);
         this.tabMessages(tabId, msgs => {
@@ -4215,14 +4243,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  // ── 引擎可用性偵測（已安裝／已登入，不含用量數字——兩邊 CLI 都沒有可
-  // 腳本化的用量查詢管道）────────────────────────────────────────────────
+  // ── 引擎 runtime 狀態分層 ──────────────────────────────────────────────
   engineStatus = signal<Record<string, EngineAvailability>>({});
+  engineRuntimeFailures = signal<Record<string, { reason: 'rate_limit' | 'quota' | 'auth' | 'timeout' | 'unknown'; message: string; at: number }>>({});
   engineUserKind = computed<'loading' | 'both' | 'claude' | 'codex' | 'none'>(() => {
     const status = this.engineStatus();
     if (!status['claude'] && !status['codex']) return 'loading';
-    const claude = status['claude']?.available === true;
-    const codex = status['codex']?.available === true;
+    const claude = this.engineRuntimeView('claude').runnable;
+    const codex = this.engineRuntimeView('codex').runnable;
     if (claude && codex) return 'both';
     if (claude) return 'claude';
     if (codex) return 'codex';
@@ -4247,8 +4275,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   showSessionEngineSwitch = computed(() =>
     this.engineMode() === 'both'
-    && this.engineStatus()['claude']?.available === true
-    && this.engineStatus()['codex']?.available === true
+    && this.engineRuntimeView('claude').runnable
+    && this.engineRuntimeView('codex').runnable
   );
 
   private syncSessionEngineFilter() {
@@ -4260,9 +4288,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       next = 'claude';
     } else if (mode === 'codex') {
       next = 'codex';
-    } else if (status['claude']?.available && !status['codex']?.available) {
+    } else if (this.engineRuntimeView('claude').runnable && !this.engineRuntimeView('codex').runnable) {
       next = 'claude';
-    } else if (status['codex']?.available && !status['claude']?.available) {
+    } else if (this.engineRuntimeView('codex').runnable && !this.engineRuntimeView('claude').runnable) {
       next = 'codex';
     }
     if (next !== current) {
@@ -4323,6 +4351,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   protected readonly ENGINE_REASON_LABEL: Record<string, string> = {
     not_installed: '未安裝', not_logged_in: '未登入',
     check_timeout: '狀態檢查逾時', unexpected_output: '狀態檢查失敗',
+    quota_exhausted: '用量已滿', runtime_error: '最近執行失敗',
+  };
+  private readonly ENGINE_STATE_LABEL: Record<string, string> = {
+    ready: '已就緒',
+    quota_low: '用量偏低',
+    quota_exhausted: '用量已滿',
+    not_installed: '未安裝',
+    not_logged_in: '未登入',
+    check_timeout: '狀態檢查逾時',
+    unexpected_output: '狀態檢查失敗',
+    runtime_error: '最近執行失敗',
+    unknown: '狀態未知',
   };
 
   loadEngineStatus(force = false) {
@@ -4337,24 +4377,175 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  engineOptionDisabled(name: 'claude' | 'codex'): boolean {
-    const s = this.engineStatus()[name];
-    return !!s && !s.available;   // 還沒拿到狀態時（{} 空物件）不擋，避免載入瞬間全部變成 disabled
+  private _frontendQuotaState(name: EngineName): { state: 'ok' | 'low' | 'exhausted' | 'unknown'; remainingPercent: number | null; resetsAt: string | number | null } {
+    if (name === 'claude') {
+      const u = this.usage();
+      if (!u) return { state: 'unknown', remainingPercent: null, resetsAt: null };
+      const fiveRemaining = Math.max(0, 100 - (u.fiveHour ?? 0));
+      const sevenRemaining = Math.max(0, 100 - (u.sevenDay ?? 0));
+      const remaining = Math.min(fiveRemaining, sevenRemaining);
+      const resetsAt = fiveRemaining <= sevenRemaining ? u.fiveHourReset : u.sevenDayReset;
+      if ((u.fiveHour ?? 0) >= 100 || (u.sevenDay ?? 0) >= 100) {
+        return { state: 'exhausted', remainingPercent: remaining, resetsAt };
+      }
+      return { state: remaining <= 20 ? 'low' : 'ok', remainingPercent: remaining, resetsAt };
+    }
+    const primary = this.codexUsage()?.primary;
+    if (!primary) return { state: 'unknown', remainingPercent: null, resetsAt: null };
+    const remaining = primary.remainingPercent;
+    if (remaining <= 0) return { state: 'exhausted', remainingPercent: remaining, resetsAt: primary.resetsAt };
+    return { state: remaining <= 20 ? 'low' : 'ok', remainingPercent: remaining, resetsAt: primary.resetsAt };
   }
 
-  engineOptionLabel(name: 'claude' | 'codex'): string {
+  engineRuntimeView(name: EngineName): EngineRuntimeView {
     const s = this.engineStatus()[name];
-    const base = this.ENGINE_LABEL[name];
-    if (!s || s.available) return base;
-    const reason = this.ENGINE_REASON_LABEL[s.reason] || '不可用';
-    return `${base}（${reason}）`;
+    const baseLabel = this.ENGINE_LABEL[name];
+    if (!s) {
+      return { name, label: baseLabel, state: 'unknown', reason: '狀態未知', detail: `${baseLabel} 狀態尚未完成檢查。`, runnable: true, tone: 'muted' };
+    }
+
+    let state = s.state || (s.available ? 'ready' : (s.reason || 'unknown'));
+    let reason = this.ENGINE_STATE_LABEL[state] || this.ENGINE_REASON_LABEL[s.reason] || '不可用';
+    let detail = s.detail || `${baseLabel}：${reason}`;
+    let runnable = (s.runnable ?? s.available) === true;
+    let tone: EngineTone = runnable ? 'ok' : 'error';
+
+    const quota = this._frontendQuotaState(name);
+    if (s.installed && s.loggedIn && quota.state !== 'unknown') {
+      if (quota.state === 'exhausted') {
+        state = 'quota_exhausted';
+        reason = '用量已滿';
+        const resetText = quota.resetsAt ? `，重置時間：${quota.resetsAt}` : '';
+        detail = `${baseLabel} 用量已滿${resetText}。`;
+        runnable = false;
+        tone = 'error';
+      } else if (quota.state === 'low' && runnable) {
+        state = 'quota_low';
+        reason = `用量偏低${quota.remainingPercent !== null ? `（剩餘 ${Math.round(quota.remainingPercent)}%）` : ''}`;
+        detail = `${baseLabel} ${reason}。`;
+        tone = 'warn';
+      }
+    }
+
+    const failure = this.engineRuntimeFailures()[name];
+    if (failure && Date.now() - failure.at < 15 * 60 * 1000) {
+      const isQuota = failure.reason === 'quota' || failure.reason === 'rate_limit';
+      state = isQuota ? 'quota_exhausted' : 'runtime_error';
+      reason = isQuota ? '用量已滿或速率限制' : '最近執行失敗';
+      detail = `${baseLabel} ${reason}：${failure.message}`;
+      runnable = false;
+      tone = 'error';
+    }
+
+    if (state === 'quota_low') tone = 'warn';
+    return { name, label: baseLabel, state, reason, detail, runnable, tone };
+  }
+
+  engineOptionDisabled(_name: EngineName): boolean {
+    // Engine choice is configuration, not an immediate execution request. Keep
+    // options selectable and isolate only runtime actions.
+    return false;
+  }
+
+  engineOptionLabel(name: EngineName): string {
+    const v = this.engineRuntimeView(name);
+    return v.state === 'ready' ? v.label : `${v.label}（${v.reason}）`;
+  }
+
+  currentRunDecision(allowProvider = false): EngineRunDecision {
+    const engine = this.effectiveEngine();
+    if (allowProvider && this.useProvider()) {
+      return { ok: true, engine, reason: '', tone: 'ok' };
+    }
+    const current = this.engineRuntimeView(engine);
+    if (current.runnable) return { ok: true, engine, reason: current.detail, tone: current.tone };
+    const other: EngineName = engine === 'claude' ? 'codex' : 'claude';
+    const fallback = this.engineRuntimeView(other);
+    if (this.engineMode() === 'both' && fallback.runnable) {
+      return {
+        ok: true,
+        engine,
+        fallback: other,
+        reason: `${current.detail}送出後會由後端切換到 ${fallback.label}。`,
+        tone: 'warn',
+      };
+    }
+    return { ok: false, engine, reason: current.detail, tone: 'error' };
+  }
+
+  runtimeActionBlocked(allowProvider = false): boolean {
+    return !this.currentRunDecision(allowProvider).ok;
+  }
+
+  runtimeActionNotice(allowProvider = false): string {
+    const d = this.currentRunDecision(allowProvider);
+    if (d.ok && d.fallback) return d.reason;
+    if (!d.ok) return d.reason;
+    const v = this.engineRuntimeView(d.engine);
+    return v.tone === 'warn' ? v.detail : '';
+  }
+
+  chatInputPlaceholder(): string {
+    if (this.isStreaming()) return `${this.effectiveEngine() === 'claude' ? 'Claude' : 'Codex'} 思考中…`;
+    const d = this.currentRunDecision(!this.activeChat?.teamId);
+    if (!d.ok) return d.reason;
+    if (d.fallback) return `目前 ${this.effectiveEngine() === 'claude' ? 'Claude' : 'Codex'} 不可用，送出後會改用 ${d.fallback === 'claude' ? 'Claude' : 'Codex'}`;
+    return this.chatTabs().length > 1 ? `傳送給「${this.activeChat?.label || '對話'}」— / 技能  Ctrl+V 截圖` : '輸入訊息（/ 技能  Ctrl+V 截圖  拖曳檔案）';
+  }
+
+  sendDisabled(): boolean {
+    return !this.inputText.trim() || this.isStreaming() || this.runtimeActionBlocked(!this.activeChat?.teamId);
+  }
+
+  chatRuntimeBlocked(): boolean {
+    return this.runtimeActionBlocked(!this.activeChat?.teamId);
+  }
+
+  chatRuntimeNotice(): string {
+    return this.runtimeActionNotice(!this.activeChat?.teamId);
+  }
+
+  chatRuntimeTone(): EngineTone {
+    return this.currentRunDecision(!this.activeChat?.teamId).tone;
+  }
+
+  projectDisabled(): boolean {
+    return !this.inputText.trim() || this.isStreaming() || this.deepPlanLoading() || this.runtimeActionBlocked(false);
+  }
+
+  private _requireRuntimeAction(label: string, allowProvider = false): boolean {
+    const d = this.currentRunDecision(allowProvider);
+    if (!d.ok) {
+      this.showToast(`${label}無法開始：${d.reason}`, 'error', 6000);
+      return false;
+    }
+    if (d.fallback) {
+      this.showToast(`${label}將改用 ${this.ENGINE_LABEL[d.fallback]}：${d.reason}`, 'warn', 5000);
+    }
+    return true;
+  }
+
+  private _isRuntimeLimitText(text: string): boolean {
+    const t = text.toLowerCase();
+    return t.includes('session limit') || t.includes('rate limit') || t.includes('limit · resets') || t.includes('quota') || t.includes('usage limit');
+  }
+
+  private _noteEngineRuntimeFailure(text: string) {
+    if (!this._isRuntimeLimitText(text)) return;
+    const engine = this.effectiveEngine();
+    const reason = text.toLowerCase().includes('rate limit') ? 'rate_limit' : 'quota';
+    this.outOfQuota.set(true);
+    this.engineRuntimeFailures.update(m => ({ ...m, [engine]: { reason, message: text.slice(0, 240), at: Date.now() } }));
+    this.loadEngineStatus(true);
   }
 
   private _autoCorrectGlobalEngine(status: Record<string, EngineAvailability>) {
     const current = this.settings.get().agentEngine;
-    if (status[current]?.available !== false) return;   // 可用或狀態未知都不動
+    const currentStatus = status[current];
+    if (!currentStatus || currentStatus.available !== false) return;   // 可用或狀態未知都不動
+    if (currentStatus.reason === 'quota_exhausted') return;             // 額度是暫時狀態，不改長期偏好
     const other = current === 'claude' ? 'codex' : 'claude';
-    if (!status[other]?.available) return;               // 兩邊都不可用，UI 端不硬猜，交給執行期防護網處理
+    if (!this.engineRuntimeView(other as EngineName).runnable) return;  // 兩邊都不可用，交給執行期防護網處理
     this.settings.save({ agentEngine: other as 'claude' | 'codex' });
     this.agentEngine.set(other as 'claude' | 'codex');
     if (this.settingsOpen()) this.settingsForm.agentEngine = other as 'claude' | 'codex';
@@ -4368,10 +4559,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const mode = this.engineMode();
     if (mode !== 'claude' && mode !== 'codex') return;   // 'both' 沒有鎖定，不用管
     if (status[mode]?.available !== false) return;
+    const v = this.engineRuntimeView(mode);
     // 刻意不自動切換範圍——使用者鎖定範圍是刻意的硬限制，默默幫他改回
     // 「兩者都開放」等於把限制取消掉，只提示、讓使用者自己去 Settings 處理。
     this.showToast(
-      `已鎖定僅使用「${this.ENGINE_LABEL[mode]}」，但目前無法使用，請至 Settings 安裝／登入，或切換為「兩者都開放」。`,
+      `已鎖定僅使用「${this.ENGINE_LABEL[mode]}」，但目前無法使用：${v.reason}。請至 Settings 調整，或等待恢復。`,
       'error', 5000,
     );
   }

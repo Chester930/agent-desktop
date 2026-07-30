@@ -688,6 +688,29 @@ body {
   &:disabled { opacity: 0.25; cursor: not-allowed; background: rgba(255,255,255,0.08); color: #666; }
 }
 
+.engine-runtime-notice {
+  margin: 0 20px 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #aaa;
+  font-size: 11px;
+  line-height: 1.4;
+
+  &.warn {
+    border-color: rgba(245, 158, 11, 0.28);
+    background: rgba(245, 158, 11, 0.08);
+    color: #fbbf24;
+  }
+
+  &.error {
+    border-color: rgba(248, 113, 113, 0.28);
+    background: rgba(248, 113, 113, 0.08);
+    color: #fca5a5;
+  }
+}
+
 // ── Right Panel ───────────────────────────────────────
 .right-panel {
   position: relative;
@@ -2021,6 +2044,18 @@ body {
 }
 .engine-btn {
   font-weight: 600;
+
+  &.warn {
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.35);
+    background: rgba(245, 158, 11, 0.08);
+  }
+
+  &.error {
+    color: #fca5a5;
+    border-color: rgba(248, 113, 113, 0.35);
+    background: rgba(248, 113, 113, 0.08);
+  }
 }
 .sb-btn.locked {
   cursor: default;
