@@ -27,6 +27,12 @@ import {
 
 type EngineName = 'claude' | 'codex';
 type EngineTone = 'ok' | 'warn' | 'error' | 'muted';
+type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+interface ModelPickerOption {
+  id: string;
+  label: string;
+  desc: string;
+}
 interface EngineRuntimeView {
   name: EngineName;
   label: string;
@@ -979,9 +985,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     else if (item.type === 'skill') { this.inputText = item.label + ' '; this.inputRef?.nativeElement?.focus(); }
   }
 
-  // T01 — model / effort / permissionMode（對應 Claude CLI 參數）
-  readonly MODEL_OPTIONS = ['sonnet', 'opus', 'haiku', 'fable'] as const;
-  readonly EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+  // T01 — model / effort / permissionMode（依目前引擎切換對應詞彙）
+  // Claude Code's interactive model picker currently exposes these aliases.
+  // Empty string means "Default" and lets Claude Code choose the recommended model.
+  readonly MODEL_OPTIONS = ['', 'sonnet', 'fable', 'opus', 'haiku'] as const;
+  readonly EFFORT_OPTIONS_CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+  readonly EFFORT_OPTIONS_CODEX_DEFAULT = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+  readonly EFFORT_LABELS: Record<string, string> = {
+    low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high',
+    max: 'More reasoning', ultra: 'Ultra',
+  };
   // Claude 跟 Codex 的權限模式是完全不同的兩套詞彙（Claude 6 種細粒度模式，
   // Codex 3 種沙盒等級），不是一對一對應——engines/codex_engine.py::
   // _normalize_sandbox_mode() 過去收到 Claude 的值（例如 "bypassPermissions"）
@@ -1004,21 +1017,40 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     'danger-full-access': '⚠ Full Access',
   };
   readonly MODEL_LABELS: Record<string, string> = {
-    sonnet: 'Sonnet 4.6', opus: 'Opus 4.8', haiku: 'Haiku 4.5', fable: 'Fable 5',
-    '': '使用預設',
+    sonnet: 'Sonnet 5', opus: 'Opus 5', fable: 'Fable 5', haiku: 'Haiku 4.5',
+    '': 'Default（推薦）',
   };
   model = signal('sonnet');
-  effort = signal<'low' | 'medium' | 'high' | 'xhigh' | 'max'>('medium');
+  effort = signal<ReasoningEffort>('medium');
   permissionMode = signal<string>('acceptEdits');
 
   activePermOptions = computed<readonly string[]>(() =>
     this.effectiveEngine() === 'codex' ? this.PERM_OPTIONS_CODEX : this.PERM_OPTIONS_CLAUDE);
   activePermLabels = computed<Record<string, string>>(() =>
     this.effectiveEngine() === 'codex' ? this.PERM_LABELS_CODEX : this.PERM_LABELS_CLAUDE);
+  activeEffortOptions = computed<readonly ReasoningEffort[]>(() => {
+    if (this.effectiveEngine() !== 'codex') return this.EFFORT_OPTIONS_CLAUDE;
+    const selected = this.codexModels().find(m => m.slug === this.model());
+    const levels = selected?.supported_reasoning_levels?.map(level => level.effort as ReasoningEffort);
+    return levels?.length ? levels : this.EFFORT_OPTIONS_CODEX_DEFAULT;
+  });
+  activeEffortLabels = computed<Record<string, string>>(() => this.EFFORT_LABELS);
+  activeEffortLabel = computed(() => this.activeEffortLabels()[this.effort()] || this.effort());
   // Codex 版的「模型選項」——第一個永遠是空字串（使用預設，讓 Codex CLI
   // 自己決定），後面接 GET /api/codex/models 即時查到的清單（見
   // loadCodexModels()），不是寫死的別名。
   activeCodexModelOptions = computed<string[]>(() => ['', ...this.codexModels().map(m => m.slug)]);
+  activeModelPickerOptions = computed<ModelPickerOption[]>(() => {
+    if (this.effectiveEngine() !== 'codex') return [...this.MODEL_PICKER_OPTIONS];
+    return [
+      { id: '', label: 'Codex 預設模型', desc: '由目前安裝的 Codex CLI 自動選擇' },
+      ...this.codexModels().map(m => ({
+        id: m.slug,
+        label: m.display_name || m.slug,
+        desc: m.description || '目前 Codex CLI 可用模型',
+      })),
+    ];
+  });
   activeModelLabel = computed<string>(() => {
     const m = this.model();
     if (this.effectiveEngine() === 'codex') {
@@ -1320,8 +1352,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   cycleEffort() {
-    const idx = (this.EFFORT_OPTIONS.indexOf(this.effort() as any) + 1) % this.EFFORT_OPTIONS.length;
-    const v = this.EFFORT_OPTIONS[idx]; this.effort.set(v); this.settings.save({ effort: v });
+    const options = this.activeEffortOptions();
+    const idx = options.indexOf(this.effort());
+    const v = options[(idx + 1) % options.length] || options[0];
+    this.effort.set(v);
+    this.settings.save({ effort: v });
   }
   cyclePermission() {
     const opts = this.activePermOptions();
@@ -1547,11 +1582,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // Model picker
   readonly MODEL_PICKER_OPTIONS = [
-    { id: 'opus', label: 'Opus 4.8', desc: '最強能力，適合複雜任務' },
-    { id: 'sonnet', label: 'Sonnet 4.6', desc: '速度與能力的最佳平衡（預設）' },
-    { id: 'haiku', label: 'Haiku 4.5', desc: '最快速，適合簡單任務' },
-    { id: 'fable', label: 'Fable 5', desc: '特殊能力模型' },
-  ];
+    { id: '', label: 'Default（推薦） · Sonnet 5', desc: '由 Claude Code 自動套用目前推薦模型' },
+    { id: 'sonnet', label: 'Sonnet 5', desc: '日常任務的效率與能力平衡' },
+    { id: 'fable', label: 'Fable 5', desc: '最強能力，適合最複雜、最長時間的任務；需要 usage credits' },
+    { id: 'opus', label: 'Opus 5', desc: '適合日常與複雜任務；約使用 Sonnet 的 2 倍額度' },
+    { id: 'haiku', label: 'Haiku 4.5', desc: '最快速，適合快速回答' },
+  ] as const satisfies readonly ModelPickerOption[];
   modelPickerOpen = signal(false);
 
   // Cron presets / translateCron: extracted into
@@ -2476,7 +2512,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.tabStreaming(tabId, true);
 
     const agentEngine = this.settings.get().agentEngine;
-    this.claude.runTeam(teamId, task, model, cwd, inlineTeam, agentEngine).subscribe({
+    this.claude.runTeam(teamId, task, model, cwd, inlineTeam, agentEngine, this.effort()).subscribe({
       next: (r) => {
         const runId = r.run_id;
         this.tabMessages(tabId, msgs => {
@@ -2582,7 +2618,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.deepPlanNegotiating.set(new Set());
 
     const s = this.settings.get();
-    this.claude.planTeam(task, s.workDir, s.model, s.agentEngine).subscribe({
+    this.claude.planTeam(task, s.workDir, s.model, s.agentEngine, s.effort).subscribe({
       next: (r) => {
         const runId = r.run_id;
         this.claude.streamPlanTeam(
@@ -2968,7 +3004,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.settingsForm = this.settings.get();
     const s = this.settings.get();
     this.model.set((s.model || 'sonnet') as any);
-    this.effort.set((s.effort || 'medium') as any);
+    this.effort.set((s.effort || 'medium') as ReasoningEffort);
     this.permissionMode.set((s.permissionMode || 'acceptEdits') as any);
     // agentEngine 的預設值（settings.service.ts: 'codex'）跟 model/
     // permissionMode 的預設值（'sonnet'/'acceptEdits'，都是 Claude 詞彙）
@@ -2982,7 +3018,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.permissionMode.set(this.PERM_OPTIONS_CODEX[0]);
     }
     if (s.agentEngine === 'codex') {
-      this.model.set('');
+      this._lastClaudeModel = this.MODEL_OPTIONS.includes(s.model as any) ? s.model : 'sonnet';
+      this._lastCodexModel = this.MODEL_OPTIONS.includes(s.model as any) ? '' : (s.model || '');
+      this._lastCodexEffort = s.effort || 'medium';
+      this.model.set(this._lastCodexModel);
+      this.settings.save({ model: this._lastCodexModel });
+    } else {
+      this._lastClaudeModel = this.MODEL_OPTIONS.includes(s.model as any) ? s.model : 'sonnet';
+      this._lastClaudeEffort = s.effort || 'medium';
+      this.model.set(this._lastClaudeModel);
     }
     // T11 — 初始化第一個 tab
     const firstTab = this.makeTab('新對話');
@@ -4068,10 +4112,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   selectModel(modelId: string) {
+    if (!this.activeModelPickerOptions().some(option => option.id === modelId)) return;
+    if (this.effectiveEngine() === 'codex') this._lastCodexModel = modelId;
+    else this._lastClaudeModel = modelId;
     this.model.set(modelId as any);
     this.settings.save({ model: modelId });
+    this.syncEffortToCurrentModel();
     this.modelPickerOpen.set(false);
-    const label = this.MODEL_LABELS[modelId] ?? modelId;
+    const label = this.activeModelPickerOptions().find(option => option.id === modelId)?.label ?? modelId;
     this.messages.update(m => [...m, { role: 'system', text: `🤖 已切換模型：${label}` }]);
   }
 
@@ -4232,15 +4280,52 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // 頻繁，不在前端寫死清單——GET /api/codex/models 即時問已安裝的 Codex
   // CLI 自己支援哪些模型（`codex debug models --bundled`，後端快取
   // 1 小時），App 啟動時抓一次即可。
-  codexModels = signal<{ slug: string; display_name: string; description: string }[]>([]);
+  codexModels = signal<{
+    slug: string;
+    display_name: string;
+    description: string;
+    default_reasoning_level?: string;
+    supported_reasoning_levels?: { effort: string; description: string }[];
+  }[]>([]);
+  codexModelsLoading = signal(false);
+  codexModelsError = signal<string | null>(null);
   loadCodexModels() {
+    this.codexModelsLoading.set(true);
+    this.codexModelsError.set(null);
     this.claude.getCodexModels().subscribe({
       // 防禦一下回應形狀——activeCodexModelOptions() 會直接 .map() 這個
       // 值，不是陣列的話會整個 computed 拋例外、把畫面弄壞，不只是「清單
       // 是空的」那種無害退化。
-      next: models => this.codexModels.set(Array.isArray(models) ? models : []),
-      error: () => {},   // 拿不到就維持空陣列，cycleModel() 對 Codex 會保持不可切換、顯示「使用預設」
+      next: models => {
+        const available = Array.isArray(models) ? models : [];
+        this.codexModels.set(available);
+        this.codexModelsLoading.set(false);
+        // A model can disappear after a Codex CLI upgrade. Fall back to the
+        // CLI default instead of sending a stale slug that will fail at runtime.
+        if (this.effectiveEngine() === 'codex' && this.model() && !available.some(m => m.slug === this.model())) {
+          this.model.set('');
+          this.settings.save({ model: '' });
+        }
+        this.syncEffortToCurrentModel();
+      },
+      error: err => {
+        this.codexModelsLoading.set(false);
+        this.codexModelsError.set(err?.error?.error || '無法讀取目前 Codex CLI 的模型清單');
+      },
     });
+  }
+
+  private syncEffortToCurrentModel() {
+    if (this.effectiveEngine() !== 'codex') return;
+    const options = this.activeEffortOptions();
+    if (options.includes(this.effort())) return;
+    const selected = this.codexModels().find(m => m.slug === this.model());
+    const preferred = selected?.default_reasoning_level as ReasoningEffort | undefined;
+    const next = preferred && options.includes(preferred) ? preferred : options[0];
+    if (!next) return;
+    this.effort.set(next);
+    this._lastCodexEffort = next;
+    this.settings.save({ effort: next });
   }
 
   // ── 引擎 runtime 狀態分層 ──────────────────────────────────────────────
@@ -4313,6 +4398,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   });
 
   private _lastClaudeModel = 'sonnet';
+  private _lastCodexModel = '';
+  private _lastClaudeEffort: ReasoningEffort = 'medium';
+  private _lastCodexEffort: ReasoningEffort = 'medium';
 
   private setAgentEngine(next: 'claude' | 'codex') {
     if (this.agentEngine() === next) return;
@@ -4328,18 +4416,30 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.permissionMode.set(v);
       this.settings.save({ permissionMode: v });
     }
+    if (next === 'codex') {
+      if (this.EFFORT_OPTIONS_CLAUDE.includes(this.effort() as any)) {
+        this._lastClaudeEffort = this.effort();
+      }
+      this.effort.set(this._lastCodexEffort);
+    } else {
+      this._lastCodexEffort = this.effort();
+      this.effort.set(this._lastClaudeEffort);
+    }
+    this.settings.save({ effort: this.effort() });
     // 模型同理：Codex 沒有 Claude 那幾個別名，切到 Codex 時記住目前選的
     // Claude 模型（切回來時還原），送出的 model 值改成空字串，讓 Codex
     // CLI 用自己的預設，不會誤把 "sonnet"/"opus" 這種 Claude 專屬字串
     // 原封不動傳給 codex --model（會直接被 CLI 判定成不存在的模型）。
     if (next === 'codex') {
-      this._lastClaudeModel = this.model();
-      this.model.set('');
-      this.settings.save({ model: '' });
+      if (this.MODEL_OPTIONS.includes(this.model() as any)) this._lastClaudeModel = this.model();
+      this.model.set(this._lastCodexModel);
+      this.settings.save({ model: this._lastCodexModel });
     } else {
+      this._lastCodexModel = this.model();
       this.model.set(this._lastClaudeModel);
       this.settings.save({ model: this._lastClaudeModel });
     }
+    this.syncEffortToCurrentModel();
   }
 
   toggleAgentEngine() {

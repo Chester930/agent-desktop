@@ -70,9 +70,24 @@ async def fetch_codex_models(codex_bin: str, timeout: float = 15.0) -> list[dict
         slug = m.get("slug")
         if not slug:
             continue
-        result.append({
+        item = {
             "slug": slug,
             "display_name": m.get("display_name") or slug,
             "description": m.get("description") or "",
-        })
+        }
+        # Reasoning levels are model-specific. Preserve the CLI catalog's
+        # metadata so the UI never offers an effort the selected model rejects.
+        if m.get("default_reasoning_level"):
+            item["default_reasoning_level"] = m["default_reasoning_level"]
+        levels = m.get("supported_reasoning_levels")
+        if isinstance(levels, list):
+            item["supported_reasoning_levels"] = [
+                {
+                    "effort": level.get("effort"),
+                    "description": level.get("description") or "",
+                }
+                for level in levels
+                if isinstance(level, dict) and level.get("effort")
+            ]
+        result.append(item)
     return result

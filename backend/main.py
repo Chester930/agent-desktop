@@ -358,7 +358,11 @@ async def _run_automation_prompt(prompt: str, *, preferred_engine: str = "", tim
         "on_process": None,
     }
     if engine.name == "codex":
-        run_kwargs.update({"attachments": None, "bin_override": ""})
+        run_kwargs.update({
+            "attachments": None,
+            "bin_override": "",
+            "effort": str(cfg.get("effort", "") or ""),
+        })
     result = await asyncio.wait_for(engine.run_turn(**run_kwargs), timeout=timeout)
     if result.error:
         raise RuntimeError(result.error)
@@ -859,6 +863,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             result = await engine.run_turn(
                 prompt=full_message, cwd=cwd,
                 model=(model if model and model not in ("sonnet", "") else None),
+                effort=effort,
                 permission_mode=permission_mode,
                 resume_session_id=_active_session_for_engine(client_id, engine.name), api_key=engine_api_key,
                 on_text=_on_text, on_process=_on_process, attachments=attachments,
@@ -1187,6 +1192,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 result = await engine.run_turn(
                     prompt=fp, cwd=cwd,
                     model=(model if model and model not in ("sonnet", "") else None),
+                    effort=effort,
                     permission_mode=permission_mode,
                     resume_session_id=resume_sid, api_key=engine_api_key,
                     on_text=_on_text, on_process=_on_process, attachments=attachments,
@@ -1712,6 +1718,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                 result = await engine.run_turn(
                     prompt=prompt, cwd=project_path,
                     model=(model if model and model not in ("sonnet", "") else None),
+                    effort=effort,
                     permission_mode=permission_mode,
                     resume_session_id=resume_sid, api_key=engine_api_key,
                     on_text=_on_text, on_process=_on_process,

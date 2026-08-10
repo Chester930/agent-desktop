@@ -60,6 +60,7 @@ MAX_NEGOTIATION_ROUNDS = 2
 # Step D 每個成員最多 2 輪、每輪 2 次呼叫的協商迴圈（雖然跨成員平行跑，但
 # 單一成員的協商迴圈仍是序列的），給比一般 team run 更寬裕的時限。
 PLAN_TEAM_TIMEOUT = 600
+_VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
 
 
 def _dirs():
@@ -84,7 +85,9 @@ def _list_agents(AGENTS_DIR: Path) -> list[dict]:
     return agents_list
 
 
-async def _run_dispatcher_prompt(prompt: str, engine_name: str = "") -> tuple[str, str | None]:
+async def _run_dispatcher_prompt(
+    prompt: str, engine_name: str = "", effort: str = ""
+) -> tuple[str, str | None]:
     """通用（不綁定特定 agent persona）的一次文字補全——跟
     routes/agents.py::_run_hr_agent 用的是同一套 engine 解析／API key 邏輯
     （沒有共用函式可抽，那邊也是就地寫的，這裡照抄同一個模式維持一致）。
@@ -120,12 +123,16 @@ async def _run_dispatcher_prompt(prompt: str, engine_name: str = "") -> tuple[st
     async def _noop_on_text(chunk: str) -> None:
         pass
 
+    engine_kwargs = dict(
+        prompt=prompt, cwd=str(Path.home()), model="", permission_mode="",
+        resume_session_id=None, api_key=engine_api_key, on_text=_noop_on_text,
+    )
+    if engine.name == "codex":
+        engine_kwargs["effort"] = effort
+
     try:
         result = await asyncio.wait_for(
-            engine.run_turn(
-                prompt=prompt, cwd=str(Path.home()), model="", permission_mode="",
-                resume_session_id=None, api_key=engine_api_key, on_text=_noop_on_text,
-            ),
+            engine.run_turn(**engine_kwargs),
             timeout=90,
         )
     except asyncio.TimeoutError:
@@ -223,6 +230,7 @@ async def _execute_plan_team_run(run_id: str, task: str, model: str, cwd: str,
     from message_bus import global_bus
     TEAMS_DIR, AGENTS_DIR = _dirs()
     run = _team_runs[run_id]
+    effort = run.get("effort", "medium")
 
     agents_list = _list_agents(AGENTS_DIR)
     if not agents_list:
@@ -243,7 +251,7 @@ async def _execute_plan_team_run(run_id: str, task: str, model: str, cwd: str,
         "內容應包含：目標、需要完成的主要工作項目、可能的技術/流程考量。"
         "只輸出計畫文件本身，不要加開場白或結語。"
     )
-    plan_doc, err = await _run_dispatcher_prompt(plan_prompt, engine_name)
+    plan_doc, err = await _run_dispatcher_prompt(plan_prompt, engine_name, effort)
     if err:
         run["status"] = "error"
         run["_finished_at"] = time.time()
@@ -264,7 +272,7 @@ async def _execute_plan_team_run(run_id: str, task: str, model: str, cwd: str,
         "只輸出一個純 JSON 物件：{\"leader\": \"agent id\", \"reason\": \"挑選理由\"}，"
         "不要包含 markdown 標記或其他文字。"
     )
-    leader_raw, err = await _run_dispatcher_prompt(leader_prompt, engine_name)
+    leader_raw, err = await _run_dispatcher_prompt(leader_prompt, engine_name, effort)
     if err:
         run["status"] = "error"
         run["_finished_at"] = time.time()
@@ -432,6 +440,9 @@ async def handle_plan_team_post(request: web.Request) -> web.Response:
     model = data.get("model", "")
     engine_name = data.get("engine", "")
     permission_mode = data.get("permission_mode", "acceptEdits")
+    effort = data.get("effort", "medium")
+    if effort not in _VALID_REASONING_EFFORTS:
+        return web.json_response({"error": "invalid effort"}, status=400)
     # 健檢：Step A/B（_run_dispatcher_prompt）用 engine_name；Step C/D（真的
     # 走 agent persona 的 _agent_run_capture）原本各自獨立收 agent_engine，
     # 沒指定時會落到 resolve_engine_name_gated() 的 DEFAULT_ENGINE_NAME
@@ -447,6 +458,7 @@ async def handle_plan_team_post(request: web.Request) -> web.Response:
         "status": "running", "steps": [], "summary": "",
         "leader": "", "reused_team_id": "", "team_id": "",
         "plan_doc": "", "members": [], "project_path": "",
+        "permission_mode": permission_mode, "effort": effort,
     }
     _team_events[run_id] = []
     _team_queues[run_id] = []

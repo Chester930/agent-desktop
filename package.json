@@ -1,40 +1,39 @@
 {
   "name": "agent-desktop",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Agent Desktop - 可切換 Claude Code／Codex CLI 的多引擎 Agent 協作平台",
   "main": "electron/main.js",
   "scripts": {
-    "start":           "electron . --dev",
-    "frontend:build":  "cd frontend && npx ng build --base-href ./",
-
-    "backend:compile:win":   "cd backend && python -m pip install -r requirements-build.txt && python -m PyInstaller --noconfirm --name claude-backend --add-data \"presets;presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && (if exist claude-backend rmdir /s /q claude-backend) && xcopy /E /I /Y dist\\claude-backend claude-backend",
-    "backend:compile:mac":   "cd backend && python3 -m pip install -r requirements.txt -r requirements-build.txt && pyinstaller --noconfirm --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
+    "start": "electron . --dev",
+    "frontend:build": "cd frontend && npx ng build --base-href ./",
+    "backend:compile:win": "cd backend && python -m pip install -r requirements-build.txt && python -m PyInstaller --noconfirm --name claude-backend --add-data \"presets;presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && (if exist claude-backend rmdir /s /q claude-backend) && xcopy /E /I /Y dist\\claude-backend claude-backend",
+    "backend:compile:mac": "cd backend && python3 -m pip install -r requirements.txt -r requirements-build.txt && pyinstaller --noconfirm --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
     "backend:compile:linux": "cd backend && grep -v '^nvidia-' requirements.txt > /tmp/agent-desktop-package-requirements.txt && python3 -m pip install -r /tmp/agent-desktop-package-requirements.txt -r requirements-build.txt && pyinstaller --noconfirm --onefile --name claude-backend --add-data \"presets:presets\" --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import aiohttp.web_middlewares --hidden-import aiohttp.web_urldispatcher --hidden-import multipart --hidden-import sqlite3 --hidden-import croniter --hidden-import faster_whisper --hidden-import opencc --collect-all aiohttp --collect-all aiohttp_cors --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all opencc --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module tensorflow --exclude-module paddle main.py && cp dist/claude-backend claude-backend",
-
-    "dist:win":   "npm run frontend:build && npm run backend:compile:win   && electron-builder --win",
-    "dist:mac":   "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac",
-    "dist:mac:x64":   "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac --x64",
+    "dist:win": "npm run frontend:build && npm run backend:compile:win   && electron-builder --win",
+    "dist:mac": "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac",
+    "dist:mac:x64": "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac --x64",
     "dist:mac:arm64": "npm run frontend:build && npm run backend:compile:mac   && electron-builder --mac --arm64",
     "dist:linux": "npm run frontend:build && npm run backend:compile:linux && electron-builder --linux --x64",
-    "dist":       "npm run dist:win",
-
-    "build:win":   "npm run frontend:build && electron-builder --win   --dir",
-    "build:mac":   "npm run frontend:build && electron-builder --mac   --dir",
+    "dist": "npm run dist:win",
+    "build:win": "npm run frontend:build && electron-builder --win   --dir",
+    "build:mac": "npm run frontend:build && electron-builder --mac   --dir",
     "build:linux": "npm run frontend:build && electron-builder --linux --dir",
-    "build":       "npm run build:win"
+    "build": "npm run build:win"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "electron":         "^42.4.1",
+    "electron": "^42.4.1",
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId":       "com.agentdesktop.app",
+    "appId": "com.agentdesktop.app",
     "productName": "Agent 桌面版",
     "artifactName": "Agent-Desktop-Setup-${version}.${ext}",
-    "directories": { "output": "dist-electron" },
+    "directories": {
+      "output": "dist-electron"
+    },
     "asar": false,
     "files": [
       "electron/**/*",
@@ -45,32 +44,52 @@
     ],
     "win": {
       "icon": "electron/icon.ico",
-      "target": [{ "target": "nsis", "arch": ["x64"] }]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "nsis": {
-      "oneClick":               true,
-      "createDesktopShortcut":  true,
+      "oneClick": true,
+      "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName":           "Agent 桌面版"
+      "shortcutName": "Agent 桌面版"
     },
     "mac": {
       "icon": "electron/icon.icns",
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "linux": {
       "icon": "electron/icon.png",
       "category": "Development",
       "maintainer": "Chester930 <Chester930@users.noreply.github.com>",
       "target": [
-        { "target": "AppImage", "arch": ["x64"] },
-        { "target": "deb",      "arch": ["x64"] }
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "publish": {
       "provider": "github",
-      "owner":    "Chester930",
-      "repo":     "agent-desktop"
+      "owner": "Chester930",
+      "repo": "agent-desktop"
     }
   }
 }

@@ -387,10 +387,11 @@ export class ClaudeService {
     return this.http.delete<{ ok: boolean }>(`${this.api}/teams/${id}`);
   }
 
-  runTeam(teamId: string, task: string, model?: string, cwd?: string, team?: any, agentEngine?: string): Observable<{ ok: boolean; run_id: string }> {
+  runTeam(teamId: string, task: string, model?: string, cwd?: string, team?: any, agentEngine?: string, effort?: string): Observable<{ ok: boolean; run_id: string }> {
     return this.http.post<{ ok: boolean; run_id: string }>(`${this.api}/team/run`, {
       team_id: teamId, task, model: model ?? '', cwd: cwd ?? '', team,
       agent_engine: agentEngine ?? '',
+      effort: effort ?? 'medium',
     });
   }
 
@@ -398,9 +399,10 @@ export class ClaudeService {
   // Leader 決定組隊 → Leader 逐一跟成員協商 Task），要用
   // planTeam() 起頭拿 run_id，再用 streamPlanTeam()/getPlanTeam() 追蹤進度
   // 跟拿最終結果，跟現有 runTeam()/streamTeamRun() 是同一套模式。
-  planTeam(task: string, cwd?: string, model?: string, engine?: string): Observable<{ ok: boolean; run_id: string }> {
+  planTeam(task: string, cwd?: string, model?: string, engine?: string, effort?: string): Observable<{ ok: boolean; run_id: string }> {
     return this.http.post<{ ok: boolean; run_id: string }>(`${this.api}/hr/plan-team`, {
       task, cwd: cwd ?? '', model: model ?? '', engine: engine ?? '',
+      effort: effort ?? 'medium',
     });
   }
 
@@ -559,8 +561,20 @@ export class ClaudeService {
   // 即時查詢已安裝 Codex CLI 支援哪些模型（`codex debug models --bundled`，
   // 後端快取 1 小時）——Codex 沒有像 Claude opus/sonnet/haiku 那種穩定分級
   // 別名，版本號改版頻繁，前端不寫死清單，永遠問已安裝的 CLI 自己。
-  getCodexModels(): Observable<{ slug: string; display_name: string; description: string }[]> {
-    return this.http.get<{ slug: string; display_name: string; description: string }[]>(`${this.api}/codex/models`);
+  getCodexModels(): Observable<{
+    slug: string;
+    display_name: string;
+    description: string;
+    default_reasoning_level?: string;
+    supported_reasoning_levels?: { effort: string; description: string }[];
+  }[]> {
+    return this.http.get<{
+      slug: string;
+      display_name: string;
+      description: string;
+      default_reasoning_level?: string;
+      supported_reasoning_levels?: { effort: string; description: string }[];
+    }[]>(`${this.api}/codex/models`);
   }
 
   deleteSession(id: string): Observable<any> {

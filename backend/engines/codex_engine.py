@@ -84,6 +84,7 @@ name = "codex"
 
 DEFAULT_PERMISSION_MODE = "workspace-write"
 VALID_PERMISSION_MODES = frozenset({"read-only", "workspace-write", "danger-full-access"})
+VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
 
 
 def _codex_bin(bin_override: str = "") -> str:
@@ -104,6 +105,11 @@ def _normalize_sandbox_mode(permission_mode: str) -> str:
     if permission_mode in VALID_PERMISSION_MODES:
         return permission_mode
     return DEFAULT_PERMISSION_MODE
+
+
+def _normalize_reasoning_effort(effort: str) -> str:
+    """Return a Codex config value or empty string for the CLI default."""
+    return effort if effort in VALID_REASONING_EFFORTS else ""
 
 
 # 前端附件選擇器（frontend/src/app/app.html 的 <input accept=...>）只允許
@@ -194,6 +200,7 @@ async def run_turn(
     on_text,
     on_process=None,
     is_cancelled=None,
+    effort: str = "",
     attachments: "list[str] | None" = None,
     bin_override: str = "",   # 新增，預設空字串＝沿用原本 _codex_bin() 行為，
                               # Team Run／HR 派發的既有呼叫端不用改一行。
@@ -202,6 +209,7 @@ async def run_turn(
     codex_bin = _codex_bin(bin_override)
     safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
     sandbox_mode = _normalize_sandbox_mode(permission_mode)
+    reasoning_effort = _normalize_reasoning_effort(effort)
     image_attachments, text_attachments = _split_attachments(attachments)
     prompt = _inject_text_attachments(prompt, text_attachments)
 
@@ -220,8 +228,14 @@ async def run_turn(
     # 讀取指示」）。這樣完全不經過 cmd.exe 的命令列 tokenize，多行/特殊字元
     # 都不是問題。單行 prompt（例如這次驗證用的簡短測試句）不會踩到這個
     # bug，但 stdin 是對所有情況都安全的做法，統一都走這條路。
+    cmd = [codex_bin]
+    if reasoning_effort:
+        # Codex exposes reasoning as a config key rather than an --effort flag.
+        # Put it before the subcommand so both exec and exec resume accept it.
+        cmd += ["-c", f'model_reasoning_effort="{reasoning_effort}"']
+
     if resume_session_id:
-        cmd = [codex_bin, "exec", "resume", resume_session_id, "-", "--json", "--skip-git-repo-check"]
+        cmd += ["exec", "resume", resume_session_id, "-", "--json", "--skip-git-repo-check"]
         if model:
             cmd += ["--model", model]
     else:
@@ -229,7 +243,7 @@ async def run_turn(
         # 安靜結束、不產生任何 item.completed 事件（output/session_id 都是
         # 空字串，不會丟例外，很容易誤判成「執行成功但沒反應」）。Team Run
         # 的 cwd 不保證是 git repo，所以無條件加這個 flag。
-        cmd = [codex_bin, "exec", "-", "--json", "--sandbox", sandbox_mode, "--cd", safe_cwd, "--skip-git-repo-check"]
+        cmd += ["exec", "-", "--json", "--sandbox", sandbox_mode, "--cd", safe_cwd, "--skip-git-repo-check"]
         if model:
             cmd += ["--model", model]
 

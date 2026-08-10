@@ -41,7 +41,7 @@ ENV LD_LIBRARY_PATH="/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/
 # actually booted (ModuleNotFoundError on the first `python main.py`).
 # mcp_sync.py 和 engines/ package（可插拔 Claude/Codex 引擎）是後來加的，
 # 同樣的理由要一起 COPY，不然這個 image 一樣開機就死。
-COPY main.py database.py helpers.py session_pool.py memory_agent.py message_bus.py agency_agents_importer.py mcp_sync.py codex_usage.py resource_sync.py stt.py dir_cache.py ./
+COPY main.py database.py helpers.py session_pool.py memory_agent.py message_bus.py agency_agents_importer.py mcp_sync.py codex_models.py codex_usage.py resource_sync.py stt.py dir_cache.py ./
 COPY docker-entrypoint.sh ./
 COPY routes/ ./routes/
 COPY engines/ ./engines/

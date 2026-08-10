@@ -96,6 +96,12 @@ _team_queues: dict[str, list] = {}
 # 燒 API 額度。改成每個 run_id 對應一個 process 集合。
 _team_run_processes: dict[str, set] = {}
 
+# Claude Code and Codex share the same user-facing effort vocabulary for the
+# current integration. Codex may expose a smaller model-specific subset; the
+# selected model metadata is enforced by the frontend, while this API check
+# rejects malformed values before a run is queued.
+_VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
+
 
 def _register_team_proc(run_id: str, proc) -> None:
     _team_run_processes.setdefault(run_id, set()).add(proc)
@@ -275,19 +281,26 @@ async def _agent_run_capture(
         else ""
     )
 
+    run_effort = _team_runs.get(run_id, {}).get("effort", "")
+    engine_kwargs = dict(
+        prompt=full_prompt,
+        cwd=cwd,
+        model=model,
+        permission_mode=permission_mode,
+        resume_session_id=None,
+        api_key=engine_api_key,
+        on_text=_on_text,
+        on_process=_on_process,
+        is_cancelled=_is_cancelled,
+        on_tool_event=_on_tool_event,
+    )
+    # The shared engine interface intentionally stays compatible with Claude;
+    # effort is a Codex-specific run option in this project.
+    if engine.name == "codex":
+        engine_kwargs["effort"] = run_effort
+
     try:
-        result = await engine.run_turn(
-            prompt=full_prompt,
-            cwd=cwd,
-            model=model,
-            permission_mode=permission_mode,
-            resume_session_id=None,
-            api_key=engine_api_key,
-            on_text=_on_text,
-            on_process=_on_process,
-            is_cancelled=_is_cancelled,
-            on_tool_event=_on_tool_event,
-        )
+        result = await engine.run_turn(**engine_kwargs)
     finally:
         if "proc" in proc_holder:
             _unregister_team_proc(run_id, proc_holder["proc"])
@@ -871,6 +884,9 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
     permission_mode = data.get("permission_mode", "acceptEdits")
     if permission_mode not in _VALID_PERMISSION_MODES:
         return web.json_response({"error": "invalid permission_mode"}, status=400)
+    effort = data.get("effort", "medium")
+    if effort not in _VALID_REASONING_EFFORTS:
+        return web.json_response({"error": "invalid effort"}, status=400)
     agent_engine = data.get("agent_engine", "")
     if agent_engine and agent_engine not in _ENGINES:
         return web.json_response({"error": "invalid agent_engine"}, status=400)
@@ -915,6 +931,7 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         # Write/Edit/Bash 等操作，而不是被 headless -p 模式無條件自動拒絕。
         # 見 _agent_run_capture 內的說明。
         "permission_mode": permission_mode,
+        "effort": effort,
         # 可插拔 agent engine 的 run 層級預設值（空字串代表沒指定，個別 agent
         # frontmatter 的 engine: 宣告優先於這個值）。見 engines/registry.py。
         "agent_engine": agent_engine,

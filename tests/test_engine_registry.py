@@ -227,6 +227,26 @@ async def test_codex_engine_extracts_text_and_thread_id(monkeypatch):
     assert "reasoning" not in result.output
 
 
+async def test_codex_engine_sets_model_reasoning_effort_before_exec(monkeypatch):
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc([])
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="hi", cwd="/tmp", model="gpt-5.6-sol", permission_mode="workspace-write",
+        resume_session_id=None, api_key="", on_text=lambda c: None, effort="ultra",
+    )
+
+    cmd = list(captured["args"])
+    config_index = cmd.index("-c")
+    assert cmd[config_index + 1] == 'model_reasoning_effort="ultra"'
+    assert cmd.index("exec") > config_index
+
+
 async def test_codex_engine_turn_failed_becomes_error(monkeypatch):
     lines = [
         b'{"type":"thread.started","thread_id":"sid-x"}\n',

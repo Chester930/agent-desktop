@@ -3,6 +3,7 @@ import json
 import pytest
 
 import codex_models
+from engines import codex_engine
 
 
 class _FakeProcess:
@@ -20,6 +21,12 @@ class _FakeProcess:
 
 def _catalog(*models):
     return json.dumps({"models": list(models)}).encode("utf-8")
+
+
+def test_codex_reasoning_effort_accepts_supported_values_only():
+    assert codex_engine._normalize_reasoning_effort("high") == "high"
+    assert codex_engine._normalize_reasoning_effort("ultra") == "ultra"
+    assert codex_engine._normalize_reasoning_effort("max-not-supported") == ""
 
 
 @pytest.mark.asyncio
@@ -56,6 +63,30 @@ async def test_fetch_codex_models_falls_back_to_slug_when_display_name_missing(m
     result = await codex_models.fetch_codex_models("codex", timeout=1)
 
     assert result == [{"slug": "gpt-5.4", "display_name": "gpt-5.4", "description": ""}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_codex_models_preserves_reasoning_levels(monkeypatch):
+    stdout = _catalog({
+        "slug": "gpt-5.6-sol",
+        "visibility": "list",
+        "default_reasoning_level": "low",
+        "supported_reasoning_levels": [
+            {"effort": "low", "description": "Fast."},
+            {"effort": "ultra", "description": "Maximum."},
+        ],
+    })
+    proc = _FakeProcess(stdout)
+
+    async def fake_spawn(*args, **kwargs):
+        return proc
+
+    monkeypatch.setattr(codex_models.asyncio, "create_subprocess_exec", fake_spawn)
+
+    result = await codex_models.fetch_codex_models("codex", timeout=1)
+
+    assert result[0]["default_reasoning_level"] == "low"
+    assert [level["effort"] for level in result[0]["supported_reasoning_levels"]] == ["low", "ultra"]
 
 
 @pytest.mark.asyncio

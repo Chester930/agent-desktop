@@ -69,7 +69,8 @@
           }
         </div>
       </div>
-      @if (engineStatus()[name] && (engineStatus()[name].reason === 'not_installed' || engineStatus()[name].reason === 'not_logged_in')) {
+      @if (engineStatus()[name] && (engineStatus()[name].reason === 'not_installed' || engineStatus()[name].reason ===
+      'not_logged_in')) {
       @if (name === 'claude') {
       <div class="ob-code-block">npm install -g &#64;anthropic-ai/claude-code</div>
       <div class="ob-code-block" style="margin-top:6px">claude login</div>
@@ -1227,7 +1228,8 @@
         @if (isStreaming()) {
         <button class="stop-btn" (click)="stopStreaming()" title="停止">■</button>
         } @else {
-        <button class="send-btn" (click)="send()" [disabled]="sendDisabled()" [title]="chatRuntimeBlocked() ? chatRuntimeNotice() : '送出'">↑</button>
+        <button class="send-btn" (click)="send()" [disabled]="sendDisabled()"
+          [title]="chatRuntimeBlocked() ? chatRuntimeNotice() : '送出'">↑</button>
         }
       </div>
       @if (chatRuntimeNotice(); as notice) {
@@ -1242,8 +1244,7 @@
         <div class="statusbar-left">
           <button class="sb-btn engine-btn" [class.locked]="engineMode() !== 'both'"
             [class.warn]="engineRuntimeView(effectiveEngine()).tone === 'warn'"
-            [class.error]="engineRuntimeView(effectiveEngine()).tone === 'error'"
-            (click)="toggleAgentEngine()"
+            [class.error]="engineRuntimeView(effectiveEngine()).tone === 'error'" (click)="toggleAgentEngine()"
             [title]="engineRuntimeView(effectiveEngine()).detail">
             {{ effectiveEngine() === 'claude' ? '🅲 Claude' : '🅧 Codex' }}
           </button>
@@ -1262,8 +1263,7 @@
             {{ isTranscribing() ? '...' : '🎙️' }}
           </button>
           @if (!activeChat?.teamId) {
-          <button class="sb-btn project-btn" (click)="dispatchDeepTeam()"
-            [disabled]="projectDisabled()"
+          <button class="sb-btn project-btn" (click)="dispatchDeepTeam()" [disabled]="projectDisabled()"
             [title]="runtimeActionBlocked(false) ? runtimeActionNotice(false) : '🤝 Project：與 Agent CLI 討論計畫、挑選 Leader、Leader 與每位成員協商 Task 後再組隊'">
             {{ deepPlanLoading() ? ('🤝 ' + (deepPlanPhaseLabel() || '規劃中…')) : '🤝 Project' }}
           </button>
@@ -1276,16 +1276,14 @@
           </span>
           }
           <button class="sb-btn" [class.locked]="effectiveEngine() === 'codex' && activeCodexModelOptions().length <= 1"
-            (click)="cycleModel()"
-            [title]="effectiveEngine() === 'codex' ? '模型：' + activeModelLabel() + '（點擊切換，清單即時查詢已安裝的 Codex CLI）' : '模型：' + model() + '（點擊切換 · /model 指令）'">
+            (click)="modelPickerOpen.set(true)"
+            [title]="'模型：' + activeModelLabel() + '（開啟模型選擇器）'">
             {{ activeModelLabel() }}
           </button>
-          @if (effectiveEngine() !== 'codex') {
-          <button class="sb-btn" (click)="cycleEffort()"
-            [title]="'思考深度：' + effort() + '（點擊切換 low→medium→high→xhigh→max）'">
-            {{ effort() }}
+          <button class="sb-btn effort-btn" (click)="cycleEffort()"
+            [title]="'思考等級：' + activeEffortLabel() + '（點擊切換目前模型支援的等級）'">
+            {{ activeEffortLabel() }}
           </button>
-          }
           <span class="status-dot" [class.online]="!backendDown() && !outOfQuota()"
             [title]="backendDown() ? '已斷開後端連線' : outOfQuota() ? '已達用量限制' : '後端連線正常，可用量充足'"></span>
           <div class="input-help-wrap">
@@ -1311,18 +1309,22 @@
               <div class="ihp-item"><b>⚠ Full Access</b> — 完全沒有沙盒限制，Windows 上要跑 Shell 指令目前只能選這個，使用上要謹慎</div>
 
               <div class="ihp-title">模型（Claude）</div>
-              <div class="ihp-item"><b>Sonnet 4.6</b> — 預設，速度與能力均衡，多數任務適用</div>
-              <div class="ihp-item"><b>Opus 4.8</b> — 能力最強，適合複雜任務，速度較慢</div>
-              <div class="ihp-item"><b>Haiku 4.5</b> — 速度最快，適合簡單或大量任務</div>
-              <div class="ihp-item"><b>Fable 5</b> — 特殊用途模型</div>
+              <div class="ihp-item"><b>Default</b> — 讓 Claude Code 自動套用目前推薦的 Sonnet 5</div>
+              <div class="ihp-item"><b>Sonnet 5</b> — 日常任務的效率與能力平衡</div>
+              <div class="ihp-item"><b>Fable 5</b> — 最強能力，適合最複雜、最長時間的任務；需要 usage credits</div>
+              <div class="ihp-item"><b>Opus 5</b> — 適合日常與複雜任務；約使用 Sonnet 的 2 倍額度</div>
+              <div class="ihp-item"><b>Haiku 4.5</b> — 最快速，適合快速回答</div>
+              <div class="ihp-item">Claude Code 的互動式模型選單會隨帳號與版本變化；Default 會使用目前推薦模型。</div>
 
               <div class="ihp-title">模型（Codex）</div>
               <div class="ihp-item">點擊切換——清單即時查詢已安裝的 Codex CLI（<code>codex debug models</code>），不是寫死在這個 App 裡的，永遠跟你本機的
                 Codex 版本一致。第一個選項是「使用預設」，讓 Codex CLI 自己決定目前建議的模型</div>
 
-              <div class="ihp-title">思考深度</div>
-              <div class="ihp-item"><b>low → medium → high → xhigh → max</b> — 由快速回應到最深入思考，愈往後回應愈慢、思考愈周全，medium 為預設值。僅
-                Claude 支援，Codex 沒有對應參數，切到 Codex 時會隱藏</div>
+              <div class="ihp-title">思考等級（Claude Code）</div>
+              <div class="ihp-item"><b>Low → Medium → High → Extra high → More reasoning</b> — 由快速回應到更深入推理；Medium 為預設。</div>
+
+              <div class="ihp-title">思考等級（Codex）</div>
+              <div class="ihp-item"><b>Low → Medium → High → Extra high → More reasoning → Ultra</b> — 會依目前選取的 Codex 模型動態縮減；不是每個模型都支援 Max 或 Ultra。等級越高通常消耗越多 usage limits。</div>
 
               <div class="ihp-title">其他按鈕</div>
               <div class="ihp-item">➕ <b>附件</b> — 上傳圖片／文字／程式碼檔案給模型參考</div>
@@ -1523,10 +1525,16 @@
 <div class="modal-backdrop" (click)="modelPickerOpen.set(false)">
   <div class="model-picker-modal" (click)="$event.stopPropagation()">
     <div class="modal-header">
-      <span>🤖 切換模型</span>
+      <span>🤖 切換模型 · {{ effectiveEngine() === 'codex' ? 'Codex' : 'Claude Code' }}</span>
       <button class="icon-btn" (click)="modelPickerOpen.set(false)">✕</button>
     </div>
-    @for (m of MODEL_PICKER_OPTIONS; track m.id) {
+    @if (effectiveEngine() === 'codex' && codexModelsLoading()) {
+    <div class="model-picker-status">正在讀取目前安裝的 Codex CLI 模型清單…</div>
+    }
+    @if (effectiveEngine() === 'codex' && codexModelsError(); as error) {
+    <div class="model-picker-status error">{{ error }}<br><small>仍可使用 Codex 預設模型。</small></div>
+    }
+    @for (m of activeModelPickerOptions(); track m.id) {
     <button class="model-option" [class.active]="model() === m.id" (click)="selectModel(m.id)">
       <div class="model-option-name">{{ m.label }}</div>
       <div class="model-option-desc">{{ m.desc }}</div>
