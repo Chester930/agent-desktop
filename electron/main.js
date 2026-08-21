@@ -43,31 +43,40 @@ const bundledExe      = process.platform === 'win32'
 const bundledFrontend = path.join(__dirname, '..', 'frontend', 'dist', 'frontend', 'browser', 'index.html');
 
 // ── 偵測 Claude Code / Codex 是否已安裝 ───────────────────
-function detectClaude() {
-  // Windows: 優先找 .cmd 包裝器（npm global 安裝方式）
-  const bins = process.platform === 'win32'
-    ? ['claude.cmd', 'claude']
-    : ['claude'];
-  for (const b of bins) {
+function checkBinary(binName) {
+  if (process.platform === 'win32') {
+    const candidates = [binName, `${binName}.cmd`, `${binName}.exe`];
+    for (const b of candidates) {
+      try {
+        execFileSync('cmd.exe', ['/d', '/s', '/c', b, '--version'], {
+          stdio: 'pipe',
+          windowsHide: true,
+          shell: false,
+          timeout: 5000,
+        });
+        return b;
+      } catch {}
+    }
+  } else {
     try {
-      execFileSync(b, ['--version'], { stdio: 'pipe', windowsHide: true, shell: false, timeout: 5000 });
-      return b;
+      execFileSync(binName, ['--version'], {
+        stdio: 'pipe',
+        windowsHide: true,
+        shell: false,
+        timeout: 5000,
+      });
+      return binName;
     } catch {}
   }
   return null;
 }
 
+function detectClaude() {
+  return checkBinary('claude');
+}
+
 function detectCodex() {
-  const bins = process.platform === 'win32'
-    ? ['codex.cmd', 'codex']
-    : ['codex'];
-  for (const b of bins) {
-    try {
-      execFileSync(b, ['--version'], { stdio: 'pipe', windowsHide: true, shell: false, timeout: 5000 });
-      return b;
-    } catch {}
-  }
-  return null;
+  return checkBinary('codex');
 }
 
 // ── 啟動後端 ──────────────────────────────────────────────
@@ -119,7 +128,7 @@ async function waitForBackend(port = 8765, maxMs = 120000) {
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://localhost:${port}/api/status`);
+      const res = await fetch(`http://127.0.0.1:${port}/api/status`);
       if (res.ok) return true;
     } catch {}
     await new Promise(r => setTimeout(r, 300));
