@@ -29,10 +29,10 @@ jobs:
           # that don't affect test coverage on CI's CPU-only runners.
           grep -v '^nvidia-' backend/requirements.txt > /tmp/ci-requirements.txt
           pip install -r /tmp/ci-requirements.txt
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio pytest-cov
 
       - name: Run backend tests
-        run: python -m pytest
+        run: python -m pytest --basetemp .pytest-tmp/backend-tests --cov=backend --cov-report=term-missing --cov-fail-under=0
 
   frontend:
     runs-on: ubuntu-latest
@@ -52,6 +52,9 @@ jobs:
 
       - name: Type-check
         run: npx tsc --noEmit -p tsconfig.app.json
+
+      - name: Format check (maintained frontend slices)
+        run: npx prettier --check "src/app/{sse.ts,sse.spec.ts,layout-resize.service.ts,layout-resize.service.spec.ts,session-facade.service.ts}"
 
       - name: Unit tests
         run: npx ng test --watch=false

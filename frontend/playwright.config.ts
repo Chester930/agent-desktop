@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const baseURL = process.env['PLAYWRIGHT_BASE_URL'] ?? 'http://127.0.0.1:4200';
+const baseUrlPort = new URL(baseURL).port || '4200';
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30000,
@@ -9,7 +12,7 @@ export default defineConfig({
   reporter: 'html',
 
   use: {
-    baseURL: 'http://localhost:4200',
+    baseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -20,8 +23,8 @@ export default defineConfig({
 
   // Start ng serve before running tests
   webServer: {
-    command: 'npm run start',
-    url: 'http://localhost:4200',
+    command: `npm run start -- --host 127.0.0.1 --port ${baseUrlPort}`,
+    url: baseURL,
     reuseExistingServer: !process.env['CI'],
     timeout: 60000,
   },

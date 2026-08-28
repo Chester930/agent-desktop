@@ -1,30 +1,48 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import main
 
 
-def _write_claude_session(root, session_id="claude-sess-1"):
+def _write_claude_session(root, session_id="claude-sess-1", timestamps=None):
     project = root / "projects" / "D--proj"
     project.mkdir(parents=True, exist_ok=True)
     f = project / f"{session_id}.jsonl"
+    timestamps = timestamps or [datetime.now(timezone.utc), datetime.now(timezone.utc)]
     f.write_text(
         "\n".join([
             json.dumps({
                 "type": "user",
                 "cwd": "D:\\proj",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": timestamps[0].isoformat(),
                 "message": {"content": [{"type": "text", "text": "hello from claude"}]},
             }),
             json.dumps({
                 "type": "assistant",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": timestamps[1].isoformat(),
                 "message": {"content": [{"type": "text", "text": "claude answer"}]},
             }),
         ]) + "\n",
         encoding="utf-8",
     )
     return f
+
+
+async def test_claude_session_time_uses_last_message_timestamp(client, tmp_claude_home):
+    first_message = datetime.now(timezone.utc).replace(microsecond=0)
+    last_message = first_message + timedelta(seconds=1)
+    _write_claude_session(
+        tmp_claude_home,
+        session_id="claude-last-message-time",
+        timestamps=[first_message, last_message],
+    )
+
+    response = await client.get("/api/sessions")
+    assert response.status == 200
+    items = await response.json()
+    session = next(item for item in items["items"] if item["id"] == "claude-last-message-time")
+
+    assert session["mtime"] == last_message.timestamp()
 
 
 def _write_codex_session(root, session_id="019fabcd-0000-7000-8000-000000000001"):

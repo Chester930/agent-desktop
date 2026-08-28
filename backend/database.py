@@ -297,6 +297,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     engine        TEXT NOT NULL DEFAULT 'claude',
     title         TEXT NOT NULL DEFAULT '',
     mtime         REAL NOT NULL DEFAULT 0,
+    source_mtime  REAL NOT NULL DEFAULT 0,
     search_text   TEXT NOT NULL DEFAULT '',
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -363,6 +364,8 @@ def _migrate_db() -> None:
             c.execute("ALTER TABLE sessions ADD COLUMN file_path TEXT NOT NULL DEFAULT ''")
         if "project_path" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT ''")
+        if "source_mtime" not in cols:
+            c.execute("ALTER TABLE sessions ADD COLUMN source_mtime REAL NOT NULL DEFAULT 0")
 
 def _migrate_fts_tokenizer() -> None:
     """
@@ -423,11 +426,12 @@ def _read_session_cwd(f: Path) -> str:
         pass
     return ""
 
-def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int]:
-    """Parse a JSONL session file — returns (title, search_text, inp_tok, out_tok, msg_count)."""
+def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int, float]:
+    """Parse a JSONL session file and return its metadata plus last message time."""
     title = f.stem
     parts: list[str] = []
     inp = out = msg_count = 0
+    last_message_at = 0.0
     try:
         lines = f.read_text(encoding="utf-8", errors="replace").strip().splitlines()
         got_title = False
@@ -436,6 +440,10 @@ def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int]:
                 ev = json.loads(line)
                 t = ev.get("type", "")
                 if t in ("user", "assistant"):
+                    last_message_at = max(
+                        last_message_at,
+                        _parse_iso_timestamp(str(ev.get("timestamp") or "")),
+                    )
                     msg_count += 1
                     content = ev.get("message", {}).get("content", "")
                     text = ""
@@ -458,7 +466,7 @@ def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int]:
                 pass
     except Exception:
         pass
-    return title, " ".join(parts)[:2000], inp, out, msg_count
+    return title, " ".join(parts)[:2000], inp, out, msg_count, last_message_at
 
 def _message_text(content) -> str:
     if isinstance(content, str):
@@ -530,32 +538,42 @@ def _sync_index() -> None:
     try:
         with _db_ctx() as c:
             indexed = {
-                (r["engine"] or "claude", r["id"]): (r["mtime"], r["project_path"])
-                for r in c.execute("SELECT id, engine, mtime, project_path FROM sessions")
+                (r["engine"] or "claude", r["id"]): (
+                    r["mtime"], r["project_path"], r["source_mtime"]
+                )
+                for r in c.execute(
+                    "SELECT id, engine, mtime, project_path, source_mtime FROM sessions"
+                )
             }
             existing_keys: set[tuple[str, str]] = set()
             for f in claude_files:
                 sid = f.stem
                 existing_keys.add(("claude", sid))
-                mtime = f.stat().st_mtime
+                source_mtime = f.stat().st_mtime
                 entry = indexed.get(("claude", sid))
-                if entry and entry[0] == mtime and entry[1]:  # same mtime AND has project_path
+                # source_mtime is the authoritative incremental-sync key.
+                # A missing project_path is valid for old/minimal JSONL files;
+                # it must not force the same large history to be reparsed on
+                # every GET /api/sessions request.
+                if entry and entry[2] == source_mtime:
                     continue
-                title, search_text, inp, out, msg_count = _parse_jsonl_session(f)
+                title, search_text, inp, out, msg_count, last_message_at = _parse_jsonl_session(f)
                 project_path = _read_session_cwd(f)
+                mtime = last_message_at or source_mtime
                 c.execute("""
-                    INSERT INTO sessions(id, engine, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    INSERT INTO sessions(id, engine, title, mtime, source_mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET
                         engine=excluded.engine,
                         title=excluded.title, mtime=excluded.mtime,
+                        source_mtime=excluded.source_mtime,
                         search_text=excluded.search_text,
                         input_tokens=excluded.input_tokens,
                         output_tokens=excluded.output_tokens,
                         message_count=excluded.message_count,
                         file_path=excluded.file_path,
                         project_path=excluded.project_path
-                """, (sid, "claude", title, mtime, search_text, inp, out, msg_count, str(f), project_path))
+                """, (sid, "claude", title, mtime, source_mtime, search_text, inp, out, msg_count, str(f), project_path))
                 c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
                 c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
                           (sid, title, search_text))
@@ -564,22 +582,24 @@ def _sync_index() -> None:
                 sid = _codex_session_id_from_path(f)
                 existing_keys.add(("codex", sid))
                 title, search_text, inp, out, msg_count, project_path, mtime = _parse_codex_session(f, codex_index.get(sid))
+                source_mtime = f.stat().st_mtime
                 entry = indexed.get(("codex", sid))
-                if entry and entry[0] == mtime and entry[1] == project_path:
+                if entry and entry[0] == mtime and entry[1] == project_path and entry[2] == source_mtime:
                     continue
                 c.execute("""
-                    INSERT INTO sessions(id, engine, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    INSERT INTO sessions(id, engine, title, mtime, source_mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET
                         engine=excluded.engine,
                         title=excluded.title, mtime=excluded.mtime,
+                        source_mtime=excluded.source_mtime,
                         search_text=excluded.search_text,
                         input_tokens=excluded.input_tokens,
                         output_tokens=excluded.output_tokens,
                         message_count=excluded.message_count,
                         file_path=excluded.file_path,
                         project_path=excluded.project_path
-                """, (sid, "codex", title, mtime, search_text, inp, out, msg_count, str(f), project_path))
+                """, (sid, "codex", title, mtime, source_mtime, search_text, inp, out, msg_count, str(f), project_path))
                 c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
                 c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
                           (sid, title, search_text))

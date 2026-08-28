@@ -2,6 +2,7 @@ const { app, BrowserWindow, shell, Tray, Menu, nativeImage, dialog, ipcMain, Not
 const path = require('path');
 const fs   = require('fs');
 const { spawn, execFileSync } = require('child_process');
+const runtimeConfig = require('./runtime-config');
 
 // dev 模式用獨立 userData，避免和其他 Electron app 搶快取目錄
 if (!app.isPackaged) {
@@ -124,11 +125,11 @@ function startBackend() {
 // ctranslate2/av 等語音套件，解壓後將近 1GB）重新解壓縮到暫存目錄，
 // 實測在一般機器上要 45~60 秒才會就緒。20 秒的舊上限經常在後端其實
 // 正常啟動中的情況下就先跳「啟動逾時」把 App 關掉，改成 120 秒。
-async function waitForBackend(port = 8765, maxMs = 120000) {
+async function waitForBackend(baseUrl = runtimeConfig.backendUrl, maxMs = 120000) {
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/status`);
+      const res = await fetch(`${baseUrl}/api/status`);
       if (res.ok) return true;
     } catch {}
     await new Promise(r => setTimeout(r, 300));
@@ -431,7 +432,7 @@ function createWindow() {
 
   const isDev = process.argv.includes('--dev') || isDocker;
   const url = isDev
-    ? 'http://localhost:4200'
+    ? runtimeConfig.frontendUrl
     : `file://${useSrc ? srcFrontend : bundledFrontend}`;
 
   mainWindow.loadURL(url);
@@ -439,7 +440,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => { if (!startHidden) mainWindow.show(); });
   mainWindow.webContents.on('did-fail-load', (_e, code, _desc, failedUrl) => {
     // 健檢第二輪修復：這個 fallback 原本沒有限制 isDev，封裝後的正式版
-    // 如果 bundled frontend 載入失敗，會無條件改載入 http://localhost:4200 ——
+    // 如果 bundled frontend 載入失敗，開發模式改載入 runtime config 的前端 URL ——
     // 這個視窗掛了 preload（暴露 window.electronAPI：openDirectory/
     // openExternal/notify/loginItem），萬一本機剛好有其他程式（甚至惡意
     // 程式）占用 4200 port，它的內容就會被載進這個有特權的視窗。只在開發
@@ -448,7 +449,7 @@ function createWindow() {
     // 任意本機 port。
     if (failedUrl && failedUrl.startsWith('file://')) {
       if (isDev) {
-        mainWindow.loadURL('http://localhost:4200');
+        mainWindow.loadURL(runtimeConfig.frontendUrl);
       } else {
         const errorHtml = `<!doctype html><html><body style="background:#0d0d0d;color:#eee;font-family:sans-serif;padding:40px;">
           <h2>載入失敗</h2><p>前端資源載入失敗，請重新安裝或重啟應用程式。</p></body></html>`;
@@ -558,7 +559,7 @@ app.whenReady().then(async () => {
   if (isDocker) {
     // Docker 模式：後端已在容器內，直接等待連線
     showSplash();
-    const ready = await waitForBackend();
+    const ready = await waitForBackend(runtimeConfig.backendUrl);
     closeSplash();
     if (!ready) {
       dialog.showMessageBox({ message: 'Docker 後端未回應，請確認容器是否已啟動。\n執行：docker compose up -d' });
@@ -580,7 +581,7 @@ app.whenReady().then(async () => {
 
   showSplash();
   startBackend();
-  const ready = await waitForBackend();
+  const ready = await waitForBackend(runtimeConfig.backendUrl);
   closeSplash();
   if (!ready) {
     dialog.showMessageBox({ message: '後端啟動逾時，請重新啟動應用程式。' });

@@ -41,6 +41,11 @@ from pathlib import Path
 
 from aiohttp import web
 
+try:
+    from task_registry import create_background_task
+except ImportError:
+    from backend.task_registry import create_background_task
+
 from helpers import _team_dict, _write_team_yaml, _agent_dict
 from database import _team_memory_dir, _encode_slug, _write_md, _log
 
@@ -463,7 +468,7 @@ async def handle_plan_team_post(request: web.Request) -> web.Response:
     _team_events[run_id] = []
     _team_queues[run_id] = []
 
-    asyncio.create_task(_execute_plan_team_run_guarded(
+    create_background_task(_execute_plan_team_run_guarded(
         run_id, task, model, cwd, engine_name, permission_mode, agent_engine_default,
     ))
     return web.json_response({"ok": True, "run_id": run_id})

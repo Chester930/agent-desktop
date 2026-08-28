@@ -42,8 +42,12 @@ npm-debug.log*
 # Runtime / local data
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 
 # Test artifacts
+.pytest-tmp/
+.pytest_cache/
 frontend/test-results/
 frontend/playwright-report/
 tests/__pycache__/

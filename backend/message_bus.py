@@ -2,6 +2,11 @@ import asyncio
 import logging
 from typing import Callable, Dict, List, Any
 
+try:
+    from task_registry import create_background_task
+except ImportError:
+    from backend.task_registry import create_background_task
+
 logger = logging.getLogger("MessageBus")
 
 class MessageBus:
@@ -48,7 +53,7 @@ class MessageBus:
         for callback in self.subscribers[topic]:
             if asyncio.iscoroutinefunction(callback):
                 try:
-                    task = asyncio.create_task(callback(message))
+                    task = create_background_task(callback(message))
                 except RuntimeError as e:
                     # No running event loop (e.g. called from sync/test context)
                     logger.error(f"Cannot schedule async callback for topic {topic}: {e}")

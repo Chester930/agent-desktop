@@ -450,7 +450,11 @@
       <button class="session-load-more" (click)="loadMoreSessions()">載入更多…</button>
       }
     </div>
-    <div class="sidebar-resize" (mousedown)="onResizeStart($event)" title="拖曳調整寬度"></div>
+    <div class="sidebar-resize" (mousedown)="onResizeStart($event)" title="拖曳調整寬度">
+      <div class="sidebar-resize-track">
+        <div class="sidebar-resize-grip"></div>
+      </div>
+    </div>
 
     <!-- ── 左下角使用者選單 ── -->
     <div class="sidebar-footer">
@@ -1094,7 +1098,11 @@
     <!-- 輸入框 -->
     <div class="input-area" [style.height.px]="inputHeight()" (dragover)="onDragOver($event)"
       (dragleave)="onDragLeave()" (drop)="onDrop($event)" [class.drag-over]="isDragOver()">
-      <div class="input-resize" (mousedown)="onInputResizeStart($event)" title="拖曳調整高度"></div>
+      <div class="input-resize" (mousedown)="onInputResizeStart($event)" title="拖曳調整高度">
+        <div class="input-resize-track">
+          <div class="input-resize-grip"></div>
+        </div>
+      </div>
       @if (isDragOver()) {
       <div class="drag-overlay">拖曳檔案到這裡上傳</div>
       }
@@ -1276,8 +1284,7 @@
           </span>
           }
           <button class="sb-btn" [class.locked]="effectiveEngine() === 'codex' && activeCodexModelOptions().length <= 1"
-            (click)="modelPickerOpen.set(true)"
-            [title]="'模型：' + activeModelLabel() + '（開啟模型選擇器）'">
+            (click)="modelPickerOpen.set(true)" [title]="'模型：' + activeModelLabel() + '（開啟模型選擇器）'">
             {{ activeModelLabel() }}
           </button>
           <button class="sb-btn effort-btn" (click)="cycleEffort()"
@@ -1321,10 +1328,12 @@
                 Codex 版本一致。第一個選項是「使用預設」，讓 Codex CLI 自己決定目前建議的模型</div>
 
               <div class="ihp-title">思考等級（Claude Code）</div>
-              <div class="ihp-item"><b>Low → Medium → High → Extra high → More reasoning</b> — 由快速回應到更深入推理；Medium 為預設。</div>
+              <div class="ihp-item"><b>Low → Medium → High → Extra high → More reasoning</b> — 由快速回應到更深入推理；Medium 為預設。
+              </div>
 
               <div class="ihp-title">思考等級（Codex）</div>
-              <div class="ihp-item"><b>Low → Medium → High → Extra high → More reasoning → Ultra</b> — 會依目前選取的 Codex 模型動態縮減；不是每個模型都支援 Max 或 Ultra。等級越高通常消耗越多 usage limits。</div>
+              <div class="ihp-item"><b>Low → Medium → High → Extra high → More reasoning → Ultra</b> — 會依目前選取的 Codex
+                模型動態縮減；不是每個模型都支援 Max 或 Ultra。等級越高通常消耗越多 usage limits。</div>
 
               <div class="ihp-title">其他按鈕</div>
               <div class="ihp-item">➕ <b>附件</b> — 上傳圖片／文字／程式碼檔案給模型參考</div>
@@ -1343,7 +1352,11 @@
   <!-- ── 右側面板 ──────────────────────────────────── -->
   @if (rightOpen()) {
   <aside class="right-panel" [style.width.px]="rightWidth()">
-    <div class="right-resize" (mousedown)="onRightResizeStart($event)" title="拖曳調整寬度"></div>
+    <div class="right-resize" (mousedown)="onRightResizeStart($event)" title="拖曳調整寬度">
+      <div class="right-resize-track">
+        <div class="right-resize-grip"></div>
+      </div>
+    </div>
     <div class="tab-bar">
       <button [class.active]="activeTab()==='teams'" (click)="activeTab.set('teams');loadTeams()">TEAM</button>
       <button [class.active]="activeTab()==='agents'" (click)="activeTab.set('agents')">AGENT</button>

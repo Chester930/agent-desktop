@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { SettingsService } from './settings.service';
+import { startSseStream } from './sse';
 
 export interface Agent {
   id: string; name: string; description: string;
@@ -416,29 +417,7 @@ export class ClaudeService {
     onDone: () => void,
     onError: (e: any) => void,
   ): () => void {
-    const controller = new AbortController();
-    fetch(`${this.api}/hr/plan-team/${runId}/stream`, { signal: controller.signal })
-      .then(async (res) => {
-        if (!res.body) { onError(new Error('no response body')); return; }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const parts = buf.split('\n\n');
-          buf = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.replace(/^data: /, '').trim();
-            if (!line) continue;
-            try { onEvent(JSON.parse(line)); } catch {}
-          }
-        }
-        onDone();
-      })
-      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
-    return () => controller.abort();
+    return startSseStream(`${this.api}/hr/plan-team/${runId}/stream`, {}, { onEvent, onDone, onError });
   }
 
   getTeamRun(runId: string): Observable<TeamRun> {
@@ -455,29 +434,7 @@ export class ClaudeService {
     onDone: () => void,
     onError: (e: any) => void,
   ): () => void {
-    const controller = new AbortController();
-    fetch(`${this.api}/team/run/${runId}/stream`, { signal: controller.signal })
-      .then(async (res) => {
-        if (!res.body) { onError(new Error('no response body')); return; }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const parts = buf.split('\n\n');
-          buf = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.replace(/^data: /, '').trim();
-            if (!line) continue;
-            try { onEvent(JSON.parse(line)); } catch {}
-          }
-        }
-        onDone();
-      })
-      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
-    return () => controller.abort();
+    return startSseStream(`${this.api}/team/run/${runId}/stream`, {}, { onEvent, onDone, onError });
   }
 
   getSchedules(): Observable<Schedule[]> { return this.http.get<Schedule[]>(`${this.api}/schedules`); }
@@ -705,37 +662,17 @@ export class ClaudeService {
     onError: (e: any) => void,
   ): () => void {
     const s       = this.settings.get();
-    const controller = new AbortController();
     const PRESET_URLS: Record<string, string> = {
       openai:     'https://api.openai.com/v1',
       openrouter: 'https://openrouter.ai/api/v1',
       gemini:     'https://generativelanguage.googleapis.com/v1beta/openai',
     };
     const apiUrl  = s.providerApiUrl || PRESET_URLS[s.provider] || 'https://api.openai.com/v1';
-    fetch(`${this.api}/chat/provider`, {
+    return startSseStream(`${this.api}/chat/provider`, {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, apiUrl, apiKey: s.providerApiKey, model: s.providerModel || 'gpt-4o-mini' }),
-    }).then(async (res) => {
-      const reader  = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const parts = buf.split('\n\n');
-        buf = parts.pop() ?? '';
-        for (const part of parts) {
-          const line = part.replace(/^data: /, '').trim();
-          if (!line) continue;
-          try { onEvent(JSON.parse(line)); } catch {}
-        }
-      }
-      onDone();
-    }).catch(e => { if (e?.name !== 'AbortError') onError(e); });
-    return () => controller.abort();
+    }, { onEvent, onDone, onError });
   }
 
   async pickDirectory(): Promise<string | null> {
@@ -764,11 +701,9 @@ export class ClaudeService {
     teamId?: string,
     clientId?: string            // 對話分頁的 clientId
   ): () => void {
-    const controller = new AbortController();
     const s = this.settings.get();
-    fetch(`${this.api}/chat`, {
+    return startSseStream(`${this.api}/chat`, {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
@@ -784,27 +719,7 @@ export class ClaudeService {
         permission_mode: s.permissionMode,
         team_id: teamId,
       }),
-    })
-      .then(async (res) => {
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          buffer = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.replace(/^data: /, '').trim();
-            if (!line) continue;
-            try { onEvent(JSON.parse(line)); } catch {}
-          }
-        }
-        onDone();
-      })
-      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
-    return () => controller.abort();
+    }, { onEvent, onDone, onError });
   }
 
   streamTeamChat(
@@ -817,11 +732,9 @@ export class ClaudeService {
     cwdOverride?: string,
     clientId?: string            // 對話分頁的 clientId
   ): () => void {
-    const controller = new AbortController();
     const s = this.settings.get();
-    fetch(`${this.api}/team/chat`, {
+    return startSseStream(`${this.api}/team/chat`, {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
@@ -836,27 +749,7 @@ export class ClaudeService {
         effort: s.effort,
         permission_mode: s.permissionMode,
       }),
-    })
-      .then(async (res) => {
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          buffer = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.replace(/^data: /, '').trim();
-            if (!line) continue;
-            try { onEvent(JSON.parse(line)); } catch {}
-          }
-        }
-        onDone();
-      })
-      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
-    return () => controller.abort();
+    }, { onEvent, onDone, onError });
   }
 
   executeTeamTask(
@@ -868,11 +761,9 @@ export class ClaudeService {
     onError: (e: any) => void,
     clientId?: string            // 對話分頁的 clientId
   ): () => void {
-    const controller = new AbortController();
     const s = this.settings.get();
-    fetch(`${this.api}/team/execute`, {
+    return startSseStream(`${this.api}/team/execute`, {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         team_id: teamId,
@@ -886,27 +777,7 @@ export class ClaudeService {
         effort: s.effort,
         permission_mode: s.permissionMode,
       }),
-    })
-      .then(async (res) => {
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          buffer = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.replace(/^data: /, '').trim();
-            if (!line) continue;
-            try { onEvent(JSON.parse(line)); } catch {}
-          }
-        }
-        onDone();
-      })
-      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
-    return () => controller.abort();
+    }, { onEvent, onDone, onError });
   }
 
   authorizeTeamTask(requestId: string, decision: 'approve' | 'reject'): Observable<any> {

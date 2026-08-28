@@ -125,20 +125,21 @@ docker compose down
 ### Docker 架構
 
 ```
-Electron 視窗 ──→ localhost:4200（前端；dev 是 Angular dev server，prod 是 nginx）
+Electron 視窗 ──→ 127.0.0.1:4201（Docker dev）或 127.0.0.1:4200（prod／local dev）
                      └─ /api/* 透過 Docker 內部網路轉發給後端 container 的 8765
 LINE 用戶    ──→ ngrok 公開網址 ──→ 後端 (LINE Bot)
 ```
 
-Electron 視窗只會連 `localhost:4200`；前端把 `/api/*` 透過 Docker 內部網路轉給後端
-container，瀏覽器不需要（也不會）直接連後端。如果想用 `curl`／Postman 直接測試
-後端 API，主機對外開放的是 `.env` 裡的 `BACKEND_HOST_PORT`（預設 `8760`，**不是**
-容器內部用的 `8765`）：例如 `http://localhost:8760/api/status`。
+Docker dev 啟動後，Electron 會讀取 `.env` 對應的 `FRONTEND_DEV_HOST_PORT`／
+`BACKEND_DEV_HOST_PORT`（舊的 `FRONTEND_HOST_PORT`／`BACKEND_HOST_PORT` 仍可作為
+相容 fallback）。預設是前端 `4201`、後端 `8761`；正式環境則是前端 `4200`、後端
+`8760`。前端把 `/api/*` 透過 Docker 內部網路轉給後端 container，瀏覽器不需要
+直接連後端。
 
 | 容器 | 功能 | 容器內部 Port | 主機對外 Port |
 |------|------|------|------|
-| `agent-desktop-backend-dev` | Python API + Claude／Codex CLI（dev，`start.bat --docker` 建立） | 8765 | `${BACKEND_HOST_PORT:-8760}` |
-| `agent-desktop-frontend-dev` | Angular dev server，HMR（dev） | 4200 | `${FRONTEND_HOST_PORT:-4200}` |
+| `agent-desktop-backend-dev` | Python API + Claude／Codex CLI（dev，`start.bat --docker` 建立） | 8765 | `${BACKEND_DEV_HOST_PORT:-8761}` |
+| `agent-desktop-frontend-dev` | Angular dev server，HMR（dev） | 4200 | `${FRONTEND_DEV_HOST_PORT:-4201}` |
 | `agent-desktop-ngrok` | LINE Webhook 公開網址（需另外執行 `--profile tunnel`，見上） | 4040 | 4040 |
 
 > 正式環境（`docker compose --profile prod up`）改用 `agent-desktop-backend` / `agent-desktop-frontend`（無 `-dev` 後綴，nginx 靜態前端而非 dev server），主機對外 Port 規則相同。
@@ -232,6 +233,10 @@ npm install
 - Python 後端（port 8765）
 - Angular dev server（port 4200，HMR 熱重載）
 - Electron 視窗
+
+`start.bat --docker` 則會使用 `.env` 的開發連接埠，並將相同 URL 傳給 Electron。
+若同時啟動 dev 與 prod profile，請分別使用 `4201/8761` 與 `4200/8760` 檢查，避免
+誤把兩個環境混在一起。
 
 修改 `frontend/src/` 裡的程式碼後，Electron 視窗會自動重整。
 
@@ -382,6 +387,24 @@ App 自己在前端做的功能，不是轉送給 Claude Code／Codex CLI 執行
 ---
 
 ## 疑難排解
+
+## 測試與驗證
+
+根目錄提供一致的驗證入口：
+
+```bash
+# 後端 + 前端單元測試
+npm test
+
+# 只做前端型別檢查
+npm run typecheck
+
+# 需要已啟動前端／後端或 Docker dev 環境的瀏覽器測試
+npm run test:e2e
+```
+
+Playwright 預設使用 `http://127.0.0.1:4200`；若要驗證已啟動的 Docker dev
+前端，使用 `PLAYWRIGHT_BASE_URL=http://127.0.0.1:4201 npm run test:e2e`。
 
 ### Docker 後端未回應
 

@@ -28,6 +28,11 @@ from database import (
     _log,
 )
 
+try:
+    from task_registry import create_background_task
+except ImportError:
+    from backend.task_registry import create_background_task
+
 
 def _get_main_module():
     import sys
@@ -952,7 +957,7 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
     _team_events[run_id] = []
     _team_queues[run_id] = []
 
-    asyncio.create_task(_execute_team_run(run_id, task, model, cwd))
+    create_background_task(_execute_team_run(run_id, task, model, cwd))
     return web.json_response({"ok": True, "run_id": run_id})
 
 
@@ -1017,7 +1022,7 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
 # ── Route registration ────────────────────────────────────────────────────────
 
 async def gc_team_runs_cleanup_ctx(app: web.Application):
-    task = asyncio.create_task(_gc_team_runs_task())
+    task = create_background_task(_gc_team_runs_task())
     yield
     task.cancel()
     try:

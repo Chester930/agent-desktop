@@ -32,6 +32,11 @@ from helpers import (
 )
 from dir_cache import cached_parallel_scan
 
+try:
+    from task_registry import create_background_task
+except ImportError:
+    from backend.task_registry import create_background_task
+
 
 def _dirs():
     import database as _db
@@ -133,7 +138,7 @@ async def handle_agent_put(request: web.Request) -> web.Response:
             else:
                 dest.unlink(missing_ok=True)
     # 在背景非同步執行資源同步，避免 Windows Docker 掛載的慢速磁碟 I/O 阻塞 API 回應
-    asyncio.create_task(_trigger_resource_sync(agent_ids={aid}))
+    create_background_task(_trigger_resource_sync(agent_ids={aid}))
     return web.json_response({"ok": True})
 
 
@@ -160,7 +165,7 @@ async def handle_agent_post(request: web.Request) -> web.Response:
         f"soul: \nskills: []\nmemory: []\nmcp: []\noutput_memory: []\n{engine_line}---\n\n## {name}\n\n{desc}\n",
         encoding="utf-8"
     )
-    asyncio.create_task(_trigger_resource_sync(agent_ids={name}))
+    create_background_task(_trigger_resource_sync(agent_ids={name}))
     return web.json_response({"ok": True, "id": name})
 
 
@@ -172,7 +177,7 @@ async def handle_agent_delete(request: web.Request) -> web.Response:
     f = AGENTS_DIR / f"{aid}.md"
     if f.exists():
         f.unlink()
-        asyncio.create_task(_trigger_resource_sync(agent_ids={aid}))
+        create_background_task(_trigger_resource_sync(agent_ids={aid}))
     return web.json_response({"ok": True})
 
 
@@ -237,7 +242,7 @@ async def handle_skill_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
-    asyncio.create_task(_trigger_resource_sync(skill_ids={sid}))
+    create_background_task(_trigger_resource_sync(skill_ids={sid}))
     return web.json_response({"ok": True})
 
 

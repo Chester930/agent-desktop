@@ -1,14 +1,32 @@
 @echo off
+setlocal EnableExtensions EnableDelayedExpansion
 echo Starting Agent Desktop...
 
 :: Parse flags
 set DEV_MODE=0
 set DOCKER_MODE=0
 set BUILD_MODE=0
+set "FRONTEND_DEV_HOST_PORT=4201"
+set "BACKEND_DEV_HOST_PORT=8761"
+set "AGENT_DESKTOP_FRONTEND_URL="
+set "AGENT_DESKTOP_BACKEND_URL="
 for %%A in (%*) do (
   if /I "%%A"=="--dev"    set DEV_MODE=1
   if /I "%%A"=="--docker" set DOCKER_MODE=1
   if /I "%%A"=="--build"  set BUILD_MODE=1
+)
+
+:: Read development Docker ports from .env. The legacy names remain valid as
+:: fallbacks so existing installations do not break when upgrading.
+if exist "%~dp0.env" (
+  for /f "usebackq tokens=1,* delims==" %%A in ("%~dp0.env") do (
+    if /I "%%A"=="FRONTEND_HOST_PORT" set "FRONTEND_DEV_HOST_PORT=%%B"
+    if /I "%%A"=="BACKEND_HOST_PORT"  set "BACKEND_DEV_HOST_PORT=%%B"
+  )
+  for /f "usebackq tokens=1,* delims==" %%A in ("%~dp0.env") do (
+    if /I "%%A"=="FRONTEND_DEV_HOST_PORT" set "FRONTEND_DEV_HOST_PORT=%%B"
+    if /I "%%A"=="BACKEND_DEV_HOST_PORT"  set "BACKEND_DEV_HOST_PORT=%%B"
+  )
 )
 
 :: Resolve Python
@@ -60,18 +78,32 @@ if "%DOCKER_MODE%"=="1" (
     pause & exit /b 1
   )
 
-  :: Wait for backend to be healthy
+  :: Wait for backend to be healthy, but fail with diagnostics instead of
+  :: polling forever when Docker or the bind mounts are misconfigured.
   echo Waiting for backend...
+  set /a WAIT_ATTEMPTS=0
   :wait_backend
   docker inspect --format="{{.State.Health.Status}}" agent-desktop-backend-dev 2>nul | findstr /i "healthy" >nul
-  if errorlevel 1 ( timeout /t 2 /nobreak >nul & goto wait_backend )
+  if not errorlevel 1 goto backend_ready
+  set /a WAIT_ATTEMPTS+=1
+  if !WAIT_ATTEMPTS! GEQ 60 (
+    echo [Error] Backend did not become healthy within 120 seconds.
+    docker compose --profile dev logs --tail 30 backend-dev
+    pause & exit /b 1
+  )
+  timeout /t 2 /nobreak >nul
+  goto wait_backend
+
+  :backend_ready
+  set "AGENT_DESKTOP_FRONTEND_URL=http://127.0.0.1:!FRONTEND_DEV_HOST_PORT!"
+  set "AGENT_DESKTOP_BACKEND_URL=http://127.0.0.1:!BACKEND_DEV_HOST_PORT!"
 
   echo.
-  echo Frontend: http://localhost:4200 (Dev HMR)
-  echo Backend:  see BACKEND_HOST_PORT in .env (default http://localhost:8760; only needed for direct API debugging, the app itself talks to the backend through the frontend proxy)
+  echo Frontend: !AGENT_DESKTOP_FRONTEND_URL! (Dev HMR)
+  echo Backend:  !AGENT_DESKTOP_BACKEND_URL! (direct API debugging only)
   echo.
 
-  :: Launch Electron (Docker mode: skip local backend, load from port 4200)
+  :: Launch Electron (Docker mode: skip local backend and use the same URLs above)
   cd /d %~dp0 && node_modules\.bin\electron.cmd . --docker
   goto end
 )
@@ -84,8 +116,8 @@ if "%DEV_MODE%"=="1" (
   echo Starting Angular dev server with HMR...
   start "Angular Dev" cmd /k "cd /d %~dp0frontend && npm run start"
   echo.
-  echo Backend:  http://localhost:8765  (由 Electron 自動啟動)
-  echo Frontend: http://localhost:4200  [HMR enabled]
+  echo Backend:  http://127.0.0.1:8765  (由 Electron 自動啟動)
+  echo Frontend: http://127.0.0.1:4200  [HMR enabled]
   echo.
   timeout /t 10 /nobreak >nul
   cd /d %~dp0 && node_modules\.bin\electron.cmd . --dev
@@ -94,9 +126,10 @@ if "%DEV_MODE%"=="1" (
 
 :: ── Default mode (local backend only) ─────────────────────────────────────────
 echo.
-echo Backend:  http://localhost:8765  (由 Electron 自動啟動)
+echo Backend:  http://127.0.0.1:8765  (由 Electron 自動啟動)
 echo.
 echo Launching Electron...
 cd /d %~dp0 && node_modules\.bin\electron.cmd .
 
 :end
+endlocal

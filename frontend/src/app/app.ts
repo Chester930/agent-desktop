@@ -1,5 +1,5 @@
 import {
-  Component, OnInit, OnDestroy, signal, computed,
+  Component, OnInit, OnDestroy, signal, computed, inject,
   ViewChild, ElementRef, AfterViewChecked, HostListener
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -21,6 +21,9 @@ import { AgentPanelComponent } from './components/agent-panel/agent-panel';
 import { SoulPanelComponent } from './components/soul-panel/soul-panel';
 import { McpPanelComponent } from './components/mcp-panel/mcp-panel';
 import { SettingsService, AppSettings } from './settings.service';
+import { LayoutResizeService } from './layout-resize.service';
+import { SessionFacade } from './session-facade.service';
+import { McpFacade } from './mcp-facade.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, McpServer, McpTool, McpType, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
@@ -68,6 +71,10 @@ const MCP_PANE_DEFAULTS: Record<string, number> = {
   styleUrl: './app.scss'
 })
 export class App implements OnInit, OnDestroy, AfterViewChecked {
+  private readonly resize = inject(LayoutResizeService);
+  private readonly sessionFacade = inject(SessionFacade);
+  private readonly mcpFacade = inject(McpFacade);
+
   @ViewChild('chatEnd') chatEnd!: ElementRef;
   @ViewChild('inputRef') inputRef!: ElementRef;
   @ViewChild('scrollArea') scrollArea!: ElementRef;
@@ -154,7 +161,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     ];
   });
   resourceSyncDetailsExpanded = signal(false);
-  sessions = signal<Session[]>([]);
+  sessions = this.sessionFacade.sessions;
   memory = signal<Record<string, string>>({});
   // schedules signal: extracted into components/schedule-panel (Phase 2)
   // memoryOverview / memViewExpanded / memEditMode / memEditContent:
@@ -214,13 +221,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       return list;
     }
     const linkedSkills = this.getLinkedSkills(agentId);
-    const usedMcps: string[] = [];
+    const usedMcps = new Set<string>();
     for (const skillId of linkedSkills) {
-      usedMcps.push(...this.getUsedMcps(skillId));
+      for (const mcpName of this.getUsedMcps(skillId)) usedMcps.add(mcpName);
     }
     return list.sort((a, b) => {
-      const aUsed = usedMcps.includes(a.name);
-      const bUsed = usedMcps.includes(b.name);
+      const aUsed = usedMcps.has(a.name);
+      const bUsed = usedMcps.has(b.name);
       if (aUsed && !bUsed) return -1;
       if (!aUsed && bUsed) return 1;
       return a.name.localeCompare(b.name);
@@ -331,8 +338,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return new Set(agent?.mcp ?? []);
   });
   linkedMcpNames = computed(() => {
-    const all = [...this.externalMcpServers(), ...this.localMcpServers()];
-    return new Set(all.filter(m => this.isMcpLinkedToActiveAgent(m.name)).map(m => m.name));
+    const agentId = this.selectedAgent();
+    if (!agentId) return new Set<string>();
+    const linked = new Set<string>(this.activeTabField('sessionMcps'));
+    for (const mcpName of this.getPermMcps(agentId)) linked.add(mcpName);
+    for (const skillId of this.getLinkedSkills(agentId)) {
+      for (const mcpName of this.getUsedMcps(skillId)) linked.add(mcpName);
+    }
+    return linked;
   });
   sessionMcpNames = computed(() => new Set(this.activeTabField('sessionMcps')));
   // Manual "force this into 本地 API" override — isMcpLocal() checks
@@ -546,23 +559,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // through @Input/@Output on every keystroke.
   agentEditorSoulContent = '';
 
-  // Resizing signals & state
-  sidebarWidth = signal(300);
-  rightWidth = signal(300);
-  inputHeight = signal(140);
+  // Layout resize state is kept in a dedicated service so the root component
+  // only coordinates template events and remains focused on application state.
+  sidebarWidth = this.resize.sidebarWidth;
+  rightWidth = this.resize.rightWidth;
+  inputHeight = this.resize.inputHeight;
   soulSplitRatio = signal(0.5);   // 0 = all upper, 1 = all lower
-
-  private _resizing = false;
-  private _startX = 0;
-  private _startW = 0;
-
-  private _rightResizing = false;
-  private _startXRight = 0;
-  private _startWRight = 0;
-
-  private _inputResizing = false;
-  private _startYInput = 0;
-  private _startHInput = 0;
 
   private _soulResizing = false;
   private _soulStartY = 0;
@@ -570,17 +572,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   private _soulPanelHeight = 0;
 
   onResizeStart(e: MouseEvent) {
-    this._resizing = true; this._startX = e.clientX; this._startW = this.sidebarWidth();
+    this.resize.startSidebarResize(e);
     e.preventDefault();
   }
 
   onRightResizeStart(e: MouseEvent) {
-    this._rightResizing = true; this._startXRight = e.clientX; this._startWRight = this.rightWidth();
+    this.resize.startRightResize(e);
     e.preventDefault();
   }
 
   onInputResizeStart(e: MouseEvent) {
-    this._inputResizing = true; this._startYInput = e.clientY; this._startHInput = this.inputHeight();
+    this.resize.startInputResize(e);
     e.preventDefault();
   }
 
@@ -594,13 +596,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   @HostListener('document:mousemove', ['$event'])
   onMouseMove(e: MouseEvent) {
-    if (this._resizing) {
-      this.sidebarWidth.set(Math.max(200, Math.min(560, this._startW + (e.clientX - this._startX))));
-    } else if (this._rightResizing) {
-      this.rightWidth.set(Math.max(280, Math.min(700, this._startWRight - (e.clientX - this._startXRight))));
-    } else if (this._inputResizing) {
-      this.inputHeight.set(Math.max(100, Math.min(400, this._startHInput - (e.clientY - this._startYInput))));
-    } else if (this._soulResizing && this._soulPanelHeight > 0) {
+    if (this.resize.handleMouseMove(e)) return;
+    if (this._soulResizing && this._soulPanelHeight > 0) {
       const delta = e.clientY - this._soulStartY;
       const newRatio = this._soulStartRatio + delta / this._soulPanelHeight;
       this.soulSplitRatio.set(Math.max(0.15, Math.min(0.85, newRatio)));
@@ -609,9 +606,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   @HostListener('document:mouseup')
   onMouseUp() {
-    this._resizing = false;
-    this._rightResizing = false;
-    this._inputResizing = false;
+    this.resize.endResize();
     this._soulResizing = false;
   }
 
@@ -635,8 +630,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   private _resourceSyncTimer: any;
 
   // Session pagination
-  sessionOffset = 0;
-  hasMoreSessions = signal(false);
+  hasMoreSessions = this.sessionFacade.hasMore;
 
   // Debug mode
   debugMode = signal(false);
@@ -1635,7 +1629,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // ── Session metadata: colors + tags ─────────────────────────────────────
   sessionMeta = signal<Record<string, { tags: string[]; color: string }>>({});
-  sessionEngineFilter = signal<'claude' | 'codex'>('claude');
+  sessionEngineFilter = this.sessionFacade.engineFilter;
   sessionGroupMode = signal<'date' | 'project'>('date');
   tagInputId = signal<string | null>(null);
   tagInputVal = '';
@@ -1821,7 +1815,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const title = this.renameTitle.trim();
     if (title && title !== s.title) {
       this.claude.renameSession(s.id, title).subscribe(() =>
-        this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => this.sessions.set(r.items))
+        this.sessionFacade.refresh(this.sessionSearch)
       );
     }
     this.renamingId.set(null);
@@ -1886,7 +1880,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ctxDelete(s: Session) {
     this.closeContextMenu();
     this.claude.deleteSession(s.id).subscribe(() =>
-      this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => this.sessions.set(r.items))
+      this.sessionFacade.refresh(this.sessionSearch)
     );
   }
 
@@ -3442,36 +3436,22 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // components/schedule-panel (Phase 2)
 
   searchSessions() {
-    this.sessionOffset = 0;
-    this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => {
-      this.sessions.set(r.items);
-      this.hasMoreSessions.set(r.has_more);
-    });
+    this.sessionFacade.search(this.sessionSearch);
   }
 
   loadMoreSessions() {
-    this.sessionOffset += 30;
-    this.claude.getSessions(this.sessionSearch, this.sessionOffset, this.sessionEngineFilter()).subscribe(r => {
-      this.sessions.update(s => [...s, ...r.items]);
-      this.hasMoreSessions.set(r.has_more);
-    });
+    this.sessionFacade.loadMore(this.sessionSearch);
   }
 
   setSessionEngineFilter(engine: 'claude' | 'codex') {
-    if (this.sessionEngineFilter() === engine) return;
-    this.sessionEngineFilter.set(engine);
-    this.searchSessions();
+    this.sessionFacade.setEngine(engine, this.sessionSearch);
   }
 
   reload() {
-    this.sessionOffset = 0;
     this.claude.getStats().subscribe(s => this.stats.set(s));
     this.claude.getAgents().subscribe(a => this.agents.set(a));
     this.claude.getSkills().subscribe(s => this.skills.set(s));
-    this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => {
-      this.sessions.set(r.items);
-      this.hasMoreSessions.set(r.has_more);
-    });
+    this.sessionFacade.refresh(this.sessionSearch);
     this.claude.getMemory().subscribe(m => this.memory.set(m));
     this.claude.getSouls().subscribe(list => {
       this.souls.set(list);
@@ -4179,90 +4159,61 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Agency Agents importer: extracted into components/agency-import-panel (Phase 2)
 
   // T10 — MCP 管理
-  mcpList = signal<string>('');
-  mcpLoading = signal(false);
+  mcpList = this.mcpFacade.mcpList;
+  mcpLoading = this.mcpFacade.mcpLoading;
 
   loadMcp() {
-    this.mcpLoading.set(true);
-    this.claude.runCliCommand(['mcp', 'list']).subscribe({
-      next: out => {
-        this.mcpList.set(out || '（無已安裝的 MCP）');
-        this.parseMcpList(out || '');
-        this.mcpLoading.set(false);
-      },
-      error: () => {
-        this.mcpList.set('[無法取得清單]');
-        this.mcpLoading.set(false);
-      },
-    });
-    this.loadMcpServerDefs();
+    this.mcpFacade.loadMcp(out => this.parseMcpList(out));
   }
 
   // ── MCP server 定義單一來源（同步到 Claude／Codex 兩邊 CLI）─────────────
   // 跟上面 mcpList/parseMcpList（parse `claude mcp list` 輸出，只反映
   // Claude 那邊看得到什麼）是不同的資料來源：這裡是 app 自己記錄、新增/
   // 刪除時會同步推到兩邊 CLI 的那份（backend/mcp_sync.py）。
-  mcpServerDefs = signal<Record<string, McpServerDef>>({});
-  mcpServerEditorOpen = signal(false);
-  mcpServerEditorData = signal<McpServerDef>({ type: 'stdio' });
-  mcpServerEditorName = '';
-  mcpServerEditorArgsText = '';
-  mcpServerEditorEnvText = '';
-  mcpServerEditorHeadersText = '';
-  mcpServerSaving = signal(false);
+  mcpServerDefs = this.mcpFacade.serverDefs;
+  mcpServerEditorOpen = this.mcpFacade.editorOpen;
+  mcpServerEditorData = this.mcpFacade.editorData;
+  mcpServerSaving = this.mcpFacade.saving;
+
+  get mcpServerEditorName(): string { return this.mcpFacade.editorName(); }
+  set mcpServerEditorName(value: string) { this.mcpFacade.editorName.set(value); }
+  get mcpServerEditorArgsText(): string { return this.mcpFacade.editorArgsText(); }
+  set mcpServerEditorArgsText(value: string) { this.mcpFacade.editorArgsText.set(value); }
+  get mcpServerEditorEnvText(): string { return this.mcpFacade.editorEnvText(); }
+  set mcpServerEditorEnvText(value: string) { this.mcpFacade.editorEnvText.set(value); }
+  get mcpServerEditorHeadersText(): string { return this.mcpFacade.editorHeadersText(); }
+  set mcpServerEditorHeadersText(value: string) { this.mcpFacade.editorHeadersText.set(value); }
 
   loadMcpServerDefs() {
-    this.claude.listMcpServers().subscribe({
-      next: defs => this.mcpServerDefs.set(defs),
-      error: () => {},
-    });
+    this.mcpFacade.loadServerDefs();
   }
 
   // objectKeys: extracted into components/mcp-panel (Phase 2) as a local
   // helper — its only caller was the mcp-view template.
 
   openMcpServerEditor() {
-    this.mcpServerEditorName = '';
-    this.mcpServerEditorArgsText = '';
-    this.mcpServerEditorEnvText = '';
-    this.mcpServerEditorHeadersText = '';
-    this.mcpServerEditorData.set({ type: 'stdio' });
-    this.mcpServerEditorOpen.set(true);
-  }
-
-  private _parseKvLines(text: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const line of text.split('\n')) {
-      const idx = line.indexOf('=');
-      if (idx > 0) out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-    }
-    return out;
+    this.mcpFacade.openEditor();
   }
 
   saveMcpServerEditor() {
     const name = this.mcpServerEditorName.trim();
     if (!name) { this.showToast('請填寫名稱', 'error'); return; }
     const d = this.mcpServerEditorData();
-    const payload: McpServerDef = d.type === 'http'
-      ? { type: 'http', url: (d.url || '').trim(), headers: this._parseKvLines(this.mcpServerEditorHeadersText) }
-      : {
-          type: 'stdio',
-          command: (d.command || '').trim(),
-          args: this.mcpServerEditorArgsText.split('\n').map(s => s.trim()).filter(Boolean),
-          env: this._parseKvLines(this.mcpServerEditorEnvText),
-        };
+    const payload = this.mcpFacade.buildPayload(
+      d,
+      this.mcpServerEditorArgsText,
+      this.mcpServerEditorEnvText,
+      this.mcpServerEditorHeadersText,
+    );
     if (d.type === 'stdio' && !payload.command) { this.showToast('請填寫執行指令', 'error'); return; }
     if (d.type === 'http' && !payload.url) { this.showToast('請填寫 URL', 'error'); return; }
 
-    this.mcpServerSaving.set(true);
-    this.claude.createMcpServer(name, payload).subscribe({
+    this.mcpFacade.createServer(name, payload).subscribe({
       next: () => {
-        this.mcpServerSaving.set(false);
         this.mcpServerEditorOpen.set(false);
         this.loadMcpServerDefs();
       },
       error: (e) => {
-        this.mcpServerSaving.set(false);
         this.showToast(e.error?.error || '新增 MCP Server 失敗', 'error');
       },
     });
@@ -4270,7 +4221,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   deleteMcpServerDef(name: string) {
     if (!confirm(`確定要刪除 MCP Server「${name}」？會同時從 Claude／Codex 兩邊移除。`)) return;
-    this.claude.deleteMcpServer(name).subscribe({
+    this.mcpFacade.deleteServer(name).subscribe({
       next: () => this.loadMcpServerDefs(),
       error: (e) => this.showToast(e.error?.error || '刪除失敗', 'error'),
     });
@@ -4904,7 +4855,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   deleteSession(s: Session, event: Event) {
     event.stopPropagation();
     this.claude.deleteSession(s.id).subscribe(() =>
-      this.claude.getSessions(this.sessionSearch, 0, this.sessionEngineFilter()).subscribe(r => this.sessions.set(r.items))
+      this.sessionFacade.refresh(this.sessionSearch)
     );
   }
 

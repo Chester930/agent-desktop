@@ -25,7 +25,13 @@ from pathlib import Path
 
 import aiohttp
 
+# Keep safe_kill_process available for legacy callers/tests; asynchronous
+# cleanup paths use terminate_and_reap so the child is always awaited.
 from helpers import safe_kill_process, wrap_cmd
+try:
+    from process_lifecycle import terminate_and_reap
+except ImportError:
+    from backend.process_lifecycle import terminate_and_reap
 
 CHECK_TIMEOUT = 8.0     # 單次 CLI 探測逾時（秒）
 CACHE_TTL = 25.0        # 每個引擎各自的 cache 有效期（秒）
@@ -207,15 +213,12 @@ async def _check_claude() -> dict:
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT)
     except asyncio.TimeoutError:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return {"installed": True, "loggedIn": False, "available": False, "reason": "check_timeout"}
     except Exception:
         # 含 FileNotFoundError（binary 不存在）——跟 mcp_sync._run_cli 同一套邏輯。
         return {"installed": False, "loggedIn": False, "available": False, "reason": "not_installed"}
+    finally:
+        await terminate_and_reap(proc)
 
     try:
         data = json.loads(stdout.decode("utf-8", errors="replace").strip())
@@ -243,14 +246,11 @@ async def _check_codex() -> dict:
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT)
     except asyncio.TimeoutError:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return {"installed": True, "loggedIn": False, "available": False, "reason": "check_timeout"}
     except Exception:
         return {"installed": False, "loggedIn": False, "available": False, "reason": "not_installed"}
+    finally:
+        await terminate_and_reap(proc)
 
     text = stdout.decode("utf-8", errors="replace").strip().lower()
     logged_in = proc.returncode == 0 and "logged in" in text

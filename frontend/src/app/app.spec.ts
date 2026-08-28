@@ -18,6 +18,7 @@ describe('App', () => {
 
   afterEach(() => {
     http.verify();
+    document.body.style.cursor = '';
     localStorage.removeItem('claude_onboarding_done');
   });
 
@@ -147,6 +148,26 @@ describe('App', () => {
     expect(spoken).toBe('Result Use npm test. Docs');
   });
 
+  it('should precompute MCP links from skills, permanent bindings, and the active tab', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    const app = fixture.componentInstance;
+
+    app.agents.set([{
+      id: 'writer', name: 'Writer', description: '', skills: ['google-agents-cli-publish'],
+      mcp: ['permanent-mcp'],
+    } as any]);
+    app.selectedAgent.set('writer');
+    app.chatTabs.update(tabs => tabs.map(tab => tab.id === app.activeChatId()
+      ? { ...tab, sessionMcps: ['session-mcp'] }
+      : tab));
+
+    expect(app.linkedMcpNames()).toEqual(new Set([
+      'session-mcp', 'permanent-mcp', 'claude.ai Google Calendar', 'claude.ai Google Drive',
+    ]));
+  });
+
   it('should normalize Claude Code reset timestamps', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
@@ -158,5 +179,47 @@ describe('App', () => {
     expect(app.claudeResetMillis(1784188800000)).toBe(1784188800000);
     expect(app.claudeResetMillis('')).toBeNull();
     expect(app.claudeResetMillis('not-a-date')).toBeNull();
+  });
+
+  it('should render narrow, consistent resize handles for the main boundaries', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    fixture.detectChanges();
+
+    for (const selector of ['.sidebar-resize', '.right-resize', '.input-resize']) {
+      const handle = fixture.nativeElement.querySelector(selector) as HTMLElement | null;
+      expect(handle).not.toBeNull();
+      expect(handle?.querySelector(`${selector}-track`)).not.toBeNull();
+      expect(handle?.querySelector(`${selector}-grip`)).not.toBeNull();
+    }
+  });
+
+  it('should keep sidebar, right panel, and input resizing within their bounds', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    flushInitialRequests();
+    const app = fixture.componentInstance;
+
+    app.sidebarWidth.set(300);
+    app.onResizeStart(new MouseEvent('mousedown', { clientX: 100 }));
+    app.onMouseMove(new MouseEvent('mousemove', { clientX: 260 }));
+    expect(app.sidebarWidth()).toBe(460);
+    app.onMouseMove(new MouseEvent('mousemove', { clientX: -1000 }));
+    expect(app.sidebarWidth()).toBe(200);
+    app.onMouseUp();
+
+    app.rightWidth.set(400);
+    app.onRightResizeStart(new MouseEvent('mousedown', { clientX: 500 }));
+    app.onMouseMove(new MouseEvent('mousemove', { clientX: 1000 }));
+    expect(app.rightWidth()).toBe(280);
+    app.onMouseUp();
+
+    app.inputHeight.set(240);
+    app.onInputResizeStart(new MouseEvent('mousedown', { clientY: 100 }));
+    app.onMouseMove(new MouseEvent('mousemove', { clientY: 500 }));
+    expect(app.inputHeight()).toBe(100);
+    app.onMouseUp();
+    expect(document.body.style.cursor).toBe('');
   });
 });

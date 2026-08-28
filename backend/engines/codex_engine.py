@@ -76,7 +76,11 @@ import os
 import sys
 from pathlib import Path
 
-from helpers import safe_kill_process, wrap_cmd
+from helpers import wrap_cmd
+try:
+    from process_lifecycle import terminate_and_reap
+except ImportError:
+    from backend.process_lifecycle import terminate_and_reap
 
 from .base import RunResult
 
@@ -285,7 +289,7 @@ async def run_turn(
 
         async for line in proc.stdout:
             if is_cancelled and is_cancelled():
-                safe_kill_process(proc)
+                await terminate_and_reap(proc)
                 break
 
             raw = line.decode("utf-8", errors="replace").strip()
@@ -372,6 +376,10 @@ async def run_turn(
         await proc.wait()
     except Exception as e:
         return RunResult(output="".join(output_parts), session_id=session_id, error=str(e))
+    finally:
+        # CancelledError is not caught by Exception. Reap the child so Windows
+        # Proactor pipe transports do not outlive the event loop.
+        await terminate_and_reap(proc)
 
     # 已驗證：CLI 層級的失敗（例如 resume 子指令收到不支援的 flag）不會用
     # JSON 事件回報，只會印純文字錯誤訊息到 stdout/stderr 然後以非零結束碼

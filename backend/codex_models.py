@@ -17,6 +17,10 @@ import json
 from pathlib import Path
 
 from helpers import wrap_cmd
+try:
+    from process_lifecycle import terminate_and_reap
+except ImportError:
+    from backend.process_lifecycle import terminate_and_reap
 
 
 class CodexModelsError(RuntimeError):
@@ -44,11 +48,9 @@ async def fetch_codex_models(codex_bin: str, timeout: float = 15.0) -> list[dict
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError as exc:
-        try:
-            proc.kill()
-        except Exception:
-            pass
         raise CodexModelsError("Codex model catalog query timed out") from exc
+    finally:
+        await terminate_and_reap(proc)
 
     if proc.returncode != 0:
         msg = stderr.decode("utf-8", errors="replace").strip()

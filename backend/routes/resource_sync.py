@@ -12,6 +12,11 @@ from aiohttp import web
 
 from resource_sync import ResourceSyncService
 
+try:
+    from task_registry import create_background_task
+except ImportError:
+    from backend.task_registry import create_background_task
+
 _sync_lock = asyncio.Lock()
 _DEFAULT_RECONCILE_INTERVAL = 30.0
 _STATUS_CACHE_TTL = 300.0
@@ -159,8 +164,8 @@ async def _status_refresh_loop() -> None:
 
 async def resource_reconcile_cleanup_ctx(app: web.Application):
     tasks = [
-        asyncio.create_task(_auto_reconcile_loop()),
-        asyncio.create_task(_status_refresh_loop()),
+        create_background_task(_auto_reconcile_loop()),
+        create_background_task(_status_refresh_loop()),
     ]
     yield
     for task in tasks:

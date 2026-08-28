@@ -4,7 +4,9 @@ import html
 import io
 import json
 import os
+import shlex
 import shutil
+import subprocess
 import sqlite3
 import tempfile
 import time
@@ -42,6 +44,17 @@ import sys
 import platform
 
 import types
+
+try:
+    from task_registry import (
+        cancel_background_tasks as _cancel_background_tasks,
+        create_background_task as _create_background_task,
+    )
+except ImportError:
+    from backend.task_registry import (
+        cancel_background_tasks as _cancel_background_tasks,
+        create_background_task as _create_background_task,
+    )
 
 class _CustomModule(types.ModuleType):
     def __setattr__(self, name, value):
@@ -191,6 +204,10 @@ _codex_models_cache: dict = {"data": None, "expires": 0.0}
 # Local MCP config (Docker metadata, compose paths, etc.)
 
 from helpers import _read_agent_body, _read_skills_content, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
+try:
+    from process_lifecycle import terminate_and_reap
+except ImportError:
+    from backend.process_lifecycle import terminate_and_reap
 import stt
 import dir_cache
 
@@ -525,21 +542,45 @@ def _detect_claude_version() -> str:
 CLAUDE_VERSION = _detect_claude_version()
 
 
+_CONFIG_COMMAND_SHELL_CHARS = frozenset("&|;<>()`$\n\r")
+
+
+def _run_config_command(command: str, label: str) -> str:
+    """Run a configured key command without invoking a shell.
+
+    Configuration commands are intentionally limited to an executable and
+    arguments. Shell operators are rejected so a config value cannot turn a
+    key lookup into arbitrary command chaining. ``echo`` is handled directly
+    because it is a shell builtin on Windows and is useful in tests/examples.
+    """
+    if not command or any(char in command for char in _CONFIG_COMMAND_SHELL_CHARS):
+        if command:
+            print(f"[{label}] rejected shell control characters")
+        return ""
+    try:
+        argv = shlex.split(command, posix=os.name != "nt")
+    except ValueError as exc:
+        print(f"[{label}] invalid command syntax: {exc}")
+        return ""
+    if not argv:
+        return ""
+    if argv[0].lower() == "echo":
+        return " ".join(argv[1:]).strip()
+    try:
+        result = subprocess.run(
+            argv, shell=False, capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip()
+    except Exception as exc:
+        print(f"[{label}] error: {exc}")
+        return ""
+
+
 def _resolve_api_key() -> str:
     """Run apiKeyCmd from config and return the trimmed API key, or '' if not set."""
     cfg = _load_config()
     cmd = cfg.get("apiKeyCmd", "").strip()
-    if not cmd:
-        return ""
-    import subprocess
-    try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=5
-        )
-        return result.stdout.strip()
-    except Exception as e:
-        print(f"[apiKeyCmd] error: {e}")
-        return ""
+    return _run_config_command(cmd, "apiKeyCmd")
 
 
 def _resolve_codex_api_key() -> str:
@@ -548,17 +589,7 @@ def _resolve_codex_api_key() -> str:
     key 的 resolver 完全分開，不共用任何邏輯，避免哪天改壞了互相污染。"""
     cfg = _load_config()
     cmd = cfg.get("codexApiKeyCmd", "").strip()
-    if not cmd:
-        return ""
-    import subprocess
-    try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=5
-        )
-        return result.stdout.strip()
-    except Exception as e:
-        print(f"[codexApiKeyCmd] error: {e}")
-        return ""
+    return _run_config_command(cmd, "codexApiKeyCmd")
 
 
 def build_memory_context(agent_id: str, cwd: str, query: str = "") -> str:
@@ -837,8 +868,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             await proc.wait()
         finally:
             active_procs.pop(client_id, None)
-            if proc and proc.returncode is None:
-                safe_kill_process(proc)
+            await terminate_and_reap(proc)
 
     async def _run_engine_turn(engine, engine_api_key: str, full_message: str) -> None:
         """Agent 自己宣告了非 Claude 的 engine: 時走這裡——完全跳過
@@ -1126,6 +1156,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 await proc.wait()
             finally:
                 active_procs.pop(client_id, None)
+                await terminate_and_reap(proc)
 
             await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
             return collected, new_sid, resume_failed
@@ -1349,31 +1380,37 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
             except Exception:
                 pass
 
-    parts = []
+    def _ps_quote(value: str) -> str:
+        """Quote a value for the PowerShell command passed as one argv item."""
+        return "'" + value.replace("'", "''") + "'"
+
+    def _monitor_command(agent_id: str, color: str) -> str:
+        label = f">>> @{agent_id} 監控中..."
+        log_name = f".agent_{agent_id}.log"
+        return (
+            f"Clear-Host; "
+            f"Write-Host {_ps_quote(label)} -ForegroundColor {color}; "
+            f"Get-Content -LiteralPath {_ps_quote(log_name)} -Wait -Tail 20"
+        )
+
     first_agent = members[0]["agent"]
-    parts.append(
-        f'wt -d "{project_path}" powershell -NoExit -Command "'
-        f'Clear-Host; '
-        f'Write-Host \">>> @{first_agent} 監控中...\" -ForegroundColor Magenta; '
-        f'Get-Content -Path .agent_{first_agent}.log -Wait -Tail 20"'
-    )
-    
+    wt_args = [
+        "wt", "-d", project_path, "powershell", "-NoExit", "-Command",
+        _monitor_command(first_agent, "Magenta"),
+    ]
+
     for i, m in enumerate(members[1:], start=1):
         agent_id = m["agent"]
         split_flag = "-V" if i % 2 == 1 else "-H"
         color = "Green" if i % 3 == 1 else "Cyan" if i % 3 == 2 else "Yellow"
-        parts.append(
-            f'split-pane {split_flag} -d "{project_path}" powershell -NoExit -Command "'
-            f'Clear-Host; '
-            f'Write-Host \">>> @{agent_id} 監控中...\" -ForegroundColor {color}; '
-            f'Get-Content -Path .agent_{agent_id}.log -Wait -Tail 20"'
-        )
-    
-    # 修正 2：用 ' ";" ' 連接，確保 shell 不會截斷指令，讓 wt 順利處理 split-pane 參數
-    full_cmd = ' ";" '.join(parts)
+        wt_args.extend([
+            ";", "split-pane", split_flag, "-d", project_path,
+            "powershell", "-NoExit", "-Command", _monitor_command(agent_id, color),
+        ])
+
     try:
         import subprocess
-        subprocess.Popen(full_cmd, shell=True)
+        subprocess.Popen(wt_args, shell=False)
     except Exception as e:
         print(f"[wt launch error] {e}")
 
@@ -1600,8 +1637,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                 await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': f'[Error: {e}]'})}\n\n".encode())
             finally:
                 active_procs.pop(proc_key, None)
-                if proc and proc.returncode is None:
-                    safe_kill_process(proc)
+                await terminate_and_reap(proc)
 
             await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
             return "".join(collected_output)
@@ -2755,7 +2791,7 @@ async def handle_schedules_run(request: web.Request) -> web.Response:
     target = next((s for s in schedules if s["id"] == sid), None)
     if not target:
         return web.json_response({"error": "not found"}, status=404)
-    asyncio.create_task(run_schedule_prompt(target))
+    _create_background_task(run_schedule_prompt(target))
     target["last_run"] = datetime.now().isoformat()
     save_schedules(schedules)
     return web.json_response({"ok": True})
@@ -2977,19 +3013,11 @@ async def handle_cli(request: web.Request) -> web.Response:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         return web.json_response({"output": out.decode("utf-8", errors="replace"), "code": proc.returncode})
     except asyncio.TimeoutError:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return web.json_response({"output": "[逾時]", "code": -1})
     except Exception as e:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return web.json_response({"output": str(e), "code": -1})
+    finally:
+        await terminate_and_reap(proc)
 
 async def _drain_mcp(name: str, proc: asyncio.subprocess.Process) -> None:
     """Drain stdout+stderr of an MCP process into _mcp_logs[name]."""
@@ -3025,11 +3053,9 @@ async def handle_mcp_logs(request: web.Request) -> web.Response:
             out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
             lines = out.decode("utf-8", errors="replace").splitlines()
         except Exception:
-            if p:
-                try:
-                    safe_kill_process(p)
-                except Exception:
-                    pass
+            pass
+        finally:
+            await terminate_and_reap(p)
 
     return web.json_response({"name": name, "lines": lines[-100:]})
 
@@ -3174,7 +3200,7 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
         else:
             proc = _mcp_procs.pop(name, None)
             if proc:
-                safe_kill_process(proc)
+                await terminate_and_reap(proc)
 
     # ── START / RESTART phase 2: launch ──────────────────────────────────────
     if action in ("start", "restart"):
@@ -3201,7 +3227,7 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
                 )
             _mcp_procs[name] = proc
             _mcp_logs[name] = []
-            asyncio.create_task(_drain_mcp(name, proc))
+            _create_background_task(_drain_mcp(name, proc))
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)})
 
@@ -3217,6 +3243,7 @@ async def _codex_mcp_list() -> list[dict]:
     Codex keeps its own config, `codex mcp add` never touches Claude's)."""
     if not CODEX_BIN:
         return []
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             CODEX_BIN, "mcp", "list", "--json",
@@ -3227,6 +3254,8 @@ async def _codex_mcp_list() -> list[dict]:
         return json.loads(out.decode("utf-8", errors="replace"))
     except Exception:
         return []
+    finally:
+        await terminate_and_reap(proc)
 
 
 async def _mcp_handshake_check(command: str, args: list[str], env: dict, timeout: float = 8.0) -> bool:
@@ -3272,7 +3301,7 @@ async def _mcp_handshake_check(command: str, args: list[str], env: dict, timeout
         return False
     finally:
         if proc:
-            safe_kill_process(proc)
+            await terminate_and_reap(proc)
 
 
 async def handle_codex_mcp_status(request: web.Request) -> web.Response:
@@ -3490,7 +3519,7 @@ async def handle_telegram_put(request: web.Request) -> web.Response:
 
     if cfg["enabled"] and cfg["token"]:
         if _tg_task is None or _tg_task.done():
-            _tg_task = asyncio.create_task(_telegram_poll())
+            _tg_task = _create_background_task(_telegram_poll())
     else:
         if _tg_task and not _tg_task.done():
             _tg_task.cancel()
@@ -3575,7 +3604,7 @@ async def handle_line_webhook(request: web.Request) -> web.Response:
         text        = msg.get("text", "").strip()
         reply_token = event.get("replyToken", "")
         if text and reply_token:
-            asyncio.create_task(_process_line_message(text, reply_token))
+            _create_background_task(_process_line_message(text, reply_token))
     return web.Response(status=200, text="OK")
 
 async def _process_line_message(text: str, reply_token: str) -> None:
@@ -3859,8 +3888,12 @@ def build_app() -> web.Application:
     from routes.mcp_debugger import handle_mcp_rpc
     from routes.run_artifacts import handle_run_artifacts
 
-    route_groups: dict[str, list[tuple[str, any]]] = {}
-    for method, path, handler in [
+    try:
+        from routes.registration import register_routes
+    except ImportError:
+        from backend.routes.registration import register_routes
+
+    register_routes(app, cors, [
         ("GET",    "/api/team/run/{run_id}/artifacts", handle_run_artifacts),
         ("POST",   "/api/mcp/rpc",         handle_mcp_rpc),
         ("GET",    "/api/usage",           handle_usage),
@@ -3941,13 +3974,7 @@ def build_app() -> web.Application:
         ("GET",    "/api/mem/teams/{id}/projects",                   handle_mem_team_projects_list),
         ("GET",    "/api/mem/teams/{id}/projects/{slug}",            handle_mem_team_project_get),
         ("PUT",    "/api/mem/teams/{id}/projects/{slug}",            handle_mem_team_project_put),
-    ]:
-        route_groups.setdefault(path, []).append((method, handler))
-
-    for path, method_handlers in route_groups.items():
-        resource = cors.add(app.router.add_resource(path))
-        for method, handler in method_handlers:
-            cors.add(resource.add_route(method, handler))
+    ])
 
     # ── Modular Routes ──
     import sys
@@ -3967,14 +3994,15 @@ def build_app() -> web.Application:
 
     async def cleanup_processes(app_ref):
         _log("[cleanup] Shutting down, cleaning up all active processes...")
+        await _cancel_background_tasks()
         for k in list(active_procs.keys()):
             proc = active_procs.pop(k, None)
             if proc:
-                safe_kill_process(proc)
+                await terminate_and_reap(proc)
         for name in list(_mcp_procs.keys()):
             proc = _mcp_procs.pop(name, None)
             if proc:
-                safe_kill_process(proc)
+                await terminate_and_reap(proc)
 
         if HAS_AGENT_SDK and _team_pool is not None:
             try:
@@ -4007,7 +4035,7 @@ async def run_schedule_runner() -> None:
                 if last_run is None or (now - prev).total_seconds() < 60 and prev > last_run:
                     sc["last_run"] = now.isoformat()
                     changed = True
-                    asyncio.create_task(run_schedule_prompt(sc))
+                    _create_background_task(run_schedule_prompt(sc))
             except Exception:
                 pass
         if changed:
@@ -4062,19 +4090,19 @@ async def run_schedule_prompt(schedule: dict) -> None:
 async def on_startup(app: web.Application) -> None:
     global _tg_task
     _log(f"Backend started. Claude: {CLAUDE_BIN}")
-    asyncio.create_task(run_schedule_runner())
+    _create_background_task(run_schedule_runner())
     # 預熱引擎可用性 cache，避免開機後第一個真的用到的請求要付冷啟動的
     # subprocess spawn 成本（claude auth status / codex login status）。
     from engines.availability import get_status as _prime_engine_status
-    asyncio.create_task(_prime_engine_status())
+    _create_background_task(_prime_engine_status())
     if HAS_AGENT_SDK and _team_pool is not None:
         from session_pool import run_idle_pruner
-        asyncio.create_task(run_idle_pruner(_team_pool))
+        _create_background_task(run_idle_pruner(_team_pool))
     # Auto-start Telegram bot if configured
     tg_cfg = _load_tg_config()
     _tg_state.update({"token": tg_cfg.get("token",""), "enabled": tg_cfg.get("enabled", False)})
     if tg_cfg.get("enabled") and tg_cfg.get("token"):
-        _tg_task = asyncio.create_task(_telegram_poll())
+        _tg_task = _create_background_task(_telegram_poll())
 
 
 if __name__ == "__main__":

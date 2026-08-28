@@ -1161,9 +1161,26 @@ class TestMemviewAPI:
         body = await resp.json()
         assert isinstance(body, dict)
 
-    async def test_team_chat_endpoint(self, client, tmp_claude_home, sample_team, sample_agent):
-        """POST /api/team/chat 應能正常呼叫並回傳串流資料"""
+    async def test_team_chat_endpoint(
+        self, client, tmp_claude_home, sample_team, sample_agent, monkeypatch
+    ):
+        """POST /api/team/chat 應能正常呼叫並回傳串流資料，不啟動真實 CLI。"""
         import main
+
+        class FakeEngine:
+            name = "codex"
+
+            async def run_turn(self, **kwargs):
+                return type(
+                    "FakeResult",
+                    (),
+                    {"session_id": "test-team-chat-session", "error": "", "output": "測試回覆"},
+                )()
+
+        async def fake_resolve_engine(agent_id, request_engine=""):
+            return FakeEngine(), "", ""
+
+        monkeypatch.setattr(main, "_resolve_agent_engine_and_key", fake_resolve_engine)
         main.CLAUDE_HOME = tmp_claude_home
         main.TEAMS_DIR = tmp_claude_home / "teams"
         main.AGENTS_DIR = tmp_claude_home / "agents"

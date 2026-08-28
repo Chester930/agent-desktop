@@ -40,7 +40,11 @@ import asyncio
 import sys
 from pathlib import Path
 
-from helpers import safe_kill_process, wrap_cmd
+from helpers import wrap_cmd
+try:
+    from process_lifecycle import terminate_and_reap
+except ImportError:
+    from backend.process_lifecycle import terminate_and_reap
 
 _sync_lock = asyncio.Lock()
 
@@ -107,15 +111,12 @@ async def _run_cli(bin_path: str, args: list[str], timeout: float = 30.0) -> boo
         await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode == 0
     except asyncio.TimeoutError:
-        if proc:
-            try:
-                safe_kill_process(proc)
-            except Exception:
-                pass
         return False
     except Exception:
         # 包含 FileNotFoundError（binary 不存在，例如使用者沒裝 Codex）。
         return False
+    finally:
+        await terminate_and_reap(proc)
 
 
 async def sync_add(name: str, cfg: dict) -> dict:
@@ -167,6 +168,7 @@ async def codex_native_list() -> dict[str, dict]:
     """`codex mcp list --json`——Codex 有自己完全獨立的設定，不會出現在
     ~/.claude.json 裡。"""
     import json
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             _codex_bin(), "mcp", "list", "--json",
@@ -177,6 +179,8 @@ async def codex_native_list() -> dict[str, dict]:
         entries = json.loads(out.decode("utf-8", errors="replace"))
     except Exception:
         return {}
+    finally:
+        await terminate_and_reap(proc)
     result: dict[str, dict] = {}
     for e in entries:
         name = e.get("name")
