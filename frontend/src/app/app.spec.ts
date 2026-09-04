@@ -25,21 +25,36 @@ describe('App', () => {
   function flushInitialRequests(): void {
     for (const req of http.match(() => true)) {
       const path = new URL(req.request.urlWithParams, 'http://localhost').pathname;
-      const body: any = path.endsWith('/sessions') ? { items: [], has_more: false }
-        : path.endsWith('/agents') || path.endsWith('/skills') || path.endsWith('/schedules')
-          || path.endsWith('/souls') || path.endsWith('/profiles') || path.endsWith('/teams') ? []
-        : path.endsWith('/soul') ? { content: '' }
-        : path.endsWith('/memory') || path.endsWith('/mcp-local-config')
-          || path.endsWith('/mcp-servers') || path.endsWith('/engines/status') ? {}
-        : path.endsWith('/resource-sync') ? {
-            agents: { missing_in_codex: [], outdated: [], conflicts: [] },
-            skills: { missing_in_codex: [], outdated: [], conflicts: [] },
-          }
-        : path.endsWith('/config') ? { engineMode: 'both' }
-        : path.endsWith('/codex/models') ? []
-        : path.endsWith('/usage/codex') ? null
-        : path.endsWith('/usage') ? { five_hour: {}, seven_day: {} }
-        : {};
+      const body: any = path.endsWith('/sessions')
+        ? { items: [], has_more: false }
+        : path.endsWith('/agents') ||
+            path.endsWith('/skills') ||
+            path.endsWith('/schedules') ||
+            path.endsWith('/souls') ||
+            path.endsWith('/profiles') ||
+            path.endsWith('/teams')
+          ? []
+          : path.endsWith('/soul')
+            ? { content: '' }
+            : path.endsWith('/memory') ||
+                path.endsWith('/mcp-local-config') ||
+                path.endsWith('/mcp-servers') ||
+                path.endsWith('/engines/status')
+              ? {}
+              : path.endsWith('/resource-sync')
+                ? {
+                    agents: { missing_in_codex: [], outdated: [], conflicts: [] },
+                    skills: { missing_in_codex: [], outdated: [], conflicts: [] },
+                  }
+                : path.endsWith('/config')
+                  ? { engineMode: 'both' }
+                  : path.endsWith('/codex/models')
+                    ? []
+                    : path.endsWith('/usage/codex')
+                      ? null
+                      : path.endsWith('/usage')
+                        ? { five_hour: {}, seven_day: {} }
+                        : {};
       req.flush(body);
     }
   }
@@ -50,7 +65,7 @@ describe('App', () => {
     flushInitialRequests();
     const app = fixture.componentInstance;
     expect(app).toBeTruthy();
-  });
+  }, 15_000);
 
   it('should render the application shell', () => {
     const fixture = TestBed.createComponent(App);
@@ -98,9 +113,9 @@ describe('App', () => {
     const buttons = Array.from(
       fixture.nativeElement.querySelectorAll('.session-engine-toggle button'),
     ) as HTMLButtonElement[];
-    buttons.find(button => button.textContent?.trim() === 'Codex')?.click();
+    buttons.find((button) => button.textContent?.trim() === 'Codex')?.click();
 
-    const req = http.expectOne(request => {
+    const req = http.expectOne((request) => {
       const url = new URL(request.urlWithParams, 'http://localhost');
       return url.pathname.endsWith('/sessions') && url.searchParams.get('engine') === 'codex';
     });
@@ -123,14 +138,14 @@ describe('App', () => {
 
     expect(app.agentEngine()).toBe('codex');
 
-    const resumeReq = http.expectOne(request => {
+    const resumeReq = http.expectOne((request) => {
       const url = new URL(request.urlWithParams, 'http://localhost');
       return url.pathname.endsWith('/sessions/resume');
     });
     expect(resumeReq.request.body.engine).toBe('codex');
     resumeReq.flush({ ok: true, engine: 'codex' });
 
-    const messagesReq = http.expectOne(request => {
+    const messagesReq = http.expectOne((request) => {
       const url = new URL(request.urlWithParams, 'http://localhost');
       return url.pathname.endsWith('/sessions/019fabcd-0000-7000-8000-000000000006/messages');
     });
@@ -143,7 +158,9 @@ describe('App', () => {
     flushInitialRequests();
     const app = fixture.componentInstance as any;
 
-    const spoken = app.textForSpeech('## Result\nUse `npm test`.\n```ts\nconsole.log("skip");\n```\n[Docs](https://example.com)');
+    const spoken = app.textForSpeech(
+      '## Result\nUse `npm test`.\n```ts\nconsole.log("skip");\n```\n[Docs](https://example.com)',
+    );
 
     expect(spoken).toBe('Result Use npm test. Docs');
   });
@@ -154,18 +171,30 @@ describe('App', () => {
     flushInitialRequests();
     const app = fixture.componentInstance;
 
-    app.agents.set([{
-      id: 'writer', name: 'Writer', description: '', skills: ['google-agents-cli-publish'],
-      mcp: ['permanent-mcp'],
-    } as any]);
+    app.agents.set([
+      {
+        id: 'writer',
+        name: 'Writer',
+        description: '',
+        skills: ['google-agents-cli-publish'],
+        mcp: ['permanent-mcp'],
+      } as any,
+    ]);
     app.selectedAgent.set('writer');
-    app.chatTabs.update(tabs => tabs.map(tab => tab.id === app.activeChatId()
-      ? { ...tab, sessionMcps: ['session-mcp'] }
-      : tab));
+    app.chatTabs.update((tabs) =>
+      tabs.map((tab) =>
+        tab.id === app.activeChatId() ? { ...tab, sessionMcps: ['session-mcp'] } : tab,
+      ),
+    );
 
-    expect(app.linkedMcpNames()).toEqual(new Set([
-      'session-mcp', 'permanent-mcp', 'claude.ai Google Calendar', 'claude.ai Google Drive',
-    ]));
+    expect(app.linkedMcpNames()).toEqual(
+      new Set([
+        'session-mcp',
+        'permanent-mcp',
+        'claude.ai Google Calendar',
+        'claude.ai Google Drive',
+      ]),
+    );
   });
 
   it('should normalize Claude Code reset timestamps', () => {

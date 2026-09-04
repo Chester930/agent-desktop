@@ -99,7 +99,7 @@ cd frontend && npm run e2e -- resize.spec.ts --project=chromium
 - 新增 `routes/registration.py`，將核心 route grouping、aiohttp resource 建立與 CORS 綁定從 `main.py` 抽出。
 - Windows Terminal monitor 改用 argv 陣列與 PowerShell 單引數命令，移除最後一個 `shell=True`。
 - 補上 task registry、安全命令測試，並將維護中的前端切片納入 CI Prettier gate。
-- root backend test 改用工作區 `.pytest-tmp/backend-tests`，避免 Windows/npm 子程序無法寫入系統暫存目錄。
+- root backend test 不再指定固定共享 basetemp；由 pytest 使用每次執行隔離的系統暫存目錄，避免 Windows 上舊測試程序或平行工作污染 `.pytest-tmp/backend-tests`。
 
 ### 第二階段驗證
 
@@ -196,3 +196,50 @@ cd frontend && npm run e2e -- resize.spec.ts --project=chromium
 | `git diff --check` | 通過（僅 Git 顯示既有 LF/CRLF 轉換提示） |
 
 嚴格 warning-as-error 序列在 405 tests passed 後，於排程測試 setup 將同一個 teardown warning 升級為 1 error。單獨執行受影響的排程測試，以及 lifecycle 相關 targeted tests 均通過；該 Proactor 警告尚未視為已完全消除，列入下一輪測試 teardown 專項。
+
+## 第六階段：測試隔離與 Agent 事件契約（2026-09-04）
+
+### 測試與 CI 隔離
+
+- root `test:backend` 不再指定固定共享 `.pytest-tmp`，交由 pytest 使用每次執行隔離的系統暫存目錄，避免 Windows 舊測試程序或平行工作污染固定目錄。
+- CI backend job 改用 `${{ runner.temp }}/agent-desktop-pytest` 作為工作階段專用 basetemp；仍保留 coverage 報告入口與現有 `--cov-fail-under=0` 基線。
+- 新增跨平台 `tests/run-all.js`，統一以 `npm test` 作為 repository-level test runner，Windows 使用 `npm.cmd` 與 shell 相容啟動方式。
+
+### Agent 事件契約基礎
+
+- 新增 `frontend/src/app/agent-events.ts`，定義 `run_started`、`text_delta`、`tool_call_start/end`、`permission_requested`、`member_started/finished`、`usage_updated`、`run_error` 與 `run_finished` 等 canonical event。
+- 同一 normalizer 暫時兼容既有 `assistant`、`user`、`tool_use`、`tool_result`、`exec_*`、`agent_*` 與 `result` SSE 事件，讓後續接入 ACP 或其他 CLI Agent 時不必把 legacy 格式擴散到 UI。
+- 目前僅建立型別、正規化器與回歸測試，尚未改變既有 chat runtime；下一階段再把 backend SSE 與 team stream 接到 canonical event layer。
+
+### 第六階段驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| backend full suite | 通過，406 tests passed |
+| frontend unit tests | 通過，21 tests passed |
+| `npm run typecheck` | 通過 |
+| `npm run frontend:build` | 通過 |
+| `npx prettier --check`（事件契約與 App smoke test） | 通過 |
+| `git diff --check` | 通過（僅 Git 顯示既有 LF/CRLF 轉換提示） |
+
+### 下一步
+
+1. 將 backend `/api/chat` 與 team stream 的 legacy SSE 轉換集中到 canonical event layer。
+2. 以 fake ACP/CLI agent 測試 session restore、permission、tool lifecycle 與錯誤收尾，再接入 Gemini CLI 等外部 ACP adapter。
+3. 完成 `main.py` 與 `app.ts` 的剩餘 feature facade 拆分，並將 CI coverage threshold、lint 與 Docker smoke test 從入口建立提升為正式門檻。
+
+## 第七階段：Canonical Agent event layer 接入（2026-09-04）
+
+- 單人 chat、team chat、team execute 的前端 SSE callback 統一先經過 `normalizeAgentEvents()`，再更新訊息、工具狀態、成員狀態、費用與錯誤。
+- 保留 team 專用的 `project_created`、`done`、`permission_request` 等控制事件與既有 team-run step event，避免為了統一事件而破壞現有執行進度模型。
+- 補上 `permission_request` 與 `total_cost_usd` 的 canonical mapping；未知或格式錯誤事件仍安全忽略。
+- 不加入 Gemini CLI、ACP adapter 或任何新的外部 CLI runtime；本階段只完成 provider-neutral 的事件邊界，供未來接入其他 Agent framework。
+
+### 第七階段驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| canonical event targeted tests | 通過，4 tests passed |
+| frontend full suite | 通過，22 tests passed |
+| `npm run typecheck` | 通過 |
+| `npm run frontend:build` | 通過 |

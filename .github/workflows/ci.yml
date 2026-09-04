@@ -32,7 +32,7 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run backend tests
-        run: python -m pytest --basetemp .pytest-tmp/backend-tests --cov=backend --cov-report=term-missing --cov-fail-under=0
+        run: python -m pytest --basetemp "${{ runner.temp }}/agent-desktop-pytest" --cov=backend --cov-report=term-missing --cov-fail-under=0
 
   frontend:
     runs-on: ubuntu-latest

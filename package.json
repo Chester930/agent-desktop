@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron . --dev",
     "test": "npm run test:backend && npm run test:frontend",
-    "test:backend": "python -m pytest --basetemp .pytest-tmp/backend-tests",
+    "test:backend": "python -m pytest",
     "test:frontend": "cd frontend && npm test -- --watch=false --no-progress",
     "test:e2e": "cd frontend && npm run e2e",
     "typecheck": "cd frontend && npx tsc --noEmit -p tsconfig.app.json",

@@ -24,6 +24,7 @@ import { SettingsService, AppSettings } from './settings.service';
 import { LayoutResizeService } from './layout-resize.service';
 import { SessionFacade } from './session-facade.service';
 import { McpFacade } from './mcp-facade.service';
+import { normalizeAgentEvents } from './agent-events';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, McpServer, McpTool, McpType, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
@@ -3527,70 +3528,57 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.shouldScroll = true;
 
     // Build event handler (shared between Claude and provider mode)
-    const onEvent = (ev: any) => {
-      if (ev.type === 'assistant' && ev.message?.content) {
-        // tool is done once assistant starts replying
-        this.tabMessages(tabId, msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
-        for (const block of ev.message.content) {
-          if (block.type === 'text') {
-            this.tabMessages(tabId, msgs => {
-              const copy = [...msgs];
-              copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + block.text };
-              return copy;
-            });
-            if (tabId === this.activeChatId()) this.shouldScroll = true;
-            if (block.text) this._noteEngineRuntimeFailure(block.text);
-          }
-        }
-      } else if (ev.type === 'text') {
-        this.tabMessages(tabId, msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
-        this.tabMessages(tabId, msgs => {
-          const copy = [...msgs];
-          copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + ev.text };
-          return copy;
-        });
-        if (tabId === this.activeChatId()) this.shouldScroll = true;
-        if (ev.text) this._noteEngineRuntimeFailure(ev.text);
-      } else if (ev.type === 'tool_use') {
-        this.tabMessages(tabId, m => [...m, {
-          role: 'tool', text: JSON.stringify(ev.input ?? {}, null, 2),
-          toolName: ev.name, toolUseId: ev.id, isRunning: true, startTime: Date.now()
-        }]);
-        if (tabId === this.activeChatId()) this.shouldScroll = true;
-      } else if (ev.type === 'user' && ev.message?.content) {
-        for (const block of ev.message.content) {
-          if (block.type === 'tool_result') {
-            const res = typeof block.content === 'string'
-              ? block.content
-              : JSON.stringify(block.content);
-            this.tabMessages(tabId, msgs => msgs.map(m =>
-              m.toolUseId === block.tool_use_id
-                ? { ...m, isRunning: false, result: res.slice(0, 3000) }
-                : m
-            ));
-          }
-        }
-      } else if (ev.type === 'result') {
-        const totalCost = ev.total_cost_usd ?? 0;
-        const msgCost = Math.max(0, totalCost - this._prevCostUsd);
-        this._prevCostUsd = totalCost;
-        this.tabTokenUsage(tabId, {
-          input: ev.usage?.input_tokens ?? 0,
-          output: ev.usage?.output_tokens ?? 0,
-          cost: totalCost,
-        });
-        // 標記本次訊息費用
-        if (msgCost > 0) {
+    const onEvent = (raw: unknown) => {
+      for (const ev of normalizeAgentEvents(raw)) {
+        if (ev.type === 'text_delta') {
+          // tool is done once assistant starts replying
+          this.tabMessages(tabId, msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
-            for (let i = copy.length - 1; i >= 0; i--) {
-              if (copy[i].role === 'assistant') {
-                copy[i] = { ...copy[i], cost: msgCost };
-                break;
-              }
-            }
+            copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + ev.text };
             return copy;
           });
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
+          if (ev.text) this._noteEngineRuntimeFailure(ev.text);
+        } else if (ev.type === 'tool_call_start') {
+          this.tabMessages(tabId, m => [...m, {
+            role: 'tool', text: JSON.stringify(ev.input ?? {}, null, 2),
+            toolName: ev.name, toolUseId: ev.id, isRunning: true, startTime: Date.now()
+          }]);
+          if (tabId === this.activeChatId()) this.shouldScroll = true;
+        } else if (ev.type === 'tool_call_end') {
+          const res = typeof ev.output === 'string' ? ev.output : JSON.stringify(ev.output ?? '');
+          this.tabMessages(tabId, msgs => msgs.map(m =>
+            m.toolUseId === ev.id
+              ? { ...m, isRunning: false, result: res.slice(0, 3000) }
+              : m
+          ));
+        } else if (ev.type === 'run_finished') {
+          const totalCost = ev.cost_usd ?? 0;
+          const msgCost = Math.max(0, totalCost - this._prevCostUsd);
+          this._prevCostUsd = totalCost;
+          const usage = ev.usage ?? {};
+          this.tabTokenUsage(tabId, {
+            input: Number(usage['input_tokens'] ?? 0),
+            output: Number(usage['output_tokens'] ?? 0),
+            cost: totalCost,
+          });
+          // 標記本次訊息費用
+          if (msgCost > 0) {
+            this.tabMessages(tabId, msgs => {
+              const copy = [...msgs];
+              for (let i = copy.length - 1; i >= 0; i--) {
+                if (copy[i].role === 'assistant') {
+                  copy[i] = { ...copy[i], cost: msgCost };
+                  break;
+                }
+              }
+              return copy;
+            });
+          }
+        } else if (ev.type === 'run_error') {
+          this._noteEngineRuntimeFailure(ev.text);
+          this.tabMessages(tabId, m => [...m, { role: 'error', text: ev.text }]);
         }
       }
     };
@@ -3661,43 +3649,52 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const abortFn = this.claude.streamTeamChat(
       text,
       curTab.teamId,
-      (ev) => {
-        if (ev.type === 'agent_start') {
-          const agentName = ev.agent;
-          const msg: ChatMessage = {
-            role: 'assistant',
-            agentId: agentName,
-            text: '',
-            isStreaming: true,
-            time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
-          };
-          this.tabMessages(tabId, m => [...m, msg]);
-          if (tabId === this.activeChatId()) this.shouldScroll = true;
-        } else if (ev.type === 'text') {
-          this.tabMessages(tabId, msgs => {
-            const copy = [...msgs];
-            for (let i = copy.length - 1; i >= 0; i--) {
-              if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
-                copy[i] = { ...copy[i], text: copy[i].text + ev.text };
-                break;
+      (raw) => {
+        for (const ev of normalizeAgentEvents(raw)) {
+          if (ev.type === 'member_started') {
+            const msg: ChatMessage = {
+              role: 'assistant',
+              agentId: ev.agent,
+              text: '',
+              isStreaming: true,
+              time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
+            };
+            this.tabMessages(tabId, m => [...m, msg]);
+            if (tabId === this.activeChatId()) this.shouldScroll = true;
+          } else if (ev.type === 'text_delta') {
+            this.tabMessages(tabId, msgs => {
+              const copy = [...msgs];
+              for (let i = copy.length - 1; i >= 0; i--) {
+                if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
+                  copy[i] = { ...copy[i], text: copy[i].text + ev.text };
+                  break;
+                }
               }
-            }
-            return copy;
-          });
-          if (tabId === this.activeChatId()) this.shouldScroll = true;
-        } else if (ev.type === 'agent_done') {
-          this.tabMessages(tabId, msgs => {
-            const copy = [...msgs];
-            for (let i = copy.length - 1; i >= 0; i--) {
-              if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
-                copy[i] = { ...copy[i], isStreaming: false };
-                break;
+              return copy;
+            });
+            if (tabId === this.activeChatId()) this.shouldScroll = true;
+          } else if (ev.type === 'member_finished') {
+            this.tabMessages(tabId, msgs => {
+              const copy = [...msgs];
+              for (let i = copy.length - 1; i >= 0; i--) {
+                if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
+                  copy[i] = { ...copy[i], isStreaming: false };
+                  break;
+                }
               }
-            }
-            return copy;
-          });
-          if (tabId === this.activeChatId()) this.shouldScroll = true;
-        } else if (ev.type === 'project_created') {
+              return copy;
+            });
+            if (tabId === this.activeChatId()) this.shouldScroll = true;
+          } else if (ev.type === 'run_error') {
+            if (ev.text) this._noteEngineRuntimeFailure(ev.text);
+            this.tabMessages(tabId, m => [...m, { role: 'error', text: ev.text }]);
+            this.tabStreaming(tabId, false);
+            if (tabId === this.activeChatId()) this.shouldScroll = true;
+          }
+        }
+
+        const ev = raw as any;
+        if (ev?.type === 'project_created') {
           createdProjectMeta = {
             teamId: curTab.teamId!,
             projectName: ev.project_name,
@@ -3710,11 +3707,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
           }]);
           this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, projectDir: ev.project_path } : t));
-          if (tabId === this.activeChatId()) this.shouldScroll = true;
-        } else if (ev.type === 'error') {
-          if (ev.text) this._noteEngineRuntimeFailure(ev.text);
-          this.tabMessages(tabId, m => [...m, { role: 'error', text: ev.text }]);
-          this.tabStreaming(tabId, false);
           if (tabId === this.activeChatId()) this.shouldScroll = true;
         }
       },
@@ -3796,8 +3788,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       teamId,
       projectPath,
       task,
-      (ev) => {
-        if (ev.type === 'exec_start') {
+      (raw) => {
+        for (const ev of normalizeAgentEvents(raw)) {
+          if (ev.type === 'member_started') {
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
@@ -3809,7 +3802,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-        } else if (ev.type === 'exec_text') {
+          } else if (ev.type === 'text_delta') {
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
@@ -3822,7 +3815,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             return copy;
           });
           if (tabId === this.activeChatId()) this.shouldScroll = true;
-        } else if (ev.type === 'exec_done') {
+          } else if (ev.type === 'member_finished') {
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
@@ -3834,7 +3827,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             }
             return copy;
           });
-        } else if (ev.type === 'permission_request') {
+          } else if (ev.type === 'permission_requested') {
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
@@ -3852,7 +3845,29 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             return copy;
           });
           if (tabId === this.activeChatId()) this.shouldScroll = true;
-        } else if (ev.type === 'done') {
+          } else if (ev.type === 'run_error') {
+            if (ev.text) this._noteEngineRuntimeFailure(ev.text);
+            this.tabMessages(tabId, msgs => {
+              const copy = [...msgs];
+              const lastIdx = copy.length - 1;
+              const lastMsg = copy[lastIdx];
+              if (lastMsg && lastMsg.teamRun) {
+                copy[lastIdx] = {
+                  ...lastMsg,
+                  text: `⚠ 執行出錯: ${ev.text}`,
+                  isStreaming: false,
+                  teamRun: { ...lastMsg.teamRun!, status: 'error' }
+                };
+              }
+              return copy;
+            });
+            this.tabStreaming(tabId, false);
+            this.tabStopFns.delete(tabId);
+          }
+        }
+
+        const ev = raw as any;
+        if (ev?.type === 'done') {
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
             const lastIdx = copy.length - 1;
@@ -3871,7 +3886,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           this.tabStopFns.delete(tabId);
           this.reload();
           if (tabId === this.activeChatId()) setTimeout(() => this.scrollToBottom(), 100);
-        } else if (ev.type === 'error') {
+        } else if (ev?.type === 'error') {
           if (ev.text) this._noteEngineRuntimeFailure(ev.text);
           this.tabMessages(tabId, msgs => {
             const copy = [...msgs];
