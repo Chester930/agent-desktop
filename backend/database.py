@@ -255,6 +255,21 @@ def get_engine_mode() -> str:
     mode = _load_config().get("engineMode", "both")
     return mode if mode in _VALID_ENGINE_MODES else "both"
 
+def get_checkpoint_retention_days() -> int | None:
+    """Optional retention window (in days) for the Team run checkpoint
+    store (see agent_harness.AgentCheckpointStore.purge_older_than() and
+    docs/SDD-2026-09-checkpoint-store-durability.md). Returns None when
+    unset or invalid, which means "retention disabled" — history is kept
+    forever unless the user explicitly opts into a cleanup window via the
+    `checkpointRetentionDays` config key. There is deliberately no default
+    value here: silently deleting a user's run history without an explicit
+    setting would be a surprising, hard-to-reverse action.
+    """
+    value = _load_config().get("checkpointRetentionDays")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
+
 # ── SQLite session index ──────────────────────────────────────────────────────
 _INDEX_DB = CLAUDE_HOME / "claude-desktop-index.db"
 

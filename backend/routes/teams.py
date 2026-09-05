@@ -254,6 +254,42 @@ async def _gc_team_runs_task() -> None:
             pass
 
 
+def _run_checkpoint_retention_once() -> int | None:
+    """One checkpoint-retention cycle, separated from the sleep loop below
+    so it can be tested directly without waiting on the real interval.
+
+    Returns the number of purged runs, or None when retention is disabled
+    (no `checkpointRetentionDays` configured — see
+    database.get_checkpoint_retention_days() and
+    docs/SDD-2026-09-checkpoint-store-durability.md). Disabled is the
+    default: this never runs unless the user has explicitly opted in.
+    """
+    import database as _db
+    days = _db.get_checkpoint_retention_days()
+    if days is None:
+        return None
+    try:
+        purged = _checkpoint_store().purge_older_than(days)
+    except Exception as exc:
+        _log(f"[CheckpointRetention] purge failed: {exc!r}")
+        return None
+    if purged:
+        _log(f"[CheckpointRetention] purged {purged} run(s) older than {days} day(s)")
+    return purged
+
+
+async def _gc_checkpoint_store_task() -> None:
+    """Optional background task for AgentCheckpointStore retention.
+
+    Sleeps first (like _gc_team_runs_task) so a fresh backend start never
+    immediately deletes history the moment retention gets configured; a
+    long interval is fine since this is disk hygiene, not memory pressure.
+    """
+    while True:
+        await asyncio.sleep(21600)  # 6 h
+        _run_checkpoint_retention_once()
+
+
 async def _agent_run_capture(
     run_id: str, step_idx: int,
     agent_id: str, prompt: str,
@@ -1151,9 +1187,20 @@ async def gc_team_runs_cleanup_ctx(app: web.Application):
         pass
 
 
+async def checkpoint_retention_cleanup_ctx(app: web.Application):
+    task = create_background_task(_gc_checkpoint_store_task())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 def register_team_routes(app: web.Application, cors_add) -> None:
     """Register all team + team run routes on the aiohttp app."""
     app.cleanup_ctx.append(gc_team_runs_cleanup_ctx)
+    app.cleanup_ctx.append(checkpoint_retention_cleanup_ctx)
 
     cors_add(app.router.add_get("/api/teams",            handle_teams))
     cors_add(app.router.add_get("/api/teams/{id}",       handle_team_get))
