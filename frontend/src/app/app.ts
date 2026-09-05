@@ -1064,25 +1064,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return null;
   });
 
-  cycleModel() {
-    if (this.effectiveEngine() === 'codex') {
-      // Codex 沒有像 Claude opus/sonnet/haiku 那種穩定的分級別名可以寫死
-      // 循環——改成即時問已安裝的 CLI 自己支援哪些模型（見
-      // loadCodexModels()），清單抓不到（例如還沒載完/查詢失敗）時，
-      // 保持只能看到「使用預設」，不猜測性地讓使用者選到一個可能不存在
-      // 的模型名稱。
-      const opts = this.activeCodexModelOptions();
-      if (opts.length <= 1) return;
-      const idx = (opts.indexOf(this.model()) + 1) % opts.length;
-      const v = opts[idx]; this.model.set(v); this.settings.save({ model: v });
-      return;
-    }
-    const idx = (this.MODEL_OPTIONS.indexOf(this.model() as any) + 1) % this.MODEL_OPTIONS.length;
-    const v = this.MODEL_OPTIONS[idx]; this.model.set(v); this.settings.save({ model: v });
-    this.bannerDismissed.set(false);
-    this.outOfQuota.set(false); // 切換模型時重設用量限制狀態
-  }
-
   toggleMic() {
     if (this.isRecording()) {
       this.stopAudioRecording();
