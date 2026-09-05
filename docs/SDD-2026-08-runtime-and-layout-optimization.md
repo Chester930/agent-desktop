@@ -219,8 +219,6 @@ cd frontend && npm run e2e -- resize.spec.ts --project=chromium
 | frontend unit tests | 通過，21 tests passed |
 | `npm run typecheck` | 通過 |
 | `npm run frontend:build` | 通過 |
-| `npx prettier --check`（事件契約與 App smoke test） | 通過 |
-| `git diff --check` | 通過（僅 Git 顯示既有 LF/CRLF 轉換提示） |
 
 ### 下一步
 
@@ -243,3 +241,80 @@ cd frontend && npm run e2e -- resize.spec.ts --project=chromium
 | frontend full suite | 通過，22 tests passed |
 | `npm run typecheck` | 通過 |
 | `npm run frontend:build` | 通過 |
+| `npx prettier --check`（事件契約與 App smoke test） | 通過 |
+| `git diff --check` | 通過（僅 Git 顯示既有 LF/CRLF 轉換提示） |
+
+## 第八階段：Internal agent harness 與 Team durability（2026-09-04）
+
+### 本地 contract harness
+
+- 新增 `backend/agent_harness.py`，提供不綁定 Claude/Codex 或第三方 framework 的
+  `AgentTask` 結構化 handoff：task id、父 run、指定 agent、輸入/輸出 references、
+  acceptance criteria、狀態與 retry count。
+- 新增 `AgentCheckpointStore`，以 atomic replace 寫入 `~/.claude/agent-runs/*.json`；
+  Team run 的建立與 lifecycle event 邊界會保存最新 snapshot。
+- `GET/stream` 找不到記憶體中的 run 時會嘗試還原 checkpoint；若 checkpoint 顯示
+  後端重啟前仍在 running，會標記為明確的 interrupted error，不會假裝可以安全續跑。
+- `evals/README.md` 與 `tests/test_agent_harness.py` 建立無 API key 的 deterministic
+  contract tests，檢查 handoff、checkpoint、必要/禁止事件、事件數與耗時。
+
+### Agency Agents importer
+
+- 保留 upstream tools/skills/memory/mcp/output_memory 與可用的 engine/model 欄位。
+- 寫入 repository/path/url/revision/license provenance，方便日後同步與稽核。
+- 僅覆寫由本 importer 管理的檔案；使用者手動建立的同名 agent/team 會保留並回報
+  skipped count。
+
+### 驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| harness/importer/team targeted tests | 通過，16 tests passed |
+| backend full suite | 通過，416 tests passed；1 個既有 Windows Proactor teardown warning |
+
+### 下一步
+
+1. 將 Team state/event snapshot 從 JSON 檔提升為可查詢的 SQLite/event-log，並加入 retention policy。
+2. 加入 fake provider contract runner，覆蓋 permission、tool lifecycle、cancel/error cleanup 與 artifact correctness。
+3. 以 Harbor 或 Inspect AI 作為外部 benchmark adapter；它們留在 eval/deployment 邊界，不進入產品 runtime。
+
+## 第九階段：依開源專案調查排序執行四份 SDD 任務書（2026-09-05）
+
+本輪依優先順序（P0-P3）執行四份獨立任務書，內容與細節見各自檔案：
+`docs/SDD-2026-09-acp-aligned-event-schema.md`、
+`docs/SDD-2026-09-checkpoint-store-durability.md`、
+`docs/SDD-2026-09-agent-task-dependency-graph.md`、
+`docs/SDD-2026-09-team-execution-mode-semantics.md`（各檔內有各自的「執行紀錄」）。
+
+### 已完成
+
+- **P0**：canonical agent event schema 對齊 ACP `session/update`——
+  `tool_call_start`/`tool_call_end` 新增 `status`、`permission_requested`
+  新增 `options`、新增 `plan` 事件；全部透過新增的 ACP 風格 raw 事件分支
+  （`tool_call`/`tool_call_update`/`plan`）承接，不影響既有 legacy 事件路徑。
+- **P1**：`AgentCheckpointStore` 從單檔 JSON 覆寫改為 SQLite append-only
+  event log（`runs` + `events` 表），新增 `list_run_ids(older_than=...)`
+  與 `purge_older_than(days)`；保留讀取舊版 `<run_id>.json` 的 fallback。
+- **P2**：`AgentTask` 新增 `blocks`/`blocked_by`/`discovered_from` 依賴圖
+  欄位與 `resolve_ready_tasks()` 純函式（狀態過濾、天生不怕循環依賴）。
+- **P3**：`routes/teams.py` 補上 `execution_mode` 的 handoff-chain 語意註解，
+  新增回歸測試釘死 sequential 模式「一去不回頭」的行為；評估後決定暫不
+  新增 `leader`（agent-as-tool）模式，理由記錄在對應 SDD 文件。
+
+### 第九階段驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| 後端 full suite (`python -m pytest`) | 通過，429 tests passed |
+| 前端 unit tests (`npm test -- --watch=false --no-progress`) | 通過，5 test files、25 tests passed |
+| `npm run typecheck` | 通過 |
+| `npm run frontend:build` | 通過 |
+
+### 後續切片
+
+1. 待有實際 ACP client 需求時，再接上真正的 ACP adapter（Gemini CLI／
+   Codex／Claude Code 的 ACP 實作），驗證本輪 schema 骨架是否足夠。
+2. `purge_older_than()` 目前不會被任何流程自動呼叫；若要做定期清理，
+   需要另外設計排程與使用者可見的保留天數設定。
+3. `resolve_ready_tasks()` 尚未接進 `routes/teams.py` 的實際排程；等有
+   非鏈狀 team 協作拓樸的真實需求時再評估串接。

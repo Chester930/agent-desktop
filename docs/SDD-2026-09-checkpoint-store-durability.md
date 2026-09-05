@@ -80,3 +80,25 @@ python -m pytest
 
 - [LangGraph Persistence 文件](https://docs.langchain.com/oss/python/langgraph/persistence)
 - [LangGraph checkpoints API 參考](https://reference.langchain.com/python/langgraph/checkpoints)
+
+## 執行紀錄（2026-09-05）
+
+- `backend/agent_harness.py` 的 `AgentCheckpointStore` 改為 SQLite 後端：
+  `runs` 表存最新 run 快照，`events` 表 append-only（以 `(run_id, seq)` 為
+  主鍵），`save()`/`load()` 對外簽章與行為不變。
+- `load()` 在 SQLite 查無紀錄時 fallback 讀取舊版 `<run_id>.json`
+  （`_load_legacy_json`），確保升級前的歷史 run 仍可讀取。
+- 新增 `list_run_ids(older_than=...)` 與 `purge_older_than(days)`；後者不會
+  被任何背景流程自動呼叫，需由呼叫端主動觸發。
+- `tests/test_agent_harness.py` 更新既有 checkpoint 測試（不再斷言舊版單檔
+  JSON 格式），並新增 4 個測試：事件不重複累加、legacy JSON fallback 讀取、
+  retention 清理保留未過期 run、拒絕負數 `days`。
+- `routes/teams.py` 的呼叫端（`_checkpoint_store`/`_checkpoint_save`/
+  `_restore_team_run`）未修改，維持相容。
+
+### 驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `tests/test_agent_harness.py` | 通過，13 tests passed |
+| 後端 full suite (`python -m pytest`) | 通過，422 tests passed |

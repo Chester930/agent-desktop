@@ -27,6 +27,7 @@ from database import (
     _write_md,
     _log,
 )
+from agent_harness import AgentCheckpointStore, AgentTask
 
 try:
     from task_registry import create_background_task
@@ -100,6 +101,81 @@ _team_queues: dict[str, list] = {}
 # 的，導致 cancel/timeout 只能殺掉其中一個，其餘變成孤兒 process 繼續跑、繼續
 # 燒 API 額度。改成每個 run_id 對應一個 process 集合。
 _team_run_processes: dict[str, set] = {}
+_CHECKPOINT_EVENTS = frozenset({"step_start", "step_done", "done", "cancelled", "error"})
+
+
+def _checkpoint_store() -> AgentCheckpointStore:
+    """Resolve the checkpoint root dynamically with the configured claude home."""
+    import database as _db
+    return AgentCheckpointStore(_db.CLAUDE_HOME)
+
+
+def _checkpoint_save(run_id: str) -> None:
+    run = _team_runs.get(run_id)
+    # Some low-level tests and internal callers construct an in-memory run
+    # directly. Only runs created through the HTTP dispatch path opt into
+    # durable storage, avoiding unexpected writes for those callers.
+    if not run or not run.get("_checkpoint_enabled"):
+        return
+    try:
+        _checkpoint_store().save(run_id, run, _team_events.get(run_id, []))
+    except Exception as exc:
+        # Checkpointing must never take down a live provider stream. The in-memory
+        # state remains authoritative for the current process.
+        _log(f"[TeamRun {run_id}] checkpoint write failed: {exc!r}")
+
+
+def _restore_team_run(run_id: str) -> bool:
+    """Load a completed run after a process restart, if a checkpoint exists.
+
+    A running process cannot be safely resumed without replaying its provider
+    process. Marking it interrupted makes the failure explicit instead of
+    presenting a permanently-running phantom run to the UI.
+    """
+    try:
+        snapshot = _checkpoint_store().load(run_id)
+    except ValueError:
+        return False
+    if not snapshot:
+        return False
+    run = snapshot["run"]
+    events = snapshot["events"]
+    if run.get("status") == "running":
+        run["status"] = "error"
+        run["_finished_at"] = time.time()
+        run["summary"] = "### [執行中斷] 後端程序重新啟動，未安全恢復中的 Team run。"
+        events = list(events) + [{"type": "done", "summary": run["summary"]}]
+        try:
+            _checkpoint_store().save(run_id, run, events)
+        except Exception:
+            pass
+    _team_runs[run_id] = run
+    _team_events[run_id] = events
+    _team_queues.setdefault(run_id, [])
+    return True
+
+
+def _make_handoff(run_id: str, step_idx: int, member: dict) -> dict:
+    """Create the stable handoff envelope stored beside the legacy step fields."""
+    input_refs = [f"memory:{key}" for key in (member.get("input_memory") or []) if isinstance(key, str)]
+    output_refs = [f"memory:{key}" for key in (member.get("output_memory") or []) if isinstance(key, str)]
+    handoff = AgentTask(
+        task_id=f"{run_id}-step-{step_idx}",
+        parent_run_id=run_id,
+        assigned_agent=member["agent"],
+        input_refs=input_refs,
+        acceptance_criteria=[f"完成 assigned role：{member.get('role') or 'agent task'}"],
+        output_refs=output_refs,
+    )
+    return handoff.to_dict()
+
+
+def _set_step_status(step: dict, status: str) -> None:
+    """Keep the legacy UI field and structured handoff status in sync."""
+    step["status"] = status
+    handoff = step.get("handoff")
+    if isinstance(handoff, dict):
+        handoff["status"] = status
 
 # Claude Code and Codex share the same user-facing effort vocabulary for the
 # current integration. Codex may expose a smaller model-specific subset; the
@@ -135,6 +211,10 @@ def _tr_emit(run_id: str, event: dict) -> None:
     _team_events.setdefault(run_id, []).append(event)
     for q in _team_queues.get(run_id, []):
         q.put_nowait(event)
+    # Text/tool chunks can arrive many times per second. Persist lifecycle
+    # boundaries, while keeping high-volume stream delivery in memory.
+    if event.get("type") in _CHECKPOINT_EVENTS:
+        _checkpoint_save(run_id)
 
 
 def _format_tool_event_as_text(event: dict) -> str:
@@ -203,7 +283,7 @@ async def _agent_run_capture(
     if _is_safe_id(agent_id) and agent_file.exists():
         try:
             raw_text = agent_file.read_text(encoding="utf-8-sig")
-            if raw_text.startswith("\ufeff"):
+            if raw_text.startswith("﻿"):
                 raw_text = raw_text[1:]
             if raw_text.startswith("---"):
                 parts = raw_text.split("---", 2)
@@ -322,10 +402,10 @@ def _take_workspace_snapshot(cwd: str) -> dict[str, float]:
     snapshot = {}
     if not cwd or not Path(cwd).is_dir():
         return snapshot
-    
+
     base = Path(cwd).resolve()
     exclude_dirs = {".git", ".venv", "__pycache__", "node_modules", ".gemini", "dist", "build"}
-    
+
     count = 0
     try:
         for root, dirs, files in os.walk(base, topdown=True):
@@ -369,7 +449,7 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
     run = _team_runs.get(run_id, {})
     custom_timeout = run.get("_test_timeout")
     timeout_val = custom_timeout if custom_timeout is not None else TIMEOUT
-    
+
     try:
         await asyncio.wait_for(_execute_team_run_core(run_id, task, model, cwd), timeout=timeout_val)
     except asyncio.TimeoutError:
@@ -444,19 +524,19 @@ async def _get_agent_memory_prompt(team_id: str, all_member_ids: list[str], agen
         prompt_parts.append(f"[Memory Context]\n{mem_ctx}")
     if legacy_memory:
         prompt_parts.append("---\n## 相關 Memory 上下文\n\n" + "\n\n".join(legacy_memory))
-        
+
     return "\n\n".join(prompt_parts)
 
 
 async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -> None:
     from message_bus import global_bus
     global_bus.publish("team:run_start", {"run_id": run_id, "task": task})
-    
+
     old_snap = _take_workspace_snapshot(cwd)
     _, AGENTS_DIR = _dirs()
     run = _team_runs[run_id]
     steps = run["steps"]
-    
+
     if len(steps) > 15:
         run["status"] = "cancelled"
         run["summary"] = "### [系統熔斷] 步驟數超過最大極限 15 步，已自動中斷以防止死循環。"
@@ -480,6 +560,16 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
     # fallback 成 "parallel"——即使 HR Agent 的 prompt 明確要求「循序執行、
     # 前一位輸出傳給下一位」，實際卻用 asyncio.gather 平行跑，member 之間的
     # input_memory/output_memory 讀寫會有 race（讀到的時候上一位可能還沒寫完）。
+    #
+    # execution_mode 語意（見 docs/SDD-2026-09-team-execution-mode-semantics.md，
+    # 詞彙借用 OpenAI Agents SDK 的 handoff / agent-as-tool 區分）：
+    #   - "parallel": 無交接，各 member 各自獨立執行，互不等待、互不餵入。
+    #   - "sequential": handoff chain——每個 member 的 handoff（AgentTask）
+    #     完成後狀態即設為 done，控制權交給下一位就不會再拿回來；prev_output
+    #     以純文字串接傳給下一位。目前沒有「leader 保留控制權、把其他 member
+    #     當工具呼叫後自己再決策」的第三種模式（agent-as-tool）；execution_mode
+    #     唯一的正式使用者（HR Agent 自動組隊）不需要這種模式，評估結論見上述
+    #     SDD 文件，暫不新增。
     mode = run.get("execution_mode", "parallel")
     permission_mode = run.get("permission_mode", "acceptEdits")
     # 可插拔 agent engine 的 run 層級預設值；個別 agent frontmatter 的
@@ -500,11 +590,20 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         # "pending"，即使整個 run 已經 "done"，看起來像卡住了。改成一開始
         # 就把 run["steps"] 換成 consensus 專用的固定 4 步驟結構，不再重用
         # 其他成員原本的 step slot。
+        consensus_members = [
+            {"agent": agent_a, "role": "Coder (Initial Draft)"},
+            {"agent": agent_b, "role": "Auditor (Review)"},
+            {"agent": agent_a, "role": "Coder (Revision)"},
+            {"agent": leader,  "role": "Team Leader (Consensus Summary)"},
+        ]
         steps = [
-            {"agent": agent_a, "role": "Coder (Initial Draft)",           "status": "pending", "output": ""},
-            {"agent": agent_b, "role": "Auditor (Review)",                "status": "pending", "output": ""},
-            {"agent": agent_a, "role": "Coder (Revision)",                "status": "pending", "output": ""},
-            {"agent": leader,  "role": "Team Leader (Consensus Summary)", "status": "pending", "output": ""},
+            {
+                **member,
+                "status": "pending",
+                "output": "",
+                "handoff": _make_handoff(run_id, idx, member),
+            }
+            for idx, member in enumerate(consensus_members)
         ]
         run["steps"] = steps
 
@@ -516,16 +615,16 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             prompt_1_parts.append(mem_a)
         prompt_1_parts.append(f"[任務]\n{task}\n\n請根據任務，產出你的初始設計方案（Initial Draft）。")
         prompt_1 = "\n\n".join(prompt_1_parts)
-        
+
         draft = await _agent_run_capture(run_id, 0, agent_a, prompt_1, model, cwd, permission_mode, agent_engine_default)
         steps[0]["output"] = draft
-        steps[0]["status"] = "done"
+        _set_step_status(steps[0], "done")
         _tr_emit(run_id, {"type": "step_done", "step": 0})
         global_bus.publish("team:step_done", {"run_id": run_id, "step": 0, "agent": agent_a, "output": draft})
-        
+
         if run.get("status") == "cancelled":
             return
-            
+
         # 2. Review / Auditing (Agent B)
         _tr_emit(run_id, {"type": "step_start", "step": 1, "agent": agent_b, "role": "Auditor (Review)"})
         mem_b = await _get_agent_memory_prompt(team_id, all_member_ids, agent_b, cwd, build_team_mem)
@@ -539,10 +638,10 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             "指出潛在的安全性漏洞或 Bugs，並提供詳細的修改意見。"
         )
         prompt_2 = "\n\n".join(prompt_2_parts)
-        
+
         feedback = await _agent_run_capture(run_id, 1, agent_b, prompt_2, model, cwd, permission_mode, agent_engine_default)
         steps[1]["output"] = feedback
-        steps[1]["status"] = "done"
+        _set_step_status(steps[1], "done")
         _tr_emit(run_id, {"type": "step_done", "step": 1})
         global_bus.publish("team:step_done", {"run_id": run_id, "step": 1, "agent": agent_b, "output": feedback})
 
@@ -561,10 +660,10 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             "請針對審查專員的意見進行深度的修正與答辯，提供最終的優化代碼與設計方案（Revised Draft）。"
         )
         prompt_3 = "\n\n".join(prompt_3_parts)
-        
+
         revised = await _agent_run_capture(run_id, 2, agent_a, prompt_3, model, cwd, permission_mode, agent_engine_default)
         steps[2]["output"] = revised
-        steps[2]["status"] = "done"
+        _set_step_status(steps[2], "done")
         _tr_emit(run_id, {"type": "step_done", "step": 2})
         global_bus.publish("team:step_done", {"run_id": run_id, "step": 2, "agent": agent_a, "output": revised})
 
@@ -586,23 +685,23 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             "並給出一份完美的最終共識決策與代碼匯總（Consensus Summary）。"
         )
         prompt_4 = "\n\n".join(prompt_4_parts)
-        
+
         summary = await _agent_run_capture(run_id, 3, leader, prompt_4, model, cwd, permission_mode, agent_engine_default)
         steps[3]["output"] = summary
-        steps[3]["status"] = "done"
+        _set_step_status(steps[3], "done")
         _tr_emit(run_id, {"type": "step_done", "step": 3})
         global_bus.publish("team:step_done", {"run_id": run_id, "step": 3, "agent": leader, "output": summary})
 
         run["status"] = "done"
         run["_finished_at"] = time.time()
         run["summary"] = summary
-        
+
         new_snap = _take_workspace_snapshot(cwd)
         run["artifacts"] = _diff_workspace_snapshot(old_snap, new_snap)
 
         _tr_emit(run_id, {"type": "done", "summary": summary})
         global_bus.publish("team:run_done", {"run_id": run_id, "summary": summary})
-        
+
         if team_id and cwd:
             slug = _encode_slug(cwd)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -613,7 +712,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
                 f"## 共識摘要\n\n{summary[:1800]}"
             )
             _write_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md", proj_summary)
-        
+
         _cleanup_old_runs()
         return
 
@@ -621,10 +720,10 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         async def run_parallel_step(i, step):
             if run.get("status") == "cancelled":
                 return
-            step["status"] = "running"
+            _set_step_status(step, "running")
             _tr_emit(run_id, {"type": "step_start", "step": i,
                                "agent": step["agent"], "role": step["role"]})
-            
+
             agent_id = step["agent"]
             agent_info = {}
             try:
@@ -667,7 +766,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
 
             output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode, agent_engine_default)
             step["output"] = output
-            step["status"] = "done"
+            _set_step_status(step, "done")
             _tr_emit(run_id, {"type": "step_done", "step": i})
             global_bus.publish("team:step_done", {"run_id": run_id, "step": i, "agent": agent_id, "output": output})
 
@@ -685,7 +784,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         for i, step in enumerate(steps):
             if run.get("status") == "cancelled":
                 break
-            step["status"] = "running"
+            _set_step_status(step, "running")
             _tr_emit(run_id, {"type": "step_start", "step": i,
                                "agent": step["agent"], "role": step["role"]})
 
@@ -738,7 +837,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
 
             output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode, agent_engine_default)
             step["output"] = output
-            step["status"] = "done"
+            _set_step_status(step, "done")
             prev_output = output
             _tr_emit(run_id, {"type": "step_done", "step": i})
             global_bus.publish("team:step_done", {"run_id": run_id, "step": i, "agent": agent_id, "output": output})
@@ -759,7 +858,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             f"### {s['agent']}（{s['role']}）\n\n{s['output']}" for s in steps
         ]
         run["summary"] = "\n\n---\n\n".join(summary_parts)
-        
+
         new_snap = _take_workspace_snapshot(cwd)
         run["artifacts"] = _diff_workspace_snapshot(old_snap, new_snap)
 
@@ -940,22 +1039,26 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         # 可插拔 agent engine 的 run 層級預設值（空字串代表沒指定，個別 agent
         # frontmatter 的 engine: 宣告優先於這個值）。見 engines/registry.py。
         "agent_engine": agent_engine,
-        "steps": [
-            {
-                "agent":         m["agent"],
-                "role":          m["role"],
-                # P2-B2: carry per-member memory routing into run state
-                "input_memory":  m.get("input_memory",  []) if isinstance(m, dict) else [],
-                "output_memory": m.get("output_memory", []) if isinstance(m, dict) else [],
-                "status":        "pending",
-                "output":        "",
-            }
-            for m in team["members"]
-        ],
+        "_checkpoint_enabled": True,
+        "steps": [],
         "summary": "",
     }
+    _team_runs[run_id]["steps"] = [
+        {
+            "agent": m["agent"],
+            "role": m["role"],
+            # P2-B2: carry per-member memory routing into run state
+            "input_memory": m.get("input_memory", []) if isinstance(m, dict) else [],
+            "output_memory": m.get("output_memory", []) if isinstance(m, dict) else [],
+            "status": "pending",
+            "output": "",
+            "handoff": _make_handoff(run_id, idx, m),
+        }
+        for idx, m in enumerate(team["members"])
+    ]
     _team_events[run_id] = []
     _team_queues[run_id] = []
+    _checkpoint_save(run_id)
 
     create_background_task(_execute_team_run(run_id, task, model, cwd))
     return web.json_response({"ok": True, "run_id": run_id})
@@ -963,6 +1066,8 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
 
 async def handle_team_run_get(request: web.Request) -> web.Response:
     run_id = request.match_info["run_id"]
+    if run_id not in _team_runs:
+        _restore_team_run(run_id)
     run = _team_runs.get(run_id)
     if not run:
         return web.json_response({"error": "not found"}, status=404)
@@ -971,6 +1076,8 @@ async def handle_team_run_get(request: web.Request) -> web.Response:
 
 async def handle_team_run_stream(request: web.Request) -> web.StreamResponse:
     run_id = request.match_info["run_id"]
+    if run_id not in _team_runs:
+        _restore_team_run(run_id)
     if run_id not in _team_runs:
         return web.Response(status=404)
 
@@ -1010,6 +1117,8 @@ async def handle_team_run_stream(request: web.Request) -> web.StreamResponse:
 
 async def handle_team_run_cancel(request: web.Request) -> web.Response:
     run_id = request.match_info["run_id"]
+    if run_id not in _team_runs:
+        _restore_team_run(run_id)
     run = _team_runs.get(run_id)
     if run:
         run["status"] = "cancelled"

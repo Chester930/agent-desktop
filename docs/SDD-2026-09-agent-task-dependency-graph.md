@@ -66,3 +66,27 @@ python -m pytest
 ## 參考資料
 
 - [claude-code-orchestrator-kit](https://github.com/maslennikov-ig/claude-code-orchestrator-kit)
+
+## 執行紀錄（2026-09-05）
+
+- `AgentTask`（`backend/agent_harness.py`）新增 `blocks`/`blocked_by`
+  （用 `_clean_refs` 驗證，比照 `input_refs`/`output_refs`）與
+  `discovered_from`（用 `_clean_id`，required=False，比照 `parent_run_id`）
+  三個欄位，預設皆為空；`to_dict()`/`from_dict()` 完整支援。
+- 新增 `resolve_ready_tasks(tasks)` 純函式：只用每個 task 目前的 `status`
+  做過濾（不做遞迴圖走訪），因此循環依賴（A blocked_by B、B blocked_by A）
+  天生不會造成無限迴圈——兩者的狀態永遠不會變成 `done`，`resolve_ready_tasks`
+  回傳空集合，不需要額外的 cycle-detection 邏輯。未知的 `blocked_by` id
+  一律視為未解除封鎖。
+- 未修改 `routes/teams.py` 的排程邏輯；`_make_handoff` 建立的 `AgentTask`
+  沿用預設空值，行為不變。
+- `tests/test_agent_harness.py` 新增 7 個測試，覆蓋欄位 round-trip、預設值、
+  不安全 `discovered_from` 拒絕、`resolve_ready_tasks` 的就緒/阻塞/未知
+  blocker/循環依賴/terminal 狀態排除等情境。
+
+### 驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `tests/test_agent_harness.py` | 通過，13 tests passed（含本項新增 7 個） |
+| 後端 full suite (`python -m pytest`) | 通過，422 tests passed |

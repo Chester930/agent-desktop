@@ -77,3 +77,28 @@ python -m pytest
 
 - [OpenAI Agents SDK — Handoffs](https://github.com/openai/openai-agents-python)
 - [OpenAI Agents SDK — Agent orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
+
+## 執行紀錄（2026-09-05）
+
+- `routes/teams.py` 的 `_execute_team_run_core` 在讀取 `execution_mode` 前補上
+  註解，明確定義 `parallel`／`sequential`（handoff chain）語意，並記錄本輪
+  對 `leader`（agent-as-tool）模式的評估結論（見下）。
+- 新增 `tests/test_team_run_execution_mode.py::test_sequential_handoff_is_one_way_and_does_not_reexecute`：
+  斷言 sequential 模式下每個 member 的 handoff 完成後狀態變為 `done`，且每個
+  member 只會被呼叫一次（不會被要求回頭再執行）。
+- **評估結論：暫不新增 `execution_mode: "leader"`。** `execution_mode`
+  目前唯一的正式使用者（HR Agent 自動組隊）只用得到 `parallel`/`sequential`，
+  沒有第二個真實情境需要「leader 保留控制權、把 member 當工具呼叫」的
+  agent-as-tool 模式。若未來出現這類需求，可以參考 OpenAI Agents SDK 的
+  `agent-as-tool` 模式，將 `team.leader` 指定的 member 保留在迴圈外層、
+  其餘 member 以結構化呼叫（可复用 `agent_harness.AgentTask` 的
+  `blocks`/`blocked_by` 欄位表示呼叫順序）方式被叫用；屆時再重新評估，
+  不在本輪臆測實作。
+- 既有 `parallel`/`sequential` 執行行為與預設值未變更。
+
+### 驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `tests/test_team_run_execution_mode.py` | 通過，4 tests passed |
+| 後端 full suite | 通過，見 SDD-2026-09-checkpoint-store-durability.md 執行紀錄的整體驗證 |

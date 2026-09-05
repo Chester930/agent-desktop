@@ -77,3 +77,24 @@ cd frontend && npm run typecheck
 - [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol)
 - [zed-industries/codex-acp](https://github.com/zed-industries/codex-acp)
 - [Zed — Agent Client Protocol 說明](https://zed.dev/acp)
+
+## 執行紀錄（2026-09-05）
+
+- `frontend/src/app/agent-events.ts`：`tool_call_start`/`tool_call_end` 新增
+  `status` 欄位（`pending`/`in_progress` 與 `completed`/`failed`），
+  `permission_requested` 新增 `options`，並新增 `plan` 事件型別。
+- 新增 ACP 風格 raw 事件名稱 `tool_call`、`tool_call_update`、`plan` 的
+  normalizer 分支，與既有 `tool_call_start`/`tool_call_end`/`permission_*`
+  分支完全分離，不影響任何既有 legacy 事件的正規化結果。
+- `backend/agent_harness.py` 的 `evaluate_event_contract()` docstring
+  補上 canonical 事件與 ACP `session/update` 概念的對照表。
+- `frontend/src/app/agent-events.spec.ts` 新增 3 個測試，涵蓋 ACP 風格
+  tool_call 生命週期、plan 事件與 permission options；既有 3 個回歸測試
+  全數維持通過。
+
+### 驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `frontend/src/app/agent-events.spec.ts`（vitest） | 通過，7 tests passed |
+| 後端 full suite (`python -m pytest`) | 通過，見下方累計驗證 |
