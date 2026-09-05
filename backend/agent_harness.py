@@ -123,13 +123,18 @@ class AgentTask:
 
 
 def resolve_ready_tasks(tasks: Iterable[AgentTask]) -> list[str]:
-    """Return the task_ids in ``tasks`` whose ``blocked_by`` deps are all done.
+    """Return the task_ids in ``tasks`` that are ready to dispatch right now.
 
-    Only non-terminal tasks (not already ``done``/``cancelled``) are
-    considered candidates. A ``blocked_by`` entry that names a task_id absent
-    from ``tasks`` is treated as still unresolved (fail safe: an unknown
-    blocker is never satisfied), so callers may pass a partial task list
-    without risking a false "ready" result.
+    "Ready" means ``status == "pending"`` *and* every ``blocked_by`` dep is
+    ``done``. Only ``pending`` tasks are candidates — a task already
+    ``running``, ``blocked``, or ``error`` is deliberately excluded even if
+    its blockers are satisfied, so a caller cannot accidentally re-dispatch
+    a task that is mid-flight or needs explicit retry handling first.
+
+    A ``blocked_by`` entry that names a task_id absent from ``tasks`` is
+    treated as still unresolved (fail safe: an unknown blocker is never
+    satisfied), so callers may pass a partial task list without risking a
+    false "ready" result.
 
     This is a pure status filter, not a graph walk, so a dependency cycle
     (A blocked_by B, B blocked_by A) cannot cause recursion or an infinite
@@ -139,7 +144,7 @@ def resolve_ready_tasks(tasks: Iterable[AgentTask]) -> list[str]:
     status_by_id = {task.task_id: task.status for task in tasks}
     ready: list[str] = []
     for task in tasks:
-        if task.status in ("done", "cancelled"):
+        if task.status != "pending":
             continue
         if all(status_by_id.get(dep) == "done" for dep in task.blocked_by):
             ready.append(task.task_id)
@@ -174,7 +179,13 @@ class AgentCheckpointStore:
     def _connection(self) -> sqlite3.Connection:
         if self._conn is None:
             self.root.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            # Unlike the old one-file-per-run JSON store, this single SQLite
+            # file can be opened by more than one backend process at once
+            # (e.g. two local dev/prod instances pointed at the same
+            # CLAUDE_HOME). `timeout` sets sqlite3's busy-wait: a write that
+            # loses a lock race retries for up to this long instead of
+            # raising `sqlite3.OperationalError: database is locked` right away.
+            conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=5.0)
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS runs ("
                 "run_id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, run_json TEXT NOT NULL)"

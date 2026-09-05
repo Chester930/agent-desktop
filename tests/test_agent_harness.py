@@ -112,6 +112,21 @@ def test_resolve_ready_tasks_excludes_terminal_tasks():
     assert resolve_ready_tasks([done_task, cancelled_task]) == []
 
 
+def test_resolve_ready_tasks_excludes_running_and_error_tasks():
+    """Only status == "pending" counts as ready to dispatch — a task already
+    running or errored must not be re-listed just because its blockers
+    happen to be done, even though it isn't in a terminal done/cancelled
+    state either."""
+    upstream = AgentTask(task_id="a", assigned_agent="x", acceptance_criteria=["done"], status="done")
+    running = AgentTask(
+        task_id="b", assigned_agent="y", acceptance_criteria=["done"], status="running", blocked_by=["a"],
+    )
+    errored = AgentTask(
+        task_id="c", assigned_agent="z", acceptance_criteria=["done"], status="error", blocked_by=["a"],
+    )
+    assert resolve_ready_tasks([upstream, running, errored]) == []
+
+
 def test_checkpoint_store_survives_new_store_instance(tmp_path):
     run = {"id": "run-123", "status": "running", "steps": []}
     events = [{"type": "run_started", "run_id": "run-123"}]

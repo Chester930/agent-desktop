@@ -83,6 +83,12 @@ python -m pytest
 - `tests/test_agent_harness.py` 新增 7 個測試，覆蓋欄位 round-trip、預設值、
   不安全 `discovered_from` 拒絕、`resolve_ready_tasks` 的就緒/阻塞/未知
   blocker/循環依賴/terminal 狀態排除等情境。
+- **PR review 追加修正**：`resolve_ready_tasks()` 的「ready」判定從「非
+  `done`/`cancelled`」收緊為「必須是 `pending`」。原本的寬鬆判定會讓一個
+  已經在 `running` 或 `error` 狀態、但依賴已滿足的 task 也被列為 ready，
+  容易誤導未來接排程的呼叫端重複派發一個正在執行中或需要明確 retry 處理
+  的 task。新增測試 `test_resolve_ready_tasks_excludes_running_and_error_tasks`
+  釘住這個行為。
 
 ### 驗證結果
 

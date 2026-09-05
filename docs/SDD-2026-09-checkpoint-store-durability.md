@@ -95,6 +95,12 @@ python -m pytest
   retention 清理保留未過期 run、拒絕負數 `days`。
 - `routes/teams.py` 的呼叫端（`_checkpoint_store`/`_checkpoint_save`/
   `_restore_team_run`）未修改，維持相容。
+- **PR review 追加修正**：`_connection()` 的 `sqlite3.connect()` 補上
+  `timeout=5.0`。這個 SQLite 檔案可能被一個以上的後端 process 同時開啟
+  （例如本機 dev/prod 兩個 process 指到同一個 CLAUDE_HOME），舊版
+  「每 run 一個 JSON 檔 + atomic replace」沒有這個風險；沒有 timeout 時，
+  輸掉鎖競爭的寫入會立刻拋 `sqlite3.OperationalError: database is locked`，
+  而不是短暫等待重試。
 
 ### 驗證結果
 
