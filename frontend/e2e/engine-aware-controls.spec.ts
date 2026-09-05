@@ -43,7 +43,11 @@ test.describe('引擎感知的輸入欄控制項', () => {
     await expect(engineBtn).not.toHaveClass(/locked/);
 
     const permBtn = page.locator('.input-statusbar .sb-btn').nth(1); // pill 之後的下一顆是權限模式
-    const effortBtnVisible = () => page.locator('.input-statusbar button[title*="思考深度"]');
+    // 2026-09 更新：「Claude and Codex reasoning controls」後，Codex 也有
+    // 自己的思考等級選項（見 app.ts EFFORT_OPTIONS_CODEX_DEFAULT），這顆
+    // 按鈕改成兩個引擎都會顯示，只是可切換的等級不同——不再是 Codex 專屬
+    // 隱藏的控制項，所以這裡不再斷言「切到 Codex 就消失」。
+    const effortBtn = page.locator('.input-statusbar .effort-btn');
 
     const initialEngineText = await engineBtn.textContent();
     const initialPermText = await permBtn.textContent();
@@ -53,14 +57,13 @@ test.describe('引擎感知的輸入欄控制項', () => {
     await expect(engineBtn).not.toHaveText(initialEngineText?.trim() ?? '');
     // 權限模式的顯示文字應該跟著換了一套詞彙（不會還是切換前那個值）
     await expect(permBtn).not.toHaveText(initialPermText?.trim() ?? '');
+    // 思考等級控制項在兩個引擎下都應該可見（各自有自己的等級清單）。
+    await expect(effortBtn).toBeVisible();
 
     const nowOnCodex = (await engineBtn.textContent())?.includes('Codex');
     if (nowOnCodex) {
-      // Codex 沒有對應的思考深度參數，控制項應該被隱藏
-      await expect(effortBtnVisible()).toHaveCount(0);
       await expect(permBtn).toHaveText(/Workspace Write|Read Only|Full Access/);
     } else {
-      await expect(effortBtnVisible()).toHaveCount(1);
       await expect(permBtn).toHaveText(/Default|Accept edits|Plan|Bypass|Auto/);
     }
 
@@ -72,8 +75,13 @@ test.describe('引擎感知的輸入欄控制項', () => {
   // 2026-07-20 續篇：模型控制過去在 Codex 時完全鎖死只能「使用預設」——
   // 改成即時問已安裝的 Codex CLI（GET /api/codex/models → `codex debug
   // models --bundled`），不是寫死在前端的清單。這裡驗證在 Codex 對話下，
-  // 模型按鈕真的可以點擊切換到清單裡的其他模型，不會一直卡在「使用預設」
+  // 模型按鈕真的可以選到清單裡的其他模型，不會一直卡在「使用預設」
   // （用上面 mock 的固定清單，不依賴真實 CLI）。
+  //
+  // 2026-09 更新：狀態列的模型按鈕不再是「點一下直接循環切換」，而是打開
+  // 一個「切換模型」的選單 modal（見 app.html 的 model-picker-modal /
+  // app.ts selectModel()），從清單裡點選才會真的切換，所以這裡改成
+  // 「點按鈕開 modal → 點選項」的流程，而不是連續點同一顆按鈕。
   test('Codex 對話下，模型按鈕可以切換到清單裡的模型', async ({ page }) => {
     await page.goto('/');
 
@@ -89,14 +97,16 @@ test.describe('引擎感知的輸入欄控制項', () => {
     const modelBtn = page.locator('.input-statusbar button', { hasText: /使用預設|GPT/ });
     await expect(modelBtn).toHaveText('使用預設');
 
-    await modelBtn.click();
-    await expect(modelBtn).toHaveText('GPT-5.6-Sol');
+    async function pickModel(pickerOptionText: string, expectedButtonText: string) {
+      await modelBtn.click();
+      await expect(page.locator('.model-picker-modal')).toBeVisible();
+      await page.locator('.model-picker-modal .model-option', { hasText: pickerOptionText }).click();
+      await expect(modelBtn).toHaveText(expectedButtonText);
+    }
 
-    await modelBtn.click();
-    await expect(modelBtn).toHaveText('GPT-5.4-Mini');
-
-    // 循環到清單尾端後應該繞回「使用預設」
-    await modelBtn.click();
-    await expect(modelBtn).toHaveText('使用預設');
+    await pickModel('GPT-5.6-Sol', 'GPT-5.6-Sol');
+    await pickModel('GPT-5.4-Mini', 'GPT-5.4-Mini');
+    // 選單裡「Codex 預設模型」對應狀態列顯示的「使用預設」。
+    await pickModel('Codex 預設模型', '使用預設');
   });
 });
