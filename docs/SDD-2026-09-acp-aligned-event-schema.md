@@ -98,3 +98,28 @@ cd frontend && npm run typecheck
 | --- | --- |
 | `frontend/src/app/agent-events.spec.ts`（vitest） | 通過，7 tests passed |
 | 後端 full suite (`python -m pytest`) | 通過，見下方累計驗證 |
+
+## 後續延伸：Team Run 後端骨架（2026-09-05）
+
+跟使用者確認範圍後（`/api/team/run` 的 `step_start`/`step_text`/`step_done`
+是獨立於單一串流 canonical event 的多步驟進度模型，phase 7 當時刻意沒有
+動它），決定只做**後端骨架**，不改前端 UI：
+
+- `routes/teams.py` 的 `_agent_run_capture()._on_tool_event`，除了原有把
+  工具事件格式化成文字塞進 `step_text`，現在也把 `engines/claude_engine.py`／
+  `engines/codex_engine.py` 送出的原始 `tool_use`/`user`(tool_result)
+  envelope 原樣轉發（附上 `step` 索引）。這個 envelope 形狀跟
+  `agent-events.ts` 既有的 `normalizeAgentEvents()` 的 `'tool_use'`/`'user'`
+  case 完全一致，不需要額外轉換。
+- 純粹是資料骨架：目前沒有任何前端消費者讀這個新事件，`_applyTeamRunEvent()`
+  對未知 type 安全忽略，`step_text` 行為完全不變。之後如果要做 Team Run
+  的結構化工具呼叫 UI，或接上真正的 ACP-based engine，這裡已經有現成的
+  資料來源可用，不必再回頭改 `_on_tool_event`。
+- 新增測試 `tests/test_tool_event_streaming.py::TestAgentRunCaptureToolEventWiring::test_tool_event_also_forwarded_in_canonical_shape_with_step`，
+  驗證 `step_text` 與新的 canonical-shape 事件同時存在、互不影響。
+
+### 驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `tests/test_tool_event_streaming.py` | 通過，13 tests passed |

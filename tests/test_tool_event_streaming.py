@@ -326,6 +326,60 @@ class TestAgentRunCaptureToolEventWiring:
         assert "Bash" in joined and "echo hi" in joined
         assert "hi" in joined
 
+    async def test_tool_event_also_forwarded_in_canonical_shape_with_step(self, monkeypatch, tmp_path):
+        """見 docs/SDD-2026-09-acp-aligned-event-schema.md 執行紀錄：除了
+        既有的格式化 step_text，_on_tool_event 也原樣轉發 tool_use/user
+        envelope（附上 step 索引）。這個 envelope 形狀跟
+        frontend/src/app/agent-events.ts 的 normalizeAgentEvents() 現有的
+        'tool_use'/'user' case 完全一致——是後端骨架，目前還沒有前端消費者，
+        但必須確保它不會取代或破壞既有的 step_text 事件。"""
+        import database
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        (agents_dir / "wired-agent.md").write_text(
+            "---\nname: wired-agent\ndescription: test\nengine: codex\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
+
+        async def fake_codex_run_turn(**kwargs):
+            await kwargs["on_tool_event"]({
+                "type": "tool_use", "id": "i1", "name": "Bash", "input": {"command": "echo hi"},
+            })
+            await kwargs["on_tool_event"]({
+                "type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "i1", "content": "hi"},
+                ]},
+            })
+            return RunResult(output="done", session_id="sid")
+
+        monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+
+        run_id = "tool-event-wiring-2"
+        teams_module._team_runs[run_id] = {"status": "running"}
+        teams_module._team_events[run_id] = []
+        teams_module._team_queues[run_id] = []
+
+        await teams_module._agent_run_capture(
+            run_id, 2, "wired-agent", "do it", "", str(tmp_path),
+            permission_mode="workspace-write", default_engine="codex",
+        )
+
+        events = teams_module._team_events[run_id]
+        tool_use_events = [e for e in events if e.get("type") == "tool_use"]
+        tool_result_events = [e for e in events if e.get("type") == "user"]
+
+        assert tool_use_events == [
+            {"type": "tool_use", "id": "i1", "name": "Bash", "input": {"command": "echo hi"}, "step": 2},
+        ]
+        assert tool_result_events == [
+            {"type": "user", "step": 2, "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "i1", "content": "hi"},
+            ]}},
+        ]
+        # The existing step_text formatting must still be present, unchanged.
+        assert any(e.get("type") == "step_text" for e in events)
+
 
 class TestHandleChatForwardsToolEvents:
     """驗證 handle_chat 的 _run_engine_turn（非 Claude 引擎的單一對話路徑）

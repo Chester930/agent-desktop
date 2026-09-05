@@ -343,6 +343,17 @@ async def _agent_run_capture(
         # 透過既有的 step_text 事件送出——至少不再整個消失不見，之後要
         # 做成獨立的結構化 UI 也不影響這裡的資料來源。
         _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": _format_tool_event_as_text(event)})
+        # 見 docs/SDD-2026-09-acp-aligned-event-schema.md：`event` 已經是
+        # engines/claude_engine.py、engines/codex_engine.py 統一送出的
+        # `tool_use`/`user`(tool_result) envelope，形狀跟
+        # frontend/src/app/agent-events.ts 的 normalizeAgentEvents() 現有
+        # 的 case 'tool_use'/'user' 完全一致，不需要另外轉換。這裡只是
+        # 額外原樣轉發、附上 step 索引，讓 SSE 串流裡同時有現成的
+        # step_text（目前 UI 仍在用）與 canonical-shape 的結構化事件（目前
+        # 前端還沒有消費者，純粹是後端骨架，供未來 Team Run 的結構化工具
+        # 呼叫 UI 或 ACP-based engine 銜接用）。不會影響任何現有事件或
+        # UI：既有的 _applyTeamRunEvent() 對未知 type 直接安全忽略。
+        _tr_emit(run_id, {**event, "step": step_idx})
 
     proc_holder: dict = {}
 
