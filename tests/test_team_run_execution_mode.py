@@ -107,3 +107,44 @@ async def test_handle_team_run_post_stores_inline_execution_mode(client, monkeyp
     body = await resp.json()
     run_id = body["run_id"]
     assert teams_module._team_runs[run_id]["execution_mode"] == "sequential"
+    assert teams_module._team_runs[run_id]["steps"][0]["handoff"]["assigned_agent"] == "agent-a"
+
+
+async def test_sequential_handoff_is_one_way_and_does_not_reexecute(monkeypatch):
+    """Sequential mode is a handoff-chain (see docs/SDD-2026-09-team-execution-mode-semantics.md):
+    once a member's handoff is marked done, control never returns to it. This
+    pins that semantics down explicitly so a future "leader keeps control"
+    mode cannot be confused with the existing chain behavior."""
+    calls = []
+
+    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits", default_engine=""):
+        calls.append(agent_id)
+        return f"output-from-{agent_id}"
+
+    monkeypatch.setattr(teams_module, "_agent_run_capture", fake_agent_run_capture)
+
+    run_id = "run-seq-handoff-oneway"
+    teams_module._team_runs[run_id] = {
+        "id": run_id,
+        "team_id": "",
+        "execution_mode": "sequential",
+        "leader": "",
+        "steps": [
+            {"agent": "agent-a", "role": "first",  "status": "pending", "output": "",
+             "handoff": teams_module._make_handoff(run_id, 0, {"agent": "agent-a", "role": "first"})},
+            {"agent": "agent-b", "role": "second", "status": "pending", "output": "",
+             "handoff": teams_module._make_handoff(run_id, 1, {"agent": "agent-b", "role": "second"})},
+        ],
+        "summary": "",
+    }
+    teams_module._team_events[run_id] = []
+    teams_module._team_queues[run_id] = []
+
+    await teams_module._execute_team_run_core(run_id, "do the task", "haiku", "")
+
+    steps = teams_module._team_runs[run_id]["steps"]
+    assert steps[0]["handoff"]["status"] == "done"
+    assert steps[1]["handoff"]["status"] == "done"
+    # Each member is invoked exactly once: a handoff chain never hands control
+    # back to an earlier member for a second turn.
+    assert calls == ["agent-a", "agent-b"]

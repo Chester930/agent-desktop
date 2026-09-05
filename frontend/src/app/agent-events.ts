@@ -17,6 +17,8 @@ export type AgentEvent =
       name: string;
       input: unknown;
       agent?: string;
+      /** ACP `tool_call` status (`pending`/`in_progress`); absent means unknown/legacy source. */
+      status?: 'pending' | 'in_progress';
     }
   | {
       type: 'tool_call_end';
@@ -24,11 +26,21 @@ export type AgentEvent =
       output: unknown;
       is_error: boolean;
       agent?: string;
+      /** ACP `tool_call_update` status (`completed`/`failed`); absent means unknown/legacy source. */
+      status?: 'completed' | 'failed';
     }
   | {
       type: 'permission_requested';
       request_id?: string;
       command?: string;
+      agent?: string;
+      /** ACP `RequestPermissionRequest.options` — the choices offered to the user. */
+      options?: { id: string; label: string }[];
+    }
+  | {
+      /** ACP `plan` session/update — the agent's declared sequence of steps. */
+      type: 'plan';
+      steps: { content: string; status: 'pending' | 'in_progress' | 'completed' }[];
       agent?: string;
     }
   | {
@@ -76,6 +88,11 @@ type JsonRecord = {
   command?: any;
   output?: any;
   total_cost_usd?: any;
+  status?: any;
+  options?: any;
+  optionId?: any;
+  label?: any;
+  steps?: any;
 };
 
 export function normalizeAgentEvents(raw: unknown): AgentEvent[] {
@@ -118,6 +135,7 @@ export function normalizeAgentEvents(raw: unknown): AgentEvent[] {
           request_id: asString(raw.request_id),
           command: asString(raw.command),
           agent: asString(raw.agent),
+          options: asPermissionOptions(raw.options),
         },
       ];
     case 'result':
@@ -170,8 +188,43 @@ export function normalizeAgentEvents(raw: unknown): AgentEvent[] {
           request_id: asString(raw.request_id),
           command: asString(raw.command),
           agent: asString(raw.agent),
+          options: asPermissionOptions(raw.options),
         },
       ];
+    // ACP-style session/update names, kept separate from the legacy
+    // `tool_call_start`/`tool_call_end` branches above so existing engine
+    // output cannot accidentally pick up a `status` it never sent.
+    case 'tool_call': {
+      if (typeof raw.id !== 'string') return [];
+      return [
+        {
+          type: 'tool_call_start',
+          id: raw.id,
+          name: asString(raw.name) ?? '',
+          input: raw.input ?? {},
+          agent: asString(raw.agent),
+          status: raw.status === 'in_progress' ? 'in_progress' : 'pending',
+        },
+      ];
+    }
+    case 'tool_call_update': {
+      if (typeof raw.id !== 'string') return [];
+      const failed = raw.status === 'failed';
+      return [
+        {
+          type: 'tool_call_end',
+          id: raw.id,
+          output: raw.output,
+          is_error: failed,
+          agent: asString(raw.agent),
+          status: failed ? 'failed' : 'completed',
+        },
+      ];
+    }
+    case 'plan': {
+      const steps = asPlanSteps(raw.steps);
+      return steps ? [{ type: 'plan', steps, agent: asString(raw.agent) }] : [];
+    }
     case 'member_started':
     case 'member_finished':
       return typeof raw.agent === 'string' ? [{ type: raw.type, agent: raw.agent }] : [];
@@ -249,4 +302,37 @@ function asNumber(value: unknown): number | undefined {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return isRecord(value) ? value : undefined;
+}
+
+function asPermissionOptions(value: unknown): { id: string; label: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options = value
+    .map((item) => {
+      if (!isRecord(item)) return undefined;
+      const id = asString(item.id) ?? asString(item.optionId);
+      const label = asString(item.label) ?? asString(item.name);
+      return id && label ? { id, label } : undefined;
+    })
+    .filter((item): item is { id: string; label: string } => item !== undefined);
+  return options.length > 0 ? options : undefined;
+}
+
+function asPlanSteps(
+  value: unknown,
+): { content: string; status: 'pending' | 'in_progress' | 'completed' }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const steps = value
+    .map((item) => {
+      if (!isRecord(item)) return undefined;
+      const content = asString(item.content) ?? asString(item.text);
+      if (!content) return undefined;
+      const status: 'pending' | 'in_progress' | 'completed' =
+        item.status === 'in_progress' || item.status === 'completed' ? item.status : 'pending';
+      return { content, status };
+    })
+    .filter(
+      (item): item is { content: string; status: 'pending' | 'in_progress' | 'completed' } =>
+        item !== undefined,
+    );
+  return steps.length > 0 ? steps : undefined;
 }
