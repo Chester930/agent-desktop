@@ -314,7 +314,37 @@ cd frontend && npm run e2e -- resize.spec.ts --project=chromium
 
 1. 待有實際 ACP client 需求時，再接上真正的 ACP adapter（Gemini CLI／
    Codex／Claude Code 的 ACP 實作），驗證本輪 schema 骨架是否足夠。
-2. `purge_older_than()` 目前不會被任何流程自動呼叫；若要做定期清理，
-   需要另外設計排程與使用者可見的保留天數設定。
+2. ~~`purge_older_than()` 目前不會被任何流程自動呼叫~~——已在
+   `docs/SDD-2026-09-checkpoint-store-durability.md`「後續延伸：排程
+   retention」補上（`database.get_checkpoint_retention_days()` +
+   `_gc_checkpoint_store_task()`，預設停用）。
 3. `resolve_ready_tasks()` 尚未接進 `routes/teams.py` 的實際排程；等有
    非鏈狀 team 協作拓樸的真實需求時再評估串接。
+
+## 第十階段：Team Run 真實 HTTP contract 覆蓋（2026-09-05）
+
+延續「加入 fake provider contract runner，覆蓋 permission、tool lifecycle、
+cancel/error cleanup」這個下一步（原第八階段），把 P0/P1 那份真實 HTTP
+整合測試（`tests/test_team_run_http_checkpoint_integration.py`）從單純
+happy path 擴充成完整的 contract coverage：
+
+- **cancel mid-run**：用 `asyncio.Event` 讓第一個 member 的 capture 卡在
+  「已開始、尚未完成」的狀態，這時打真正的 `DELETE /api/team/run/{id}`，
+  驗證第一個 member 會被允許跑完、第二個 member 永遠不會被派發、最終
+  status 與 on-disk checkpoint 都正確顯示 `cancelled`。
+- **error mid-run**：member capture 拋出未預期例外，驗證 SSE 終止事件、
+  `GET` 回傳的 `status: "error"`、checkpoint 三者一致。
+- **tool 事件經過真實 SSE**：驗證第九階段新增的 canonical-shape 工具事件
+  轉發（`tool_use`/`user` 附 `step`）真的會送達一個真正的 HTTP SSE 客戶端，
+  不只是留在記憶體的 `_team_events` 清單裡。
+- **確認範圍調整**：`/api/team/run` 沒有互動式 permission-request 的概念
+  （每個 engine 呼叫都是一次性的 headless `run_turn()`，`permission_mode`
+  在派發當下就固定，不是暫停等待使用者決定），所以這裡不補這類測試——
+  跟 `/api/chat` 的互動式 permission flow 是不同的東西。
+
+### 第十階段驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `tests/test_team_run_http_checkpoint_integration.py` | 通過，4 tests passed |
+| 後端 full suite (`python -m pytest`) | 通過，見累計驗證 |
