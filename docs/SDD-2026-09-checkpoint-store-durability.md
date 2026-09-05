@@ -108,3 +108,28 @@ python -m pytest
 | --- | --- |
 | `tests/test_agent_harness.py` | 通過，13 tests passed |
 | 後端 full suite (`python -m pytest`) | 通過，422 tests passed |
+
+## 後續延伸：排程 retention（2026-09-05）
+
+`purge_older_than()` 原本沒有任何呼叫端，`agent-runs` 的 SQLite 會無限成長。
+補上排程，但維持「預設不自動執行」的既有決策：
+
+- `database.get_checkpoint_retention_days()`：讀取 config 的
+  `checkpointRetentionDays`，沒設定或值不合法（負數/非整數/bool）一律回傳
+  `None`，代表「停用」。**沒有預設保留天數**——沒有明確設定就永遠不清，
+  避免使用者的 run 歷史被無聲刪除。
+- `routes/teams.py` 新增 `_run_checkpoint_retention_once()`（可測試的單次
+  執行邏輯，`None` 代表這次是 no-op）與 `_gc_checkpoint_store_task()`
+  （每 6 小時跑一次的背景迴圈，比照既有的 `_gc_team_runs_task`），並用
+  `checkpoint_retention_cleanup_ctx` 掛進 `register_team_routes()`，跟
+  既有的 `gc_team_runs_cleanup_ctx` 同一套 start/cancel 生命週期。
+- 新增 `tests/test_checkpoint_retention.py`，覆蓋設定值驗證、停用時
+  no-op、啟用時正確清掉過期 run、purge 失敗時安全吞掉例外不中斷背景
+  task。
+
+### 第二輪驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `tests/test_checkpoint_retention.py` | 通過，6 tests passed |
+| 後端 full suite (`python -m pytest`) | 通過，見 harness-optimization 累計驗證 |
