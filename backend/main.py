@@ -1597,18 +1597,27 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                 except Exception:
                     pass
 
+                def _append_log(text: str) -> None:
+                    """把送去 SSE exec_text 的同一段可讀文字寫進 log 檔——跟
+                    _pooled_exec()／_exec_engine_turn() 一致。這條路徑
+                    （_legacy_exec，SDK 不可用時的退回模式）之前是整行未解析
+                    的原始 stream-json 寫進 log，Windows Terminal 監控分頁
+                    因此看到的是一堆 JSON 協定雜訊（使用者回報「只有狀態
+                    通知，沒有對話紀錄」），不是真正的對話內容。"""
+                    if not text:
+                        return
+                    try:
+                        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+                            f.write(text + "\n")
+                    except Exception:
+                        pass
+
                 async for line in proc.stdout:
                     raw = line.decode("utf-8", errors="replace").strip()
                     if not raw:
                         continue
                     if _is_cli_noise(raw):
                         continue
-
-                    try:
-                        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
-                            f.write(raw + "\n")
-                    except Exception:
-                        pass
 
                     is_perm_req = False
                     command_to_show = ""
@@ -1669,12 +1678,15 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                             for block in event["message"]["content"]:
                                 if block.get("type") == "text":
                                     collected_output.append(block["text"])
+                                    _append_log(block["text"])
                                     await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
                         elif event.get("type") == "text":
                             collected_output.append(event.get("text", ""))
+                            _append_log(event.get("text", ""))
                             await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
                     except json.JSONDecodeError:
                         collected_output.append(raw)
+                        _append_log(raw)
                         await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': raw})}\n\n".encode())
 
                 await proc.wait()
