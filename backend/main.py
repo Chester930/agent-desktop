@@ -1376,15 +1376,29 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
     if platform.system() != "Windows":
         return
     
-    # 修正 1：先預建所有 log 檔案，防止 PowerShell Get-Content -Wait 因為檔案不存在而報錯
+    # 修正 1（2026-07-01）：先預建所有 log 檔案，防止 PowerShell Get-Content
+    # -Wait 因為檔案不存在而報錯。實測發現這個修正本身不夠：write_text() 的
+    # 失敗被 `except Exception: pass` 完全吞掉，之後追查不到到底是路徑、
+    # 權限，還是其他原因造成預建沒有生效——而一旦某個 member 的檔案沒建成
+    # 功，那個 pane 的 `powershell -NoExit -Command "...Get-Content..."`
+    # 會在啟動當下就報 ERROR_FILE_NOT_FOUND 並終止，`-NoExit` 只保留錯誤
+    # 畫面，不會自動重試，使用者看到的就是一個永久卡住的錯誤分割視窗。
+    #
+    # 修正 2（本輪）：
+    # (a) 預建失敗至少留一筆 log，方便下次同樣情況能追出真正原因。
+    # (b) 不再只靠 Python 端「先建檔」這個單一保障——`_monitor_command()`
+    #     組出來的 PowerShell 指令本身也自我修復：執行 Get-Content -Wait
+    #     之前，先用 Test-Path／New-Item 確認檔案存在，即使 Python 端的
+    #     預建因為任何原因沒生效，pane 自己也能建檔後繼續追蹤，不會直接
+    #     報錯終止。
     for m in members:
         agent_id = m["agent"]
         log_file = Path(project_path) / f".agent_{agent_id}.log"
         if not log_file.exists():
             try:
                 log_file.write_text("", encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as exc:
+                _log(f"[wt monitor] failed to pre-create log file for {agent_id!r}: {exc!r}")
 
     def _ps_quote(value: str) -> str:
         """Quote a value for the PowerShell command passed as one argv item."""
@@ -1393,10 +1407,13 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
     def _monitor_command(agent_id: str, color: str) -> str:
         label = f">>> @{agent_id} 監控中..."
         log_name = f".agent_{agent_id}.log"
+        quoted_log = _ps_quote(log_name)
         return (
             f"Clear-Host; "
             f"Write-Host {_ps_quote(label)} -ForegroundColor {color}; "
-            f"Get-Content -LiteralPath {_ps_quote(log_name)} -Wait -Tail 20"
+            f"if (-not (Test-Path -LiteralPath {quoted_log})) {{ "
+            f"New-Item -ItemType File -Path {quoted_log} -Force | Out-Null }}; "
+            f"Get-Content -LiteralPath {quoted_log} -Wait -Tail 20"
         )
 
     first_agent = members[0]["agent"]
