@@ -8,16 +8,23 @@ exists but its failure was silently swallowed, and once that single
 `powershell -NoExit -Command "..."` pane's Get-Content call fails, it
 never recovers (``-NoExit`` just keeps the error on screen).
 
-Fix: the PowerShell command itself is now self-healing (Test-Path +
-New-Item before Get-Content -Wait), independent of whether the Python-side
-pre-create succeeded, and pre-create failures are logged instead of
-silently discarded.
-
 Reported issue 2: a team with several members produced one Windows
 Terminal window carved into an increasingly tiny split-pane grid — one
 pane per member. Fixed by opening one window per Project with one *tab*
 per member instead of a split-pane grid, switched via the tab strip.
+
+Reported bug 3 (root cause of 1, discovered from the user's exact pasted
+error text): `wt.exe`'s own argv parser splits on *any* unescaped `;` it
+receives, including ones meant purely as PowerShell statement separators
+inside a `-Command "..."` value — treating every fragment (even a plain
+`Write-Host ...` that touches no file) as a separate `wt` action it tries
+to launch as its own process, hence ERROR_FILE_NOT_FOUND for all of them.
+Fixed by switching to `-EncodedCommand` (base64 of the UTF-16LE script,
+statements separated by real newlines): the argv `wt` receives contains
+no `;` or quotes for it to misinterpret.
 """
+import base64
+
 import main
 
 
@@ -41,11 +48,16 @@ def test_no_windows_terminal_launch_with_no_members(monkeypatch):
     assert calls == []
 
 
-def test_monitor_command_self_heals_missing_log_file(monkeypatch, tmp_path):
-    """The PowerShell -Command must guard Get-Content -Wait with a
-    Test-Path/New-Item check, so a pane never dies with
-    ERROR_FILE_NOT_FOUND regardless of whether the Python-side
-    pre-create step ran or succeeded."""
+def _decode_command(payload: str) -> str:
+    return base64.b64decode(payload).decode("utf-16-le")
+
+
+def test_monitor_command_uses_encoded_command_not_semicolons(monkeypatch, tmp_path):
+    """`wt.exe` splits on any unescaped `;` in the argv it receives, even
+    inside what's meant to be an opaque -Command string value — so the
+    payload sent to powershell must be an -EncodedCommand (base64) with
+    zero literal `;` anywhere in the argv, and its decoded script must use
+    real newlines as statement separators instead."""
     monkeypatch.setattr(main.platform, "system", lambda: "Windows")
     captured = {}
 
@@ -59,15 +71,23 @@ def test_monitor_command_self_heals_missing_log_file(monkeypatch, tmp_path):
 
     args = captured["args"]
     assert args[0] == "wt"
+    assert "-Command" not in args
+    payloads = [args[i + 1] for i, tok in enumerate(args) if tok == "-EncodedCommand"]
+    assert len(payloads) == len(members)
 
-    # Every -Command payload for every pane must self-heal before tailing.
-    command_payloads = [args[i + 1] for i, tok in enumerate(args) if tok == "-Command"]
-    assert len(command_payloads) == len(members)
-    for payload in command_payloads:
-        assert "Test-Path" in payload
-        assert "New-Item" in payload
-        assert "Get-Content -LiteralPath" in payload
-        assert "-Wait -Tail 20" in payload
+    for payload in payloads:
+        # The raw argv token itself must contain no `;` — that's the whole
+        # point of switching to -EncodedCommand.
+        assert ";" not in payload
+        script = _decode_command(payload)
+        assert "Test-Path" in script
+        assert "New-Item" in script
+        assert "Get-Content -LiteralPath" in script
+        assert "-Wait -Tail 20" in script
+        # The decoded script itself is allowed to have semicolons only
+        # inside PowerShell syntax it owns — but the actual statements
+        # here are separated by real newlines, not `;`.
+        assert "\n" in script
 
     # The log files should also still be pre-created as the first line of
     # defense (belt-and-suspenders, not a replacement for the self-heal).
