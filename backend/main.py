@@ -1416,18 +1416,20 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
             f"Get-Content -LiteralPath {quoted_log} -Wait -Tail 20"
         )
 
+    # 一個 Project 只開一個 Windows Terminal 視窗；每個成員是視窗內的一個
+    # 分頁（tab），不是分割成一堆小 pane 擠在同一畫面——團隊成員一多，
+    # split-pane 的網格會小到看不清楚，改用分頁在同一個視窗裡切換更實用。
     first_agent = members[0]["agent"]
     wt_args = [
-        "wt", "-d", project_path, "powershell", "-NoExit", "-Command",
+        "wt", "-d", project_path, "--title", first_agent, "powershell", "-NoExit", "-Command",
         _monitor_command(first_agent, "Magenta"),
     ]
 
     for i, m in enumerate(members[1:], start=1):
         agent_id = m["agent"]
-        split_flag = "-V" if i % 2 == 1 else "-H"
         color = "Green" if i % 3 == 1 else "Cyan" if i % 3 == 2 else "Yellow"
         wt_args.extend([
-            ";", "split-pane", split_flag, "-d", project_path,
+            ";", "new-tab", "-d", project_path, "--title", agent_id,
             "powershell", "-NoExit", "-Command", _monitor_command(agent_id, color),
         ])
 
@@ -1851,7 +1853,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
 
         return await _legacy_exec(prompt, resume_sid)
 
-    # 自動彈出已依照團隊人數拆分 Pane 的 Windows Terminal 監控視窗
+    # 自動彈出一個 Windows Terminal 監控視窗，每個成員各自一個分頁
     try:
         launch_windows_terminal_monitor(project_path, members)
     except Exception:
