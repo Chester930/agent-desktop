@@ -203,7 +203,7 @@ _codex_models_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
-from helpers import _read_agent_body, _read_skills_content, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
+from helpers import _read_agent_body, _read_skills_content, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, subprocess_creationflags, wrap_cmd
 try:
     from process_lifecycle import terminate_and_reap
 except ImportError:
@@ -533,7 +533,10 @@ CODEX_BIN = find_codex()
 def _detect_claude_version() -> str:
     try:
         import subprocess
-        r = subprocess.run([CLAUDE_BIN, "--version"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            [CLAUDE_BIN, "--version"], capture_output=True, text=True, timeout=5,
+            creationflags=subprocess_creationflags(),
+        )
         v = r.stdout.strip().split()[-1] if r.returncode == 0 and r.stdout.strip() else ""
         return v or "2.1.196"
     except Exception:
@@ -568,7 +571,8 @@ def _run_config_command(command: str, label: str) -> str:
         return " ".join(argv[1:]).strip()
     try:
         result = subprocess.run(
-            argv, shell=False, capture_output=True, text=True, timeout=5
+            argv, shell=False, capture_output=True, text=True, timeout=5,
+            creationflags=subprocess_creationflags(),
         )
         return result.stdout.strip()
     except Exception as exc:
@@ -847,6 +851,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 stdin=asyncio.subprocess.DEVNULL,
                 cwd=cwd,
                 env=env,
+                creationflags=subprocess_creationflags(),
             )
             active_procs[client_id] = proc
 
@@ -1117,6 +1122,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 stdin=asyncio.subprocess.DEVNULL,
                 cwd=cwd,
                 env=env,
+                creationflags=subprocess_creationflags(),
             )
             active_procs[client_id] = proc
 
@@ -1544,6 +1550,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
                     stdin=asyncio.subprocess.PIPE,
                     cwd=project_path,
                     env=env,
+                    creationflags=subprocess_creationflags(),
                 )
                 active_procs[proc_key] = proc
 
@@ -3009,6 +3016,7 @@ async def handle_cli(request: web.Request) -> web.Response:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         return web.json_response({"output": out.decode("utf-8", errors="replace"), "code": proc.returncode})
@@ -3049,6 +3057,7 @@ async def handle_mcp_logs(request: web.Request) -> web.Response:
             p = await asyncio.create_subprocess_exec(
                 "docker", "logs", "--tail", "80", container,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                creationflags=subprocess_creationflags(),
             )
             out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
             lines = out.decode("utf-8", errors="replace").splitlines()
@@ -3189,12 +3198,14 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
             p = await asyncio.create_subprocess_exec(
                 "docker", "compose", "-f", compose_f, "stop", *svc_args,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                creationflags=subprocess_creationflags(),
             )
             await p.communicate()
         elif container:
             p = await asyncio.create_subprocess_exec(
                 "docker", "stop", container,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                creationflags=subprocess_creationflags(),
             )
             await p.communicate()
         else:
@@ -3210,11 +3221,13 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
                 proc = await asyncio.create_subprocess_exec(
                     "docker", "compose", "-f", compose_f, "up", "-d", *svc_args,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    creationflags=subprocess_creationflags(),
                 )
             elif container:
                 proc = await asyncio.create_subprocess_exec(
                     "docker", "start", container,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    creationflags=subprocess_creationflags(),
                 )
             else:
                 mcp_cmd = _get_mcp_command(name)
@@ -3224,6 +3237,7 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
                 proc = await asyncio.create_subprocess_exec(
                     *mcp_cmd,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    creationflags=subprocess_creationflags(),
                 )
             _mcp_procs[name] = proc
             _mcp_logs[name] = []
@@ -3249,6 +3263,7 @@ async def _codex_mcp_list() -> list[dict]:
             CODEX_BIN, "mcp", "list", "--json",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
         return json.loads(out.decode("utf-8", errors="replace"))
@@ -3273,6 +3288,7 @@ async def _mcp_handshake_check(command: str, args: list[str], env: dict, timeout
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=full_env,
+            creationflags=subprocess_creationflags(),
         )
         req = json.dumps({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",

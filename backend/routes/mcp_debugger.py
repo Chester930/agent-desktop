@@ -5,6 +5,7 @@ import time
 from aiohttp import web
 from pathlib import Path
 from database import CLAUDE_HOME, _analyze_mcp_entry
+from helpers import subprocess_creationflags
 
 def _is_safe_name(name: str) -> bool:
     return name and "/" not in name and "\\" not in name and ".." not in name
@@ -95,7 +96,8 @@ async def handle_mcp_rpc(request: web.Request) -> web.Response:
             *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=subprocess_creationflags(),
         )
     except Exception as e:
         return web.json_response({"error": f"Failed to spawn MCP process: {str(e)}"}, status=500)

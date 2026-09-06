@@ -46,7 +46,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engines import codex_engine  # noqa: E402
-from helpers import wrap_cmd  # noqa: E402
+from helpers import subprocess_creationflags, wrap_cmd  # noqa: E402
 
 KNOWN_EVENT_TYPES = {
     "thread.started", "turn.started", "turn.completed", "turn.failed",
@@ -106,6 +106,7 @@ async def _run_and_report(prompt: str, cwd: str, sandbox: str, model: str, resum
     proc = await asyncio.create_subprocess_exec(
         *wrapped_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         stdin=asyncio.subprocess.PIPE, cwd=cwd,
+        creationflags=subprocess_creationflags(),
     )
     if proc.stdin is not None:
         proc.stdin.write(prompt.encode("utf-8"))

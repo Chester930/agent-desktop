@@ -27,7 +27,7 @@ import aiohttp
 
 # Keep safe_kill_process available for legacy callers/tests; asynchronous
 # cleanup paths use terminate_and_reap so the child is always awaited.
-from helpers import safe_kill_process, wrap_cmd
+from helpers import safe_kill_process, subprocess_creationflags, wrap_cmd
 try:
     from process_lifecycle import terminate_and_reap
 except ImportError:
@@ -210,6 +210,7 @@ async def _check_claude() -> dict:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT)
     except asyncio.TimeoutError:
@@ -243,6 +244,7 @@ async def _check_codex() -> dict:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT)
     except asyncio.TimeoutError:

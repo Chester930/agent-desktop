@@ -467,7 +467,7 @@ def safe_kill_process(proc) -> None:
                 ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=0x08000000, # CREATE_NO_WINDOW
+                creationflags=subprocess_creationflags(),
             )
         else:
             proc.kill()
@@ -489,3 +489,23 @@ def wrap_cmd(bin_path: str, args: list[str]) -> list[str]:
         if resolved and resolved.lower().endswith((".cmd", ".bat")):
             return ["cmd", "/c", resolved] + list(args)
     return cmd
+
+
+def subprocess_creationflags() -> int:
+    """Windows CREATE_NO_WINDOW, else 0 (a harmless no-op on other platforms).
+
+    Every real CLI invocation in this backend (Claude/Codex CLI turns,
+    engine availability checks, MCP server spawns, `docker` calls) goes
+    through `wrap_cmd()` above, which on Windows wraps `.cmd`/`.bat` shims
+    (e.g. npm-installed `claude`/`codex`) in `cmd /c ...`. `cmd.exe` is a
+    console application: spawning it via `asyncio.create_subprocess_exec`
+    or `subprocess.run`/`Popen` without this flag lets Windows allocate a
+    brand new console window for every single call — on a packaged
+    (console-less) backend, each chat turn / Team Run step / periodic
+    availability poll / MCP handshake visibly flashes a terminal window.
+    Pass this as `creationflags=` to every subprocess spawn in this
+    backend, except the one place that *intentionally* opens a visible
+    terminal (the Windows Terminal "Project" monitor in main.py).
+    """
+    import platform
+    return 0x08000000 if platform.system() == "Windows" else 0  # CREATE_NO_WINDOW
