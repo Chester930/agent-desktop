@@ -1405,23 +1405,42 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
         return "'" + value.replace("'", "''") + "'"
 
     def _monitor_command(agent_id: str, color: str) -> str:
+        """Return a base64 payload for `powershell -EncodedCommand`.
+
+        修正 3（本輪，根本解決）：`wt.exe` 自己的參數解析器會把它收到的
+        argv 裡任何未跳脫的 `;` 都當成「多個 wt 動作」的分隔符號去拆——
+        連本來要當成 PowerShell `-Command` 字串裡的陳述式分隔符也不例外。
+        實測證實：連完全不碰檔案的 `Write-Host` 都被拆成獨立一段去啟動、
+        報 ERROR_FILE_NOT_FOUND（因為 `wt` 想把 "Write-Host ..." 當成程式
+        名稱去找，當然找不到）。前兩輪修正（預建檔案、自我修復）都沒有
+        解到這一題，因為問題根本不是檔案存不存在。
+        改用 `-EncodedCommand`（Base64 編碼整段腳本，UTF-16LE，PowerShell
+        原生支援的呼叫方式）徹底避開這個地雷：`wt` 收到的 argv 裡完全沒有
+        任何分號或引號可以誤判，統計上其他呼叫端（wt、cmd、PowerShell
+        自己的巢狀解析）也都不需要再互相協調跳脫規則。
+        """
         label = f">>> @{agent_id} 監控中..."
         log_name = f".agent_{agent_id}.log"
         quoted_log = _ps_quote(log_name)
-        return (
-            f"Clear-Host; "
-            f"Write-Host {_ps_quote(label)} -ForegroundColor {color}; "
-            f"if (-not (Test-Path -LiteralPath {quoted_log})) {{ "
-            f"New-Item -ItemType File -Path {quoted_log} -Force | Out-Null }}; "
-            f"Get-Content -LiteralPath {quoted_log} -Wait -Tail 20"
+        script = (
+            f"Clear-Host\n"
+            f"Write-Host {_ps_quote(label)} -ForegroundColor {color}\n"
+            f"if (-not (Test-Path -LiteralPath {quoted_log})) {{\n"
+            f"    New-Item -ItemType File -Path {quoted_log} -Force | Out-Null\n"
+            f"}}\n"
+            f"Get-Content -LiteralPath {quoted_log} -Wait -Tail 20\n"
         )
+        return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
 
     # 一個 Project 只開一個 Windows Terminal 視窗；每個成員是視窗內的一個
     # 分頁（tab），不是分割成一堆小 pane 擠在同一畫面——團隊成員一多，
     # split-pane 的網格會小到看不清楚，改用分頁在同一個視窗裡切換更實用。
+    # 外層 wt_args 裡的 ";" 是 wt 自己的動作分隔符（"new-tab" 之間的分界），
+    # 這個是刻意且正確的用法，跟上面 _monitor_command() 要避開的「PowerShell
+    # 陳述式分隔符被 wt 誤判」是兩回事，不要混淆。
     first_agent = members[0]["agent"]
     wt_args = [
-        "wt", "-d", project_path, "--title", first_agent, "powershell", "-NoExit", "-Command",
+        "wt", "-d", project_path, "--title", first_agent, "powershell", "-NoExit", "-EncodedCommand",
         _monitor_command(first_agent, "Magenta"),
     ]
 
@@ -1430,7 +1449,7 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
         color = "Green" if i % 3 == 1 else "Cyan" if i % 3 == 2 else "Yellow"
         wt_args.extend([
             ";", "new-tab", "-d", project_path, "--title", agent_id,
-            "powershell", "-NoExit", "-Command", _monitor_command(agent_id, color),
+            "powershell", "-NoExit", "-EncodedCommand", _monitor_command(agent_id, color),
         ])
 
     try:
