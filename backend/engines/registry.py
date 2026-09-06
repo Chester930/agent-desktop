@@ -11,14 +11,20 @@ engines/registry.py — 引擎名稱 → 模組的對照表，以及「該用哪
 
 from __future__ import annotations
 
-from . import claude_engine, codex_engine
+from . import acp_engine, claude_engine, codex_engine
 
 ENGINES = {
     claude_engine.name: claude_engine,
     codex_engine.name: codex_engine,
+    acp_engine.name: acp_engine,
 }
 
 DEFAULT_ENGINE_NAME = "codex"
+# acp_engine 是新引擎、穩定性尚未經過真實使用驗證，因此不動
+# DEFAULT_ENGINE_NAME，也不擴充 database._VALID_ENGINE_MODES（見
+# docs/SDD-2026-09-acp-client-engine.md）——只能透過 agent frontmatter 的
+# `engine: acp` 或請求層級 `agent_engine` 欄位選用，engineMode 鎖定範圍
+# 維持 claude/codex/both 三選一不變。
 
 
 def resolve_engine_name(frontmatter_engine: str, request_engine: str) -> str:
