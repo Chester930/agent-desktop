@@ -24,7 +24,7 @@ import os
 import sys
 from pathlib import Path
 
-from helpers import wrap_cmd
+from helpers import subprocess_creationflags, wrap_cmd
 try:
     from process_lifecycle import terminate_and_reap
 except ImportError:
@@ -89,6 +89,7 @@ async def run_turn(
             stdin=asyncio.subprocess.DEVNULL,
             cwd=safe_cwd,
             env=env,
+            creationflags=subprocess_creationflags(),
         )
         if on_process:
             on_process(proc)

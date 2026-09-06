@@ -16,7 +16,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from helpers import wrap_cmd
+from helpers import subprocess_creationflags, wrap_cmd
 try:
     from process_lifecycle import terminate_and_reap
 except ImportError:
@@ -41,6 +41,7 @@ async def fetch_codex_models(codex_bin: str, timeout: float = 15.0) -> list[dict
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
     except (FileNotFoundError, OSError) as exc:
         raise CodexModelsError(f"Codex CLI is unavailable: {exc}") from exc

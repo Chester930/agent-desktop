@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from helpers import wrap_cmd
+from helpers import subprocess_creationflags, wrap_cmd
 
 
 class CodexUsageError(RuntimeError):
@@ -140,6 +140,7 @@ async def fetch_codex_usage(codex_bin: str, timeout: float = 20.0) -> dict:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
     except (FileNotFoundError, OSError) as exc:
         raise CodexUsageError(f"Codex CLI is unavailable: {exc}") from exc

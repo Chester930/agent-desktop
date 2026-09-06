@@ -40,7 +40,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from helpers import wrap_cmd
+from helpers import subprocess_creationflags, wrap_cmd
 try:
     from process_lifecycle import terminate_and_reap
 except ImportError:
@@ -107,6 +107,7 @@ async def _run_cli(bin_path: str, args: list[str], timeout: float = 30.0) -> boo
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
         await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode == 0
@@ -174,6 +175,7 @@ async def codex_native_list() -> dict[str, dict]:
             _codex_bin(), "mcp", "list", "--json",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             cwd=str(Path.home()),
+            creationflags=subprocess_creationflags(),
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
         entries = json.loads(out.decode("utf-8", errors="replace"))
