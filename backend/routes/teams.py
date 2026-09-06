@@ -306,7 +306,7 @@ async def _agent_run_capture(
     SSE step_text 事件、追蹤 process 以供 cancel/timeout 使用。
     """
     from database import get_engine_mode
-    from engines.registry import resolve_engine_name_gated, get_engine
+    from engines.registry import resolve_engine_name_gated, get_engine, ENGINES
     from engines.availability import apply_availability_fallback, NoEngineAvailableError
 
     _, AGENTS_DIR = _dirs()
@@ -354,7 +354,11 @@ async def _agent_run_capture(
         return "[Team Run 已取消]"
 
     mode = get_engine_mode()
-    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
+    # "both"（未鎖定）時放行所有已註冊引擎（含 acp）——見
+    # main.py::_resolve_agent_engine_and_key() 的對應修正說明：寫死
+    # {"claude","codex"} 會讓 engine: acp 的 agent 就算 Gemini CLI 已就緒
+    # 也被 apply_availability_fallback() 悄悄切回 Claude/Codex。
+    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset(ENGINES.keys())
     preferred_name = resolve_engine_name_gated(agent_own_engine, default_engine, mode)
     try:
         final_name, engine_notice = await apply_availability_fallback(preferred_name, allowed)

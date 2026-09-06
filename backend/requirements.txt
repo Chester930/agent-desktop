@@ -3,6 +3,7 @@ aiohttp-cors>=0.7
 croniter>=2.0
 PyYAML>=6.0
 claude-agent-sdk>=0.2.110
+agent-client-protocol>=0.12
 faster-whisper>=1.0.0
 opencc-python-reimplemented>=0.1.7
 # GPU 加速（可選）：ctranslate2 本身在沒有這些函式庫時會安靜退回 CPU

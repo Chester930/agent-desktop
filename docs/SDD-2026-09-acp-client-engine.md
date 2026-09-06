@@ -149,6 +149,53 @@ bridge** 範例可以參考）。
 - 不擴充 `_VALID_ENGINE_MODES`：新引擎的穩定性尚未經過真實使用驗證，
   不應該讓使用者能把自己鎖死在一個還在驗證階段的引擎上。
 
+## 執行紀錄（2026-09-06）
+
+- 新增 `backend/engines/acp_engine.py`：官方 `agent-client-protocol`
+  PyPI 套件（`import acp`，pin `acp.PROTOCOL_VERSION == 1`）的 client 端
+  實作，手動 spawn `gemini --acp` 子行程（沿用 `wrap_cmd()`/
+  `subprocess_creationflags()`，不用 SDK 自帶的 `spawn_agent_process()`
+  ——後者沒有 Windows console 抑制/`.cmd` shim 支援，會重新引入兩個已修好
+  的 Windows 舊 bug）。事件轉換成既有 legacy `tool_use`/`user` envelope，
+  `handle_chat`／`_format_tool_event_as_text()` 零改動即可消費。
+- `engines/registry.py`：`ENGINES` dict 新增 `"acp"`；`DEFAULT_ENGINE_NAME`
+  維持 `"codex"`，`database._VALID_ENGINE_MODES` 未擴充——與規格一致。
+- `engines/availability.py`：新增 `_check_acp()`（MVP 只用 `shutil.which`
+  偵測 `gemini` 是否在 PATH 上，登入狀態回報 `login_unknown`，不誤報
+  `True`）。
+- **PR 前自我審查追加修正（不在原規格內，但屬於「讓規格能真的生效」的必要
+  修正）**：`main.py::_resolve_agent_engine_and_key()`、
+  `routes/teams.py::_agent_run_capture()`、`routes/team_planning.py` 三處
+  都把「engineMode == both 時允許的引擎集合」寫死成
+  `frozenset({"claude", "codex"})`——這會讓 `apply_availability_fallback()`
+  永遠判定 `"acp" not in allowed`，即使 Gemini CLI 已就緒、agent 也明確
+  宣告了 `engine: acp`，還是會被悄悄切回 Claude/Codex，等於整個功能在
+  `/api/chat`／Team Run 都打不到。改成動態取
+  `engines.registry.ENGINES.keys()`；`engines/availability.py` 的
+  `_ALL_ENGINES` sentinel 常數同步改為動態衍生，避免三個呼叫端傳入的
+  「不限制」集合跟這個 sentinel 值不一致，誤觸鎖定模式的錯誤訊息分支。
+- **同一輪追加修正**：`acp_engine.run_turn()` 原本只要 `permission_mode`
+  不在允許清單內（含空字串）就直接回傳 `RunResult(error=...)`；但
+  `/api/chat` 多數呼叫根本不帶這個欄位（`main.py` 的
+  `data.get("permission_mode", "")`），會讓 ACP 引擎在最常見的呼叫情境下
+  直接失敗。改成比照 `codex_engine._normalize_sandbox_mode()` 的既有慣例：
+  空字串／`"default"` 視為「沒選」，悄悄退回 `DEFAULT_PERMISSION_MODE`；
+  只有明確選了不在允許清單內的值（例如 `"read-only"`）才拒絕整個 run，
+  符合規格「Permission」小節的原意（拒絕猜錯的明確選擇，不是拒絕沒有選擇）。
+- 新增 `tests/fixtures/fake_acp_agent.py`（真實子行程 + 真實 stdio pipe 的
+  最小假 ACP agent，非 duck-typed mock）與 `tests/test_acp_engine.py`
+  （16 tests：permission_mode 閘門與空值 fallback、happy path 事件轉換、
+  session 復用、spawn 失敗、permission auto-allow、cancellation、
+  `/api/chat` 端到端 SSE 整合）。
+- `backend/requirements.txt` 新增 `agent-client-protocol>=0.12`。
+
+### 驗證結果
+
+| 驗證項目 | 結果 |
+| --- | --- |
+| `tests/test_acp_engine.py` | 通過，16 tests passed |
+| 後端 full suite (`python -m pytest`) | 通過，465 tests passed（含新增 3 個） |
+
 ## 驗證命令
 
 ```bash

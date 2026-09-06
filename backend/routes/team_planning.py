@@ -98,7 +98,7 @@ async def _run_dispatcher_prompt(
     （沒有共用函式可抽，那邊也是就地寫的，這裡照抄同一個模式維持一致）。
     回傳 (output_text, error)。"""
     from database import get_engine_mode
-    from engines.registry import get_engine, resolve_engine_name_gated
+    from engines.registry import get_engine, resolve_engine_name_gated, ENGINES
     from engines.availability import apply_availability_fallback, NoEngineAvailableError
 
     import sys
@@ -112,7 +112,9 @@ async def _run_dispatcher_prompt(
     resolve_codex_key = getattr(main, "_resolve_codex_api_key", lambda: "") if main else (lambda: "")
 
     mode = get_engine_mode()
-    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
+    # "both" 時放行所有已註冊引擎（含 acp）——見
+    # main.py::_resolve_agent_engine_and_key() 的對應修正說明。
+    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset(ENGINES.keys())
     preferred_name = resolve_engine_name_gated("", engine_name, mode)
     try:
         final_name, _notice = await apply_availability_fallback(preferred_name, allowed)

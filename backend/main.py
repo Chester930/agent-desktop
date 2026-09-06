@@ -322,7 +322,7 @@ async def _resolve_agent_engine_and_key(agent_id: str, request_engine: str = "")
     那個引擎墊背。
     """
     from database import get_engine_mode
-    from engines.registry import resolve_engine_name_gated, get_engine
+    from engines.registry import resolve_engine_name_gated, get_engine, ENGINES
     from engines.availability import apply_availability_fallback
 
     agent_own_engine = ""
@@ -334,7 +334,14 @@ async def _resolve_agent_engine_and_key(agent_id: str, request_engine: str = "")
             except Exception:
                 pass
     mode = get_engine_mode()
-    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
+    # "both"（未鎖定）時要放行所有已註冊引擎（含 acp）——鎖定成
+    # "claude"/"codex" 才收斂成單一引擎（見 database._VALID_ENGINE_MODES
+    # 明確排除四選一，acp 仍只能透過 agent 自己的 engine: 宣告選用，不能
+    # 被設成全域鎖定值）。2026-09：曾經寫死 {"claude","codex"}，導致
+    # engine: acp 的 agent 就算 Gemini CLI 已就緒也會被
+    # apply_availability_fallback() 當成「不在允許清單」而悄悄切回
+    # Claude/Codex，讓新引擎完全打不到——改成動態取 ENGINES 的 key 修正。
+    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset(ENGINES.keys())
     preferred_name = resolve_engine_name_gated(agent_own_engine, request_engine, mode)
     final_name, notice = await apply_availability_fallback(preferred_name, allowed)
     engine = get_engine(final_name)

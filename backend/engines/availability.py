@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -36,7 +37,7 @@ except ImportError:
 CHECK_TIMEOUT = 8.0     # 單次 CLI 探測逾時（秒）
 CACHE_TTL = 25.0        # 每個引擎各自的 cache 有效期（秒）
 
-_LABEL = {"claude": "Claude Code", "codex": "OpenAI Codex"}
+_LABEL = {"claude": "Claude Code", "codex": "OpenAI Codex", "acp": "Gemini CLI (ACP)"}
 _REASON_LABEL = {
     "not_installed": "未安裝",
     "not_logged_in": "未登入",
@@ -44,6 +45,7 @@ _REASON_LABEL = {
     "unexpected_output": "狀態檢查失敗",
     "quota_exhausted": "用量已滿",
     "runtime_error": "執行失敗",
+    "login_unknown": "登入狀態未知",
     "": "",
 }
 
@@ -260,7 +262,26 @@ async def _check_codex() -> dict:
             "reason": "" if logged_in else "not_logged_in"}
 
 
-_CHECKS = {"claude": _check_claude, "codex": _check_codex}
+async def _check_acp() -> dict:
+    """MVP 偵測（見 docs/SDD-2026-09-acp-client-engine.md「可用性偵測」）：
+    只確認 `gemini` 執行檔在不在 PATH 上（`shutil.which`）。Gemini CLI
+    沒有像 `claude auth status`／`codex login status` 那樣輕量的登入狀態
+    查詢指令，`loggedIn` 保守回報 `False`（絕不誤報成可用）——`reason`
+    用專屬的 `login_unknown` 跟真正確認「未登入」的 `not_logged_in`
+    區分開，供未來如果要在 UI 上細分「不確定」跟「確定沒登入」時使用，
+    不影響現有 installed/loggedIn/available 三態的既有語意。
+    """
+    if shutil.which(_acp_engine_bin()):
+        return {"installed": True, "loggedIn": False, "available": False, "reason": "login_unknown"}
+    return {"installed": False, "loggedIn": False, "available": False, "reason": "not_installed"}
+
+
+def _acp_engine_bin() -> str:
+    from . import acp_engine
+    return acp_engine._acp_bin()
+
+
+_CHECKS = {"claude": _check_claude, "codex": _check_codex, "acp": _check_acp}
 _cache: dict = {}
 _cache_lock = asyncio.Lock()
 
@@ -285,7 +306,20 @@ def _format_notice(preferred: str, fallback: str, reason: str) -> str:
             f"{f'（{why}）' if why else ''}，已自動切換為 {_LABEL[fallback]}。]")
 
 
-_ALL_ENGINES = frozenset({"claude", "codex"})
+def _all_registered_engines() -> "frozenset[str]":
+    # Lazy import to avoid import-order issues at module load time (registry
+    # doesn't import availability, so this isn't a real cycle, but importing
+    # lazily keeps this module loadable standalone in tests that stub
+    # sys.modules).  Kept in sync with engines/registry.py's ENGINES dict —
+    # every caller of apply_availability_fallback() that means "unrestricted,
+    # any registered engine goes" (engine mode == "both") must pass this same
+    # set, or the `allowed != _ALL_ENGINES` sentinel check below misfires and
+    # produces the wrong "locked mode" error message for an unlocked mode.
+    from .registry import ENGINES
+    return frozenset(ENGINES.keys())
+
+
+_ALL_ENGINES = _all_registered_engines()
 
 
 async def apply_availability_fallback(preferred_name: str, allowed: "frozenset[str]" = _ALL_ENGINES):
